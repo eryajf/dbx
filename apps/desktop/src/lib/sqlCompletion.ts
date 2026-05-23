@@ -340,49 +340,46 @@ const WINDOW_FUNCTIONS = new Set([
   "NTILE",
 ]);
 
-const FUNCTION_DESCRIPTIONS = new Map<string, string>([
-  // Aggregate
-  ["COUNT", "返回行数"],
-  ["SUM", "返回数值列的总和"],
-  ["AVG", "返回数值列的平均值"],
-  ["MIN", "返回最小值"],
-  ["MAX", "返回最大值"],
-  ["GROUP_CONCAT", "将分组中的值连接为字符串"],
-  ["STRING_AGG", "将分组中的字符串连接起来"],
-  // String
-  ["CONCAT", "连接多个字符串"],
-  ["CONCAT_WS", "使用分隔符连接多个字符串"],
-  ["SUBSTRING", "提取子字符串"],
-  ["REPLACE", "替换字符串中的内容"],
-  ["TRIM", "去除首尾空格"],
-  ["UPPER", "转换为大写"],
-  ["LOWER", "转换为小写"],
-  ["LENGTH", "返回字符串长度"],
-  ["REGEXP_REPLACE", "使用正则表达式替换"],
-  // Date
-  ["DATE_FORMAT", "按指定格式格式化日期"],
-  ["DATEDIFF", "计算两个日期的差值"],
-  ["DATE_ADD", "对日期进行加法运算"],
-  ["DATE_SUB", "对日期进行减法运算"],
-  ["EXTRACT", "提取日期中的指定部分"],
-  ["NOW", "返回当前日期时间"],
-  // Numeric
-  ["ROUND", "四舍五入到指定小数位"],
-  ["FLOOR", "向下取整"],
-  ["CEIL", "向上取整"],
-  ["ABS", "返回绝对值"],
-  ["MOD", "返回除法余数"],
-  // Conditional
-  ["COALESCE", "返回第一个非 NULL 的参数"],
-  ["IFNULL", "如果为 NULL 则返回替代值"],
-  ["NULLIF", "如果相等则返回 NULL"],
-  ["CAST", "将表达式转换为指定类型"],
-  // JSON
-  ["JSON_EXTRACT", "从 JSON 中提取值"],
-  ["JSON_VALUE", "从 JSON 中提取标量值"],
-  ["JSON_OBJECT", "创建 JSON 对象"],
-  ["JSON_ARRAY", "创建 JSON 数组"],
-]);
+function getFunctionDescriptions(t?: SqlCompletionTranslations): Map<string, string> {
+  const d = t?.functionDescriptions ?? {};
+  return new Map<string, string>([
+    ["COUNT", d.COUNT || "返回行数"],
+    ["SUM", d.SUM || "返回数值列的总和"],
+    ["AVG", d.AVG || "返回数值列的平均值"],
+    ["MIN", d.MIN || "返回最小值"],
+    ["MAX", d.MAX || "返回最大值"],
+    ["GROUP_CONCAT", d.GROUP_CONCAT || "将分组中的值连接为字符串"],
+    ["STRING_AGG", d.STRING_AGG || "将分组中的字符串连接起来"],
+    ["CONCAT", d.CONCAT || "连接多个字符串"],
+    ["CONCAT_WS", d.CONCAT_WS || "使用分隔符连接多个字符串"],
+    ["SUBSTRING", d.SUBSTRING || "提取子字符串"],
+    ["REPLACE", d.REPLACE || "替换字符串中的内容"],
+    ["TRIM", d.TRIM || "去除首尾空格"],
+    ["UPPER", d.UPPER || "转换为大写"],
+    ["LOWER", d.LOWER || "转换为小写"],
+    ["LENGTH", d.LENGTH || "返回字符串长度"],
+    ["REGEXP_REPLACE", d.REGEXP_REPLACE || "使用正则表达式替换"],
+    ["DATE_FORMAT", d.DATE_FORMAT || "按指定格式格式化日期"],
+    ["DATEDIFF", d.DATEDIFF || "计算两个日期的差值"],
+    ["DATE_ADD", d.DATE_ADD || "对日期进行加法运算"],
+    ["DATE_SUB", d.DATE_SUB || "对日期进行减法运算"],
+    ["EXTRACT", d.EXTRACT || "提取日期中的指定部分"],
+    ["NOW", d.NOW || "返回当前日期时间"],
+    ["ROUND", d.ROUND || "四舍五入到指定小数位"],
+    ["FLOOR", d.FLOOR || "向下取整"],
+    ["CEIL", d.CEIL || "向上取整"],
+    ["ABS", d.ABS || "返回绝对值"],
+    ["MOD", d.MOD || "返回除法余数"],
+    ["COALESCE", d.COALESCE || "返回第一个非 NULL 的参数"],
+    ["IFNULL", d.IFNULL || "如果为 NULL 则返回替代值"],
+    ["NULLIF", d.NULLIF || "如果相等则返回 NULL"],
+    ["CAST", d.CAST || "将表达式转换为指定类型"],
+    ["JSON_EXTRACT", d.JSON_EXTRACT || "从 JSON 中提取值"],
+    ["JSON_VALUE", d.JSON_VALUE || "从 JSON 中提取标量值"],
+    ["JSON_OBJECT", d.JSON_OBJECT || "创建 JSON 对象"],
+    ["JSON_ARRAY", d.JSON_ARRAY || "创建 JSON 数组"],
+  ]);
+}
 
 const SQL_SNIPPETS: Array<{ label: string; prefix: string; apply: string; detail: string }> = [
   {
@@ -610,6 +607,17 @@ export interface SqlFunctionSignatureHelp {
   parameters: string[];
 }
 
+export interface SqlCompletionTranslations {
+  nullValue: string;
+  isNull: string;
+  isNotNull: string;
+  stringLiteral: string;
+  numericLiteral: string;
+  booleanValue: string;
+  starExpansionColumns: string;
+  functionDescriptions: Record<string, string>;
+}
+
 export function buildSqlCompletionItems(
   sql: string,
   cursor: number,
@@ -617,6 +625,7 @@ export function buildSqlCompletionItems(
     tables: SqlCompletionTable[];
     columnsByTable: Map<string, SqlCompletionColumn[]>;
     schemas?: string[];
+    translations?: SqlCompletionTranslations;
   },
 ): SqlCompletionItem[] {
   const context = getSqlCompletionContext(sql, cursor);
@@ -629,13 +638,15 @@ export function buildSqlCompletionItemsFromContext(
     tables: SqlCompletionTable[];
     columnsByTable: Map<string, SqlCompletionColumn[]>;
     schemas?: string[];
+    translations?: SqlCompletionTranslations;
   },
 ): SqlCompletionItem[] {
   const items: SqlCompletionItem[] = [];
+  const t = input.translations;
 
   if (!context.exclusiveTableSuggestions && !context.exclusiveColumnSuggestions) {
     items.push(...buildSnippetItems(context.prefix));
-    items.push(...buildFunctionSnippetItems(context.prefix));
+    items.push(...buildFunctionSnippetItems(context.prefix, getFunctionDescriptions(t)));
   }
 
   if (!context.exclusiveTableSuggestions && !context.exclusiveColumnSuggestions && context.prioritizeSelectAliases) {
@@ -677,12 +688,12 @@ export function buildSqlCompletionItemsFromContext(
 
   // Type-aware value hints after comparison operator
   if (context.comparisonLeftColumn && context.suggestKeywords) {
-    items.push(...buildComparisonValueItems(context, input.columnsByTable));
+    items.push(...buildComparisonValueItems(context, input.columnsByTable, t));
   }
 
   // SELECT * expansion
   if (context.onStar) {
-    const starItem = buildStarExpansionItem(input.columnsByTable);
+    const starItem = buildStarExpansionItem(input.columnsByTable, t);
     if (starItem) items.push(starItem);
   }
 
@@ -846,9 +857,6 @@ export function getSqlCompletionContext(sql: string, cursor: number): SqlComplet
   const prioritizeSelectAliases = isInOrderOrGroupByContext(beforeCursor);
 
   const statementKind = detectStatementKind(beforeCursor || fullStatement);
-
-  // Detect column on left side of comparison operator (for type-aware filtering)
-  const comparisonLeftColumn = detectComparisonLeftColumn(beforeCursor);
 
   return {
     prefix,
@@ -1453,7 +1461,10 @@ function buildSchemaItems(prefix: string, schemas: string[]): SqlCompletionItem[
     }));
 }
 
-function buildStarExpansionItem(columnsByTable: Map<string, SqlCompletionColumn[]>): SqlCompletionItem | null {
+function buildStarExpansionItem(
+  columnsByTable: Map<string, SqlCompletionColumn[]>,
+  t?: SqlCompletionTranslations,
+): SqlCompletionItem | null {
   const allColumns: string[] = [];
   const seen = new Set<string>();
   for (const [, cols] of columnsByTable) {
@@ -1468,7 +1479,7 @@ function buildStarExpansionItem(columnsByTable: Map<string, SqlCompletionColumn[
   return {
     label: "* → columns",
     type: "snippet" as const,
-    detail: `${allColumns.length} 列: ${expansion.length > 60 ? expansion.slice(0, 57) + "..." : expansion}`,
+    detail: `${(t?.starExpansionColumns ?? "{count} 列").replace("{count}", String(allColumns.length))}: ${expansion.length > 60 ? expansion.slice(0, 57) + "..." : expansion}`,
     apply: expansion,
     boost: 1900,
   };
@@ -1477,6 +1488,7 @@ function buildStarExpansionItem(columnsByTable: Map<string, SqlCompletionColumn[
 function buildComparisonValueItems(
   context: SqlCompletionContext,
   columnsByTable: Map<string, SqlCompletionColumn[]>,
+  t?: SqlCompletionTranslations,
 ): SqlCompletionItem[] {
   const colName = context.comparisonLeftColumn!;
   const parts = colName.split(".");
@@ -1520,19 +1532,19 @@ function buildComparisonValueItems(
   items.push({
     label: "NULL",
     type: "keyword" as const,
-    detail: "空值",
+    detail: t?.nullValue ?? "空值",
     boost: 1300,
   });
   items.push({
     label: "IS NULL",
     type: "keyword" as const,
-    detail: "判断是否为 NULL",
+    detail: t?.isNull ?? "判断是否为 NULL",
     boost: 1250,
   });
   items.push({
     label: "IS NOT NULL",
     type: "keyword" as const,
-    detail: "判断是否不为 NULL",
+    detail: t?.isNotNull ?? "判断是否不为 NULL",
     boost: 1200,
   });
 
@@ -1547,7 +1559,7 @@ function buildComparisonValueItems(
       items.push({
         label: "''",
         type: "snippet" as const,
-        detail: "字符串字面量",
+        detail: t?.stringLiteral ?? "字符串字面量",
         apply: "'${value}'",
         boost: 1800,
       });
@@ -1570,7 +1582,7 @@ function buildComparisonValueItems(
       items.push({
         label: "0",
         type: "snippet" as const,
-        detail: "数值字面量",
+        detail: t?.numericLiteral ?? "数值字面量",
         apply: "${1:value}",
         boost: 1750,
       });
@@ -1580,8 +1592,8 @@ function buildComparisonValueItems(
   // Boolean-ish: tinyint or bit
   if (dt === "bit" || dt === "boolean" || dt === "bool") {
     items.push(
-      { label: "TRUE", type: "keyword" as const, detail: "布尔值", boost: 1700 },
-      { label: "FALSE", type: "keyword" as const, detail: "布尔值", boost: 1650 },
+      { label: "TRUE", type: "keyword" as const, detail: t?.booleanValue ?? "布尔值", boost: 1700 },
+      { label: "FALSE", type: "keyword" as const, detail: t?.booleanValue ?? "布尔值", boost: 1650 },
     );
   }
 
@@ -1884,7 +1896,7 @@ function buildSnippetItems(prefix: string): SqlCompletionItem[] {
   });
 }
 
-function buildFunctionSnippetItems(prefix: string): SqlCompletionItem[] {
+function buildFunctionSnippetItems(prefix: string, functionDescriptions: Map<string, string>): SqlCompletionItem[] {
   const items: SqlCompletionItem[] = [];
 
   for (const [name, parameters] of SQL_FUNCTION_SIGNATURES.entries()) {
@@ -1893,7 +1905,7 @@ function buildFunctionSnippetItems(prefix: string): SqlCompletionItem[] {
     items.push({
       label: name,
       type: "snippet" as const,
-      detail: FUNCTION_DESCRIPTIONS.get(name) ?? "function",
+      detail: functionDescriptions.get(name) ?? "function",
       apply: `${name}(${paramStr})`,
       boost: computeBoost(name, prefix) + 300,
     });

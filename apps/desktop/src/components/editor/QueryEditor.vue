@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onBeforeUnmount, watch, shallowRef } from "vue";
+import { ref, nextTick, onMounted, onBeforeUnmount, watch, shallowRef, computed } from "vue";
+import { useI18n } from "vue-i18n";
 import type { CompletionContext } from "@codemirror/autocomplete";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import {
@@ -81,6 +82,58 @@ const view = shallowRef<EditorViewType | null>(null);
 const connectionStore = useConnectionStore();
 const settingsStore = useSettingsStore();
 const { isDark } = useTheme();
+const { t } = useI18n();
+
+const SQL_FUNCTION_NAMES = [
+  "COUNT",
+  "SUM",
+  "AVG",
+  "MIN",
+  "MAX",
+  "GROUP_CONCAT",
+  "STRING_AGG",
+  "CONCAT",
+  "CONCAT_WS",
+  "SUBSTRING",
+  "REPLACE",
+  "TRIM",
+  "UPPER",
+  "LOWER",
+  "LENGTH",
+  "REGEXP_REPLACE",
+  "DATE_FORMAT",
+  "DATEDIFF",
+  "DATE_ADD",
+  "DATE_SUB",
+  "EXTRACT",
+  "NOW",
+  "ROUND",
+  "FLOOR",
+  "CEIL",
+  "ABS",
+  "MOD",
+  "COALESCE",
+  "IFNULL",
+  "NULLIF",
+  "CAST",
+  "JSON_EXTRACT",
+  "JSON_VALUE",
+  "JSON_OBJECT",
+  "JSON_ARRAY",
+] as const;
+
+const completionTranslations = computed(() => ({
+  nullValue: t("editor.completion.nullValue"),
+  isNull: t("editor.completion.isNull"),
+  isNotNull: t("editor.completion.isNotNull"),
+  stringLiteral: t("editor.completion.stringLiteral"),
+  numericLiteral: t("editor.completion.numericLiteral"),
+  booleanValue: t("editor.completion.booleanValue"),
+  starExpansionColumns: t("editor.completion.starExpansionColumns"),
+  functionDescriptions: Object.fromEntries(
+    SQL_FUNCTION_NAMES.map((name) => [name, t(`editor.completion.functionDescriptions.${name}`)]),
+  ) as Record<string, string>,
+}));
 const MAX_COMPLETION_TABLES = 200;
 const liveFontSize = ref(settingsStore.editorSettings.fontSize);
 const gestureStartFontSize = ref(settingsStore.editorSettings.fontSize);
@@ -767,6 +820,7 @@ async function provideSqlCompletions(
       tables,
       columnsByTable,
       schemas: schemaNames,
+      translations: completionTranslations.value,
     });
 
     if (items.length === 0) return null;
@@ -1336,13 +1390,13 @@ defineExpose({ openSearch });
             autocorrect="off"
             spellcheck="false"
             class="w-48 h-6 text-xs bg-input border rounded px-2 outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
-            placeholder="查找"
+            :placeholder="t('editor.search.find')"
             @keydown="onSearchKeydown"
           />
           <button
             class="w-6 h-6 flex items-center justify-center rounded text-xs font-mono hover:bg-accent"
             :class="caseSensitive ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'"
-            title="区分大小写"
+            :title="t('editor.search.caseSensitive')"
             @click="caseSensitive = !caseSensitive"
           >
             Aa
@@ -1350,38 +1404,38 @@ defineExpose({ openSearch });
           <button
             class="w-6 h-6 flex items-center justify-center rounded text-xs font-mono hover:bg-accent"
             :class="useRegex ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'"
-            title="正则表达式"
+            :title="t('editor.search.regex')"
             @click="useRegex = !useRegex"
           >
             .*
           </button>
           <span v-if="searchText" class="text-xs text-muted-foreground min-w-[3rem] text-center shrink-0">
-            {{ matchCount > 0 ? `${currentMatchIndex}/${matchCount}` : "无结果" }}
+            {{ matchCount > 0 ? `${currentMatchIndex}/${matchCount}` : t("editor.search.noResults") }}
           </span>
           <button
             class="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="上一个 (Shift+Enter)"
+            :title="t('editor.search.prevMatch')"
             @click="prevMatch"
           >
             <ChevronUp class="w-3.5 h-3.5" />
           </button>
           <button
             class="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="下一个 (Enter)"
+            :title="t('editor.search.nextMatch')"
             @click="nextMatch"
           >
             <ChevronDown class="w-3.5 h-3.5" />
           </button>
           <button
             class="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-            :title="showReplace ? '收起替换' : '展开替换'"
+            :title="showReplace ? t('editor.search.collapseReplace') : t('editor.search.expandReplace')"
             @click="showReplace = !showReplace"
           >
             <ChevronRight class="w-3 h-3 transition-transform" :class="showReplace && 'rotate-90'" />
           </button>
           <button
             class="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="关闭 (Esc)"
+            :title="t('editor.search.close')"
             @click="closeSearch"
           >
             <X class="w-3.5 h-3.5" />
@@ -1394,19 +1448,19 @@ defineExpose({ openSearch });
             autocorrect="off"
             spellcheck="false"
             class="w-48 h-6 text-xs bg-input border rounded px-2 outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
-            placeholder="替换"
+            :placeholder="t('editor.search.replace')"
             @keydown.enter.prevent="doReplace"
           />
           <button
             class="h-6 px-1.5 flex items-center justify-center rounded text-xs text-muted-foreground hover:bg-accent hover:text-foreground border"
-            title="替换"
+            :title="t('editor.search.replace')"
             @click="doReplace"
           >
-            替换
+            {{ t("editor.search.replace") }}
           </button>
           <button
             class="h-6 px-1.5 flex items-center justify-center rounded text-xs text-muted-foreground hover:bg-accent hover:text-foreground border"
-            title="全部替换"
+            :title="t('editor.search.replaceAll')"
             @click="doReplaceAll"
           >
             全部
