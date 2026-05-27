@@ -573,6 +573,7 @@ fn normalize_postgres_url_params(value: &str, force_tls: bool) -> String {
     let value = value.trim_start_matches('?');
 
     let mut timezone: Option<String> = None;
+    let mut search_path: Option<String> = None;
     let mut parts: Vec<String> = Vec::new();
 
     for part in value.split('&').filter(|part| !part.is_empty()) {
@@ -582,6 +583,11 @@ fn normalize_postgres_url_params(value: &str, force_tls: bool) -> String {
             let decoded_value = percent_decode_str(raw_value).decode_utf8_lossy().trim().to_string();
             if !decoded_value.is_empty() {
                 timezone = Some(decoded_value);
+            }
+        } else if key.eq_ignore_ascii_case("schema") || key.eq_ignore_ascii_case("currentSchema") {
+            let decoded_value = percent_decode_str(raw_value).decode_utf8_lossy().trim().to_string();
+            if !decoded_value.is_empty() {
+                search_path = Some(decoded_value);
             }
         } else if key.eq_ignore_ascii_case("ssl-mode") {
             let decoded_value = percent_decode_str(raw_value).decode_utf8_lossy();
@@ -605,14 +611,21 @@ fn normalize_postgres_url_params(value: &str, force_tls: bool) -> String {
         }
     }
 
-    let Some(timezone) = timezone else {
+    let mut connection_options: Vec<(&str, String)> = Vec::new();
+    if let Some(search_path) = search_path {
+        connection_options.push(("search_path=", format!("-c search_path={search_path}")));
+    }
+    if let Some(timezone) = timezone {
+        connection_options.push(("timezone=", format!("-c TimeZone={timezone}")));
+    }
+
+    if connection_options.is_empty() {
         if force_tls && !parts.iter().any(|part| url_param_key_is(part, "sslmode")) {
             parts.insert(0, "sslmode=require".to_string());
         }
         return parts.join("&");
-    };
+    }
 
-    let timezone_option = format!("-c TimeZone={timezone}");
     if let Some(options_index) = parts.iter().position(|part| {
         part.split_once('=')
             .map(|(raw_key, _)| percent_decode_str(raw_key).decode_utf8_lossy().eq_ignore_ascii_case("options"))
@@ -620,12 +633,19 @@ fn normalize_postgres_url_params(value: &str, force_tls: bool) -> String {
     }) {
         let (raw_key, raw_value) = parts[options_index].split_once('=').unwrap_or(("options", ""));
         let options_value = percent_decode_str(raw_value).decode_utf8_lossy();
-        if !options_value.to_ascii_lowercase().contains("timezone=") {
-            let combined = format!("{} {}", options_value.trim(), timezone_option).trim().to_string();
+        let lower_options = options_value.to_ascii_lowercase();
+        let appended_options = connection_options
+            .into_iter()
+            .filter_map(|(needle, option)| (!lower_options.contains(needle)).then_some(option))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !appended_options.is_empty() {
+            let combined = format!("{} {}", options_value.trim(), appended_options).trim().to_string();
             parts[options_index] = format!("{raw_key}={}", encode_url_part(&combined));
         }
     } else {
-        parts.push(format!("options={}", encode_url_part(&timezone_option)));
+        let combined = connection_options.into_iter().map(|(_, option)| option).collect::<Vec<_>>().join(" ");
+        parts.push(format!("options={}", encode_url_part(&combined)));
     }
 
     if force_tls && !parts.iter().any(|part| url_param_key_is(part, "sslmode")) {
@@ -1096,6 +1116,34 @@ mod tests {
         );
         let pg_config = tokio_postgres::Config::from_str(&config.connection_url()).unwrap();
         assert_eq!(pg_config.get_options(), Some("-c TimeZone=Asia/Shanghai"));
+    }
+
+    #[test]
+    fn postgres_url_maps_schema_param_into_search_path_options() {
+        let mut config = mysql_config("postgres", "secret", Some("test"));
+        config.db_type = DatabaseType::Postgres;
+        config.url_params = Some("schema=public".to_string());
+
+        assert_eq!(
+            config.connection_url(),
+            "postgres://postgres:secret@10.1.2.3:2883/test?options=%2Dc%20search%5Fpath%3Dpublic"
+        );
+        let pg_config = tokio_postgres::Config::from_str(&config.connection_url()).unwrap();
+        assert_eq!(pg_config.get_options(), Some("-c search_path=public"));
+    }
+
+    #[test]
+    fn postgres_url_maps_current_schema_param_into_search_path_options() {
+        let mut config = mysql_config("postgres", "secret", Some("test"));
+        config.db_type = DatabaseType::Postgres;
+        config.url_params = Some("currentSchema=app".to_string());
+
+        assert_eq!(
+            config.connection_url(),
+            "postgres://postgres:secret@10.1.2.3:2883/test?options=%2Dc%20search%5Fpath%3Dapp"
+        );
+        let pg_config = tokio_postgres::Config::from_str(&config.connection_url()).unwrap();
+        assert_eq!(pg_config.get_options(), Some("-c search_path=app"));
     }
 
     #[test]
