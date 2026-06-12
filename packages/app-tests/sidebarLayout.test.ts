@@ -1,6 +1,19 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { reconcileLayout, buildTreeNodesFromLayout, createGroup, deleteGroup, renameGroup, moveConnectionToGroup, reorderEntry, toggleGroupCollapsed, appendConnectionToLayout, removeConnectionFromSidebarLayout, emptyLayout } from "../../apps/desktop/src/lib/sidebarLayout.ts";
+import {
+  reconcileLayout,
+  buildTreeNodesFromLayout,
+  createGroup,
+  deleteGroup,
+  renameGroup,
+  moveConnectionToGroup,
+  reorderEntry,
+  toggleGroupCollapsed,
+  appendConnectionToLayout,
+  removeConnectionFromSidebarLayout,
+  emptyLayout,
+  remapSidebarLayoutConnectionIds,
+} from "../../apps/desktop/src/lib/sidebarLayout.ts";
 import type { ConnectionConfig, SidebarLayout } from "../../apps/desktop/src/types/database.ts";
 
 function conn(id: string, name?: string): ConnectionConfig {
@@ -68,6 +81,38 @@ test("reconcileLayout removes groups with no order entry", () => {
   const result = reconcileLayout(["a"], layout);
   assert.equal(result.groups.length, 1);
   assert.equal(result.groups[0].id, "g1");
+});
+
+test("remapSidebarLayoutConnectionIds preserves imported grouping with new connection ids", () => {
+  const layout: SidebarLayout = {
+    groups: [{ id: "g1", name: "Imported", collapsed: false }],
+    order: [
+      { type: "connection", id: "old-root" },
+      { type: "group", id: "g1", connectionIds: ["old-a", "old-b"] },
+    ],
+  };
+
+  const remapped = remapSidebarLayoutConnectionIds(
+    layout,
+    new Map([
+      ["old-root", "new-root"],
+      ["old-a", "new-a"],
+      ["old-b", "new-b"],
+    ]),
+  );
+  const reconciled = reconcileLayout(["new-root", "new-a", "new-b"], remapped);
+
+  assert.deepEqual(reconciled.order, [
+    { type: "connection", id: "new-root" },
+    {
+      type: "group",
+      id: "g1",
+      children: [
+        { type: "connection", id: "new-a" },
+        { type: "connection", id: "new-b" },
+      ],
+    },
+  ]);
 });
 
 // --- buildTreeNodesFromLayout ---

@@ -59,6 +59,24 @@ export function reconcileLayout(connectionIds: string[], layout: SidebarLayout |
   return { groups, order };
 }
 
+export function remapSidebarLayoutConnectionIds(layout: SidebarLayout, connectionIdMap: Map<string, string>): SidebarLayout {
+  const remapEntries = (entries: SidebarOrderEntry[]): SidebarOrderEntry[] =>
+    entries.flatMap((entry): SidebarOrderEntry[] => {
+      if (entry.type === "connection") {
+        const id = connectionIdMap.get(entry.id);
+        return id ? [{ type: "connection", id }] : [];
+      }
+
+      const children = entryChildren(entry).flatMap((child): SidebarOrderEntry[] => remapEntries([child]));
+      return [{ type: "group", id: entry.id, children }];
+    });
+
+  return {
+    groups: layout.groups.map((group) => ({ ...group })),
+    order: remapEntries(layout.order),
+  };
+}
+
 function makeConnectionNode(config: ConnectionConfig, pinned: boolean): TreeNode {
   return {
     id: config.id,

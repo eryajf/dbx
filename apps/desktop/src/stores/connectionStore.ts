@@ -14,6 +14,7 @@ import {
   deleteGroup as deleteGroupOp,
   toggleGroupCollapsed as toggleGroupCollapsedOp,
   moveConnectionToGroup as moveConnectionToGroupOp,
+  remapSidebarLayoutConnectionIds,
   reorderEntry as reorderEntryOp,
   type DropPosition,
 } from "@/lib/sidebarLayout";
@@ -2407,14 +2408,22 @@ export const useConnectionStore = defineStore("connection", () => {
     }
 
     let count = 0;
+    const importedConnectionIdMap = new Map<string, string>();
     for (const config of imported) {
       const duplicate = connections.value.find((c) => c.name === config.name && c.host === config.host && c.port === config.port);
       if (!duplicate) {
+        const importedId = config.id;
         config.id = uuid();
+        if (typeof importedId === "string") importedConnectionIdMap.set(importedId, config.id);
         const normalized = normalizeConnection(config);
         await addConnection(normalized);
         count++;
+      } else if (typeof config.id === "string") {
+        importedConnectionIdMap.set(config.id, duplicate.id);
       }
+    }
+    if (importedLayout) {
+      importedLayout = remapSidebarLayoutConnectionIds(importedLayout, importedConnectionIdMap);
     }
     return { count, layout: importedLayout };
   }
