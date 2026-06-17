@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+env:
+  CNB_REPOSITORY: "66666/dbx"
+  CNB_USERNAME: "cnb"
+  CNB_REGISTRY: "docker.cnb.cool"
+
 jobs:
   bump-jdbc-plugin-version:
     runs-on: ubuntu-latest
@@ -302,6 +307,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit ${{ github.ref_name }} --repo ${{ github.repository }} --draft=false --prerelease
 
+  sync-release-to-cnb:
+    name: Sync release to CNB
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync release assets to CNB
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          wget -q https://cnb.cool/znb/mpgrm/-/releases/download/v0.1.0/mpgrm_linux_amd64.tar.gz
+          tar -xf mpgrm_linux_amd64.tar.gz
+          chmod +x mpgrm
+
+          ./mpgrm releases sync \
+            --repo "https://github.com/${GITHUB_REPOSITORY}.git" \
+            --target-repo "https://cnb.cool/${CNB_REPOSITORY}.git" \
+            --tags "${TAG_NAME}"
+
   docker:
     runs-on: ubuntu-latest
     strategy:
@@ -323,6 +351,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Login to CNB Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.CNB_REGISTRY }}
+          username: cnb
+          password: ${{ secrets.CNB_TOKEN }}
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
@@ -330,7 +365,9 @@ jobs:
           context: .
           file: deploy/Dockerfile
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ secrets.DOCKERHUB_USERNAME }}/dbx,push-by-digest=true,name-canonical=true,push=true
+          outputs: |
+            type=image,name=${{ secrets.DOCKERHUB_USERNAME }}/dbx,push-by-digest=true,name-canonical=true,push=true
+            type=image,name=${{ env.CNB_REGISTRY }}/${{ env.CNB_REPOSITORY }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,scope=${{ matrix.platform }},mode=max
 
@@ -368,6 +405,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Login to CNB Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.CNB_REGISTRY }}
+          username: cnb
+          password: ${{ secrets.CNB_TOKEN }}
+
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
@@ -379,3 +423,8 @@ jobs:
             -t ${{ secrets.DOCKERHUB_USERNAME }}/dbx:${{ steps.version.outputs.version }} \
             -t ${{ secrets.DOCKERHUB_USERNAME }}/dbx:latest \
             $(printf '${{ secrets.DOCKERHUB_USERNAME }}/dbx@sha256:%s ' *)
+
+          docker buildx imagetools create \
+            -t ${{ env.CNB_REGISTRY }}/${{ env.CNB_REPOSITORY }}:${{ steps.version.outputs.version }} \
+            -t ${{ env.CNB_REGISTRY }}/${{ env.CNB_REPOSITORY }}:latest \
+            $(printf '${{ env.CNB_REGISTRY }}/${{ env.CNB_REPOSITORY }}@sha256:%s ' *)
