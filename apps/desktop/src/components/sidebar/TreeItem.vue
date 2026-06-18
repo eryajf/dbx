@@ -231,6 +231,8 @@ function getIconInfo(node: TreeNode): { icon: any; colorClass: string } | null {
       return { icon: Database, colorClass: "text-red-400" };
     case "mq-tenant":
       return { icon: FolderOpen, colorClass: "text-sky-400" };
+    case "nacos-namespace":
+      return { icon: FolderOpen, colorClass: "text-sky-500" };
     case "etcd-root":
       return { icon: Database, colorClass: "text-sky-500" };
     case "mongo-db":
@@ -358,6 +360,8 @@ async function toggle() {
         await connectionStore.loadElasticsearchIndices(node.connectionId);
       } else if (config?.db_type === "mq") {
         await connectionStore.loadMqTenants(node.connectionId);
+      } else if (config?.db_type === "nacos") {
+        await connectionStore.loadNacosNamespaces(node.connectionId);
       } else {
         await connectionStore.loadDatabases(node.connectionId);
       }
@@ -366,6 +370,8 @@ async function toggle() {
       queryStore.createTab(node.connectionId, node.database, tabTitle, "redis");
     } else if (node.type === "mq-tenant" && node.connectionId) {
       queryStore.openMqAdmin(node.connectionId, { tenant: node.mqTenant || node.label });
+    } else if (node.type === "nacos-namespace" && node.connectionId) {
+      queryStore.openNacosAdmin(node.connectionId, { namespace: node.nacosNamespace || "", namespaceName: node.nacosNamespaceName || node.label });
     } else if (node.type === "etcd-root" && node.connectionId) {
       const tabTitle = `${connectionStore.getConfig(node.connectionId)?.name || "etcd"}:keys`;
       queryStore.createTab(node.connectionId, "", tabTitle, "etcd");
@@ -2626,7 +2632,7 @@ const nodeIconClass = computed(() => {
 const canConfigureVisibleDatabases = computed(() => {
   if (props.node.type !== "connection" || !props.node.connectionId) return false;
   const dbType = connectionStore.getConfig(props.node.connectionId)?.db_type;
-  return dbType !== "elasticsearch" && dbType !== "etcd" && dbType !== "mq";
+  return dbType !== "elasticsearch" && dbType !== "etcd" && dbType !== "mq" && dbType !== "nacos";
 });
 const canCopyFinalProxyPort = computed(() => {
   if (props.node.type !== "connection" || !props.node.connectionId) return false;

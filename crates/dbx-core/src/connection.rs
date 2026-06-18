@@ -78,6 +78,8 @@ pub enum PoolKind {
     /// Message queue admin connection (not a data query pool; serves as a
     /// marker that this connection_id is a valid MQ admin connection).
     MessageQueue,
+    /// Nacos admin connection marker.
+    Nacos,
 }
 
 pub struct AppState {
@@ -90,6 +92,7 @@ pub struct AppState {
     pub storage: Storage,
     pub plugins: PluginRegistry,
     pub agent_manager: crate::agent_manager::AgentManager,
+    pub nacos_registry: crate::nacos::NacosAdminRegistry,
     #[cfg(feature = "mq-admin")]
     pub mq_registry: crate::mq::MqAdminRegistry,
 }
@@ -272,6 +275,7 @@ impl AppState {
                 agent_dir,
                 app_version,
             ),
+            nacos_registry: crate::nacos::NacosAdminRegistry::new(),
             #[cfg(feature = "mq-admin")]
             mq_registry: crate::mq::MqAdminRegistry::new(),
         }
@@ -612,6 +616,12 @@ impl AppState {
                 db::influxdb_driver::test_connection(&client, connect_timeout).await?;
                 PoolKind::InfluxDb(client)
             }
+            DatabaseType::Nacos => {
+                let admin_config = self.nacos_admin_config_for_connection(connection_id, &config).await?;
+                let adapter = self.nacos_registry.build_transient_config(admin_config).await?;
+                adapter.test_connection().await?;
+                PoolKind::Nacos
+            }
             DatabaseType::Dameng
             | DatabaseType::Kingbase
             | DatabaseType::Highgo
@@ -814,6 +824,20 @@ impl AppState {
 
         let (host, port) = self.connection_host_port(connection_id, config).await?;
         Ok(mqc.with_connect_override(&host, port))
+    }
+
+    pub async fn nacos_admin_config_for_connection(
+        &self,
+        connection_id: &str,
+        config: &ConnectionConfig,
+    ) -> Result<crate::nacos::config::NacosAdminConfig, String> {
+        let nacos_config = crate::nacos::config::NacosAdminConfig::from_connection(config)?;
+        if !config.has_effective_transport_layers() {
+            return Ok(nacos_config);
+        }
+
+        let (host, port) = self.connection_host_port(connection_id, config).await?;
+        Ok(nacos_config.with_connect_override(&host, port))
     }
 
     async fn remove_stale_connection_pool(&self, pool_key: &str) -> bool {
@@ -1264,6 +1288,8 @@ fn connection_remote_endpoint(config: &ConnectionConfig) -> (String, u16) {
             .unwrap_or_else(|| (config.host.clone(), config.port))
     } else if config.db_type == DatabaseType::MessageQueue {
         parse_mq_admin_host_port(config).unwrap_or_else(|| (config.host.clone(), config.port))
+    } else if config.db_type == DatabaseType::Nacos {
+        parse_nacos_server_host_port(config).unwrap_or_else(|| (config.host.clone(), config.port))
     } else {
         (config.host.clone(), config.port)
     }
@@ -1275,6 +1301,23 @@ fn parse_mq_admin_host_port(config: &ConnectionConfig) -> Option<(String, u16)> 
         .as_ref()?
         .get("adminUrl")
         .or_else(|| config.external_config.as_ref()?.get("admin_url"))?
+        .as_str()?
+        .trim();
+    if value.is_empty() {
+        return None;
+    }
+    let url = reqwest::Url::parse(value).ok()?;
+    let host = url.host_str()?.to_string();
+    let port = url.port_or_known_default()?;
+    Some((host, port))
+}
+
+fn parse_nacos_server_host_port(config: &ConnectionConfig) -> Option<(String, u16)> {
+    let value = config
+        .external_config
+        .as_ref()?
+        .get("serverAddr")
+        .or_else(|| config.external_config.as_ref()?.get("server_addr"))?
         .as_str()?
         .trim();
     if value.is_empty() {
@@ -1356,6 +1399,7 @@ pub async fn close_pool_kind(pool: PoolKind) {
         PoolKind::ExternalTabular(_) => {}
         PoolKind::ExternalDriver { .. } => {}
         PoolKind::MessageQueue => {}
+        PoolKind::Nacos => {}
     }
 }
 
@@ -2569,6 +2613,28 @@ mod tests {
         assert_eq!(connect_override.host, "127.0.0.1");
         assert_ne!(connect_override.port, 8443);
         state.proxy_tunnels.stop_tunnel("proxied-mq:transport:0").await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn nacos_admin_config_allows_domain_server_addr_without_transport_override() {
+        let (state, dir) = test_app_state().await;
+        let mut config = mysql_config(None);
+        config.id = "aliyun-nacos".to_string();
+        config.db_type = DatabaseType::Nacos;
+        config.host = "example.com".to_string();
+        config.port = 8848;
+        config.external_config = Some(serde_json::json!({
+            "serverAddr": "https://nacos.aliyuncs.com:8848",
+            "namespace": "public",
+            "contextPath": "/nacos",
+            "auth": { "kind": "none" }
+        }));
+
+        let nacos_config = state.nacos_admin_config_for_connection("aliyun-nacos", &config).await.unwrap();
+
+        assert_eq!(nacos_config.server_addr, "https://nacos.aliyuncs.com:8848");
+        assert!(nacos_config.connect_override.is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 

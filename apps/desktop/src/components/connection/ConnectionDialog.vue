@@ -15,6 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Switch } from "@/components/ui/switch";
 import type { ConnectionConfig, DatabaseType, JdbcDriverInfo, JdbcMavenBundleInfo, ProxyTunnelConfig, SshTunnelConfig, TransportLayerConfig } from "@/types/database";
 import type { MqAdminConfig, MqAuth, MqSystemKind } from "@/types/mq";
+import type { NacosAdminConfig, NacosAuthConfig } from "@/types/nacos";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useToast } from "@/composables/useToast";
@@ -40,6 +41,7 @@ type DialogStep = "select" | "config";
 type DbPickerView = "icon" | "list";
 type ConfigTab = "connection" | "advanced" | "tls" | "transport";
 type MqTokenSigningMode = "none" | "hs256" | "rs256";
+type NacosAuthKind = NacosAuthConfig["kind"];
 type JdbcDriverSelectItem = {
   id: string;
   label: string;
@@ -305,6 +307,14 @@ const mqTlsSkipVerify = ref(false);
 const mqPinnedVersion = ref(pinnedVersionToSelection(undefined));
 const mqTokenSigningMode = ref<MqTokenSigningMode>("none");
 const mqTokenSigningKey = ref("");
+const nacosServerAddr = ref("http://127.0.0.1:8848");
+const nacosNamespace = ref("");
+const nacosContextPath = ref("/nacos");
+const nacosAuthKind = ref<NacosAuthKind>("none");
+const nacosUsername = ref("nacos");
+const nacosPassword = ref("");
+const nacosTlsSkipVerify = ref(false);
+const nacosPageSize = ref(20);
 
 const colorOptions = [
   { value: "", class: "bg-transparent border-dashed", labelKey: "connection.colorNone" },
@@ -503,6 +513,7 @@ const driverProfiles: Record<
   iotdb: { type: "iotdb", port: 6667, user: "root", label: "Apache IoTDB", icon: "iotdb" },
   etcd: { type: "etcd", port: 2379, user: "", label: "etcd", icon: "etcd" },
   mq: { type: "mq", port: 8080, user: "", label: "Apache Pulsar", icon: "pulsar", host: "127.0.0.1" },
+  nacos: { type: "nacos", port: 8848, user: "nacos", label: "Nacos", icon: "nacos", host: "127.0.0.1" },
   iris: { type: "iris", port: 1972, user: "_SYSTEM", label: "IRIS", icon: "iris" },
   influxdb: { type: "influxdb", port: 8086, user: "", label: "InfluxDB", icon: "InfluxDB" },
   custom_mysql: {
@@ -568,6 +579,26 @@ function hydrateMqFields(value: unknown) {
   resetMqFields(value as Partial<MqAdminConfig>);
 }
 
+function resetNacosFields(config?: Partial<NacosAdminConfig>) {
+  nacosServerAddr.value = config?.serverAddr?.trim() || "http://127.0.0.1:8848";
+  nacosNamespace.value = config?.namespace || "";
+  nacosContextPath.value = config?.contextPath || "/nacos";
+  nacosTlsSkipVerify.value = !!config?.tlsSkipVerify;
+  nacosPageSize.value = Number(config?.pageSize) > 0 ? Number(config?.pageSize) : 20;
+  const auth = (config?.auth || { kind: "none" }) as NacosAuthConfig;
+  nacosAuthKind.value = auth.kind || "none";
+  nacosUsername.value = auth.username || "nacos";
+  nacosPassword.value = auth.password || "";
+}
+
+function hydrateNacosFields(value: unknown) {
+  if (!value || typeof value !== "object") {
+    resetNacosFields();
+    return;
+  }
+  resetNacosFields(value as Partial<NacosAdminConfig>);
+}
+
 function requireMqField(value: string, message: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error(message);
@@ -623,6 +654,28 @@ function buildMqAdminConfig(): MqAdminConfig {
   };
 }
 
+function buildNacosAuth(): NacosAuthConfig {
+  if (nacosAuthKind.value === "usernamePassword") {
+    return {
+      kind: "usernamePassword",
+      username: requireMqField(nacosUsername.value, "Nacos username is required"),
+      password: nacosPassword.value,
+    };
+  }
+  return { kind: "none" };
+}
+
+function buildNacosAdminConfig(): NacosAdminConfig {
+  return {
+    serverAddr: requireMqField(nacosServerAddr.value, "Nacos server address is required"),
+    namespace: nacosNamespace.value.trim() || undefined,
+    contextPath: nacosContextPath.value.trim() || undefined,
+    auth: buildNacosAuth(),
+    tlsSkipVerify: nacosTlsSkipVerify.value || undefined,
+    pageSize: Number(nacosPageSize.value) > 0 ? Number(nacosPageSize.value) : 20,
+  };
+}
+
 function applyMqAdminUrl(config: LegacyConnectionConfig, adminUrl: string) {
   let parsed: URL;
   try {
@@ -631,6 +684,19 @@ function applyMqAdminUrl(config: LegacyConnectionConfig, adminUrl: string) {
     throw new Error("MQ Admin URL is invalid");
   }
   const port = Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 8080);
+  config.host = parsed.hostname;
+  config.port = port;
+  config.ssl = parsed.protocol === "https:";
+}
+
+function applyNacosServerAddr(config: LegacyConnectionConfig, serverAddr: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(serverAddr);
+  } catch {
+    throw new Error("Nacos server address is invalid");
+  }
+  const port = Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 8848);
   config.host = parsed.hostname;
   config.port = port;
   config.ssl = parsed.protocol === "https:";
@@ -676,6 +742,12 @@ function applyProfile(val: string, preserveConnectionFields = false) {
       resetMqFields();
       form.value.database = undefined;
       form.value.connection_string = undefined;
+    }
+    if (profile.type === "nacos") {
+      resetNacosFields();
+      form.value.database = undefined;
+      form.value.connection_string = undefined;
+      form.value.url_params = "";
     }
   }
 }
@@ -749,6 +821,11 @@ watch(
       } else {
         resetMqFields();
       }
+      if (config.db_type === "nacos") {
+        hydrateNacosFields(config.external_config);
+      } else {
+        resetNacosFields();
+      }
       h2ConnectionMode.value = h2ConnectionModeForConfig(config);
       customColorInput.value = config.color || "";
       selectedTransportLayerId.value = form.value.transport_layers?.[0]?.id || null;
@@ -771,6 +848,7 @@ watch(
       selectedType.value = "mysql";
       customDriverName.value = "";
       resetMqFields();
+      resetNacosFields();
       oceanbaseSubMode.value = "mysql";
       h2ConnectionMode.value = "file";
       dialogStep.value = "select";
@@ -905,6 +983,7 @@ const iconTypeMap: Record<string, string> = {
   iotdb: "iotdb",
   etcd: "etcd",
   mq: "mq",
+  nacos: "nacos",
   dm: "dm",
   h2: "h2",
   snowflake: "snowflake",
@@ -983,6 +1062,7 @@ const dbOptions: DbOption[] = [
   { value: "iotdb", label: "Apache IoTDB" },
   { value: "etcd", label: "etcd" },
   { value: "mq", label: "Apache Pulsar" },
+  { value: "nacos", label: "Nacos" },
   { value: "influxdb", label: "InfluxDB" },
   { value: "iris", label: "IRIS" },
   { value: "jdbc", label: "JDBC" },
@@ -1137,6 +1217,7 @@ const testResultMessage = computed(() => {
 });
 const hasRequiredConnectionTarget = computed(() => {
   if (form.value.db_type === "mq") return !!mqAdminUrl.value.trim();
+  if (form.value.db_type === "nacos") return !!nacosServerAddr.value.trim();
   if (isH2FileMode.value) return !!(form.value.host.trim() || h2FilePathFromJdbcUrl(form.value.connection_string));
   return !!(form.value.host || (mongoUseUrl.value && form.value.connection_string) || (form.value.db_type === "jdbc" && form.value.connection_string) || connectionUrlInput.value.trim());
 });
@@ -1276,6 +1357,15 @@ function connectionConfigForSubmit(id: string): ConnectionConfig {
     config.username = "";
     config.password = "";
     config.database = undefined;
+    config.connection_string = undefined;
+    config.url_params = "";
+  } else if (config.db_type === "nacos") {
+    const nacosConfig = buildNacosAdminConfig();
+    config.external_config = nacosConfig;
+    applyNacosServerAddr(config, nacosConfig.serverAddr);
+    config.username = nacosAuthKind.value === "usernamePassword" ? nacosUsername.value.trim() : "";
+    config.password = nacosAuthKind.value === "usernamePassword" ? nacosPassword.value : "";
+    config.database = nacosConfig.namespace || undefined;
     config.connection_string = undefined;
     config.url_params = "";
   } else {
@@ -2751,6 +2841,50 @@ function openExternalUrl(url: string) {
                   <div v-if="mqTokenSigningMode !== 'none'" class="grid grid-cols-4 items-start gap-4">
                     <span />
                     <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">按 Broker 的 jwt.broker.token.mode 选择：SECRET 使用 HS256，PRIVATE 使用 RS256。密钥会走连接 secret 存储。</p>
+                  </div>
+                </template>
+
+                <!-- Nacos: server address, namespace and auth -->
+                <template v-else-if="form.db_type === 'nacos'">
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label class="text-right">Server</Label>
+                    <Input v-model="nacosServerAddr" class="col-span-3" placeholder="http://127.0.0.1:8848" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label class="text-right">Namespace</Label>
+                    <Input v-model="nacosNamespace" class="col-span-3" placeholder="public" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label class="text-right">Context Path</Label>
+                    <Input v-model="nacosContextPath" class="col-span-3" placeholder="/nacos" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label class="text-right">Auth</Label>
+                    <div class="col-span-3 flex flex-wrap gap-2">
+                      <Button size="sm" :variant="nacosAuthKind === 'none' ? 'default' : 'outline'" @click="nacosAuthKind = 'none'">None</Button>
+                      <Button size="sm" :variant="nacosAuthKind === 'usernamePassword' ? 'default' : 'outline'" @click="nacosAuthKind = 'usernamePassword'">User / Password</Button>
+                    </div>
+                  </div>
+                  <template v-if="nacosAuthKind === 'usernamePassword'">
+                    <div class="grid grid-cols-4 items-center gap-4">
+                      <Label class="text-right">{{ t("connection.user") }}</Label>
+                      <Input v-model="nacosUsername" class="col-span-3" placeholder="nacos" />
+                    </div>
+                    <div class="grid grid-cols-4 items-center gap-4">
+                      <Label class="text-right">{{ t("connection.password") }}</Label>
+                      <PasswordInput v-model="nacosPassword" class="col-span-3" />
+                    </div>
+                  </template>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label class="text-right text-xs">TLS</Label>
+                    <label class="col-span-3 inline-flex items-center gap-2">
+                      <input type="checkbox" v-model="nacosTlsSkipVerify" class="mr-0" />
+                      <span class="text-xs text-muted-foreground">Skip certificate verification</span>
+                    </label>
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label class="text-right">Page Size</Label>
+                    <Input v-model.number="nacosPageSize" type="number" min="1" max="500" class="col-span-3" />
                   </div>
                 </template>
 

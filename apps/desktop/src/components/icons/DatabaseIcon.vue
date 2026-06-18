@@ -78,6 +78,7 @@ const assetIcons: Record<string, string> = {
   etcd: "etcd",
   mq: "pulsar",
   pulsar: "pulsar",
+  nacos: "nacos",
   iris: "iris.png",
   influxdb: "influxdb",
 };

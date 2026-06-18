@@ -53,7 +53,8 @@ export type DatabaseType =
   | "iris"
   | "influxdb"
   | "jdbc"
-  | "mq";
+  | "mq"
+  | "nacos";
 
 export interface SqlSnippet {
   id: string;
@@ -424,6 +425,7 @@ export type TreeNodeType =
   | "trigger"
   | "redis-db"
   | "mq-tenant"
+  | "nacos-namespace"
   | "etcd-root"
   | "mongo-db"
   | "mongo-collection"
@@ -453,6 +455,8 @@ export interface TreeNode {
   connectionId?: string;
   database?: string;
   mqTenant?: string;
+  nacosNamespace?: string;
+  nacosNamespaceName?: string;
   schema?: string;
   tableName?: string;
   comment?: string | null;
@@ -523,8 +527,10 @@ export interface QueryTab {
   executionId?: string;
   isExplaining?: boolean;
   explainExecutionId?: string;
-  mode: "data" | "query" | "redis" | "mongo" | "etcd" | "mq" | "objects" | "structure" | "users";
+  mode: "data" | "query" | "redis" | "mongo" | "etcd" | "mq" | "nacos" | "objects" | "structure" | "users";
   mqTenant?: string;
+  nacosNamespace?: string;
+  nacosNamespaceName?: string;
   structureTableName?: string;
   objectBrowser?: {
     schema?: string;

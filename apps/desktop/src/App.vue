@@ -735,6 +735,20 @@ async function openConnectionQuery(connectionId: string) {
     queryStore.openMqAdmin(connectionId);
     return;
   }
+  if (initialTarget.kind === "nacos-admin") {
+    try {
+      await connectionStore.ensureConnected(connectionId);
+      await connectionStore.loadNacosNamespaces(connectionId);
+    } catch (e: any) {
+      toast(
+        t("connection.connectFailed", {
+          message: translateBackendError(t, e?.message || String(e)),
+        }),
+        5000,
+      );
+    }
+    return;
+  }
   const tabId = queryStore.createTab(connectionId, initialTarget.database);
   try {
     await connectionStore.ensureConnected(connectionId);

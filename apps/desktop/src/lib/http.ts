@@ -90,6 +90,7 @@ import type { DatabaseNameSqlOptions, DropTableChildObjectSqlOptions, DropObject
 import type { BuildDatabaseSqlExportOptions, BuildExportInsertStatementsOptions } from "@/lib/databaseExport";
 import type { DataCompareFromTablesOptions, DataCompareFromTablesPreparation, DataCompareSyncPlan, DataCompareSyncPlanOptions, DataComparePreparation, DataComparePreparationOptions } from "@/lib/dataCompare";
 import type { DataGridSavePreparation } from "./tauri";
+import type { NacosConfigItem, NacosConfigKey, NacosConfigList, NacosConfigQuery, NacosConfigUpsert, NacosConnectionInfo, NacosInstanceInfo, NacosInstanceQuery, NacosInstanceUpdate, NacosNamespaceInfo, NacosRawRequest, NacosRawResponse, NacosServiceList, NacosServiceQuery } from "@/types/nacos";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1396,6 +1397,50 @@ export async function etcdPut(connectionId: string, key: string, value: KvValue,
 
 export async function etcdDelete(connectionId: string, key: string): Promise<KvDeleteResponse> {
   return post("/api/etcd/delete", { connectionId, key });
+}
+
+// ---------------------------------------------------------------------------
+// Nacos
+// ---------------------------------------------------------------------------
+
+export async function nacosTestConnection(connectionId: string): Promise<NacosConnectionInfo> {
+  return post("/api/nacos/test-connection", { connectionId });
+}
+
+export async function nacosListNamespaces(connectionId: string): Promise<NacosNamespaceInfo[]> {
+  return post("/api/nacos/namespaces/list", { connectionId });
+}
+
+export async function nacosListConfigs(connectionId: string, query: NacosConfigQuery): Promise<NacosConfigList> {
+  return post("/api/nacos/configs/list", { connectionId, query });
+}
+
+export async function nacosGetConfig(connectionId: string, key: NacosConfigKey): Promise<NacosConfigItem> {
+  return post("/api/nacos/configs/get", { connectionId, key });
+}
+
+export async function nacosPublishConfig(connectionId: string, req: NacosConfigUpsert): Promise<void> {
+  return post("/api/nacos/configs/publish", { connectionId, req });
+}
+
+export async function nacosDeleteConfig(connectionId: string, key: NacosConfigKey): Promise<void> {
+  return post("/api/nacos/configs/delete", { connectionId, key });
+}
+
+export async function nacosListServices(connectionId: string, query: NacosServiceQuery): Promise<NacosServiceList> {
+  return post("/api/nacos/services/list", { connectionId, query });
+}
+
+export async function nacosListInstances(connectionId: string, query: NacosInstanceQuery): Promise<NacosInstanceInfo[]> {
+  return post("/api/nacos/instances/list", { connectionId, query });
+}
+
+export async function nacosUpdateInstance(connectionId: string, req: NacosInstanceUpdate): Promise<void> {
+  return post("/api/nacos/instances/update", { connectionId, req });
+}
+
+export async function nacosRawRequest(connectionId: string, req: NacosRawRequest): Promise<NacosRawResponse> {
+  return post("/api/nacos/raw", { connectionId, req });
 }
 
 // ---------------------------------------------------------------------------

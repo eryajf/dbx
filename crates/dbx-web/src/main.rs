@@ -324,6 +324,17 @@ async fn main() {
         .route("/etcd/get", post(routes::etcd::get))
         .route("/etcd/put", post(routes::etcd::put))
         .route("/etcd/delete", post(routes::etcd::delete))
+        // Nacos
+        .route("/nacos/test-connection", post(routes::nacos::test_connection))
+        .route("/nacos/namespaces/list", post(routes::nacos::list_namespaces))
+        .route("/nacos/configs/list", post(routes::nacos::list_configs))
+        .route("/nacos/configs/get", post(routes::nacos::get_config))
+        .route("/nacos/configs/publish", post(routes::nacos::publish_config))
+        .route("/nacos/configs/delete", post(routes::nacos::delete_config))
+        .route("/nacos/services/list", post(routes::nacos::list_services))
+        .route("/nacos/instances/list", post(routes::nacos::list_instances))
+        .route("/nacos/instances/update", post(routes::nacos::update_instance))
+        .route("/nacos/raw", post(routes::nacos::raw_request))
         // MongoDB
         .route("/mongo/list-databases", post(routes::mongo::list_databases))
         .route("/mongo/list-collections", post(routes::mongo::list_collections))
