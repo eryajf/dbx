@@ -53,6 +53,7 @@ export interface NacosConfigItem {
   namespace: string;
   appName?: string;
   desc?: string;
+  tags?: string;
   configType?: string;
   md5?: string;
   encryptedDataKey?: string;
@@ -77,6 +78,7 @@ export interface NacosConfigUpsert extends NacosConfigKey {
   configType?: string;
   appName?: string;
   desc?: string;
+  tags?: string;
 }
 
 export interface NacosServiceQuery {

@@ -21,7 +21,7 @@ pub struct NacosAdminConfig {
     pub server_addr: String,
     #[serde(default)]
     pub namespace: String,
-    #[serde(default = "default_context_path")]
+    #[serde(default)]
     pub context_path: String,
     #[serde(default)]
     pub auth: NacosAuthConfig,
@@ -40,10 +40,6 @@ pub struct NacosConnectOverride {
     pub port: u16,
 }
 
-fn default_context_path() -> String {
-    "/nacos".to_string()
-}
-
 pub fn default_page_size() -> u32 {
     20
 }
@@ -58,7 +54,7 @@ impl NacosAdminConfig {
             NacosAdminConfig {
                 server_addr: format!("{scheme}://{}:{}", cfg.host.trim(), cfg.port),
                 namespace: cfg.database.clone().unwrap_or_default(),
-                context_path: default_context_path(),
+                context_path: String::new(),
                 auth: if cfg.username.trim().is_empty() {
                     NacosAuthConfig::None
                 } else {
@@ -173,6 +169,17 @@ mod tests {
     }
 
     #[test]
+    fn missing_external_context_path_defaults_to_root() {
+        let cfg = connection_with_external(serde_json::json!({
+            "serverAddr": "http://127.0.0.1:8848",
+            "auth": { "kind": "none" }
+        }));
+
+        let parsed = NacosAdminConfig::from_connection(&cfg).unwrap();
+        assert_eq!(parsed.context_path, "");
+    }
+
+    #[test]
     fn falls_back_to_connection_fields() {
         let mut cfg = connection_with_external(serde_json::Value::Null);
         cfg.external_config = None;
@@ -180,6 +187,7 @@ mod tests {
         cfg.password = "pw".to_string();
         let parsed = NacosAdminConfig::from_connection(&cfg).unwrap();
         assert_eq!(parsed.server_addr, "http://127.0.0.1:8848");
+        assert_eq!(parsed.context_path, "");
         assert!(matches!(parsed.auth, NacosAuthConfig::UsernamePassword { .. }));
     }
 }

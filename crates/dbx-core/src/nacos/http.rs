@@ -51,16 +51,62 @@ impl NacosOpenApiAdmin {
         Ok(Self { cfg, http, token: Mutex::new(None) })
     }
 
-    fn endpoint(&self, path: &str) -> Result<String, String> {
+    fn endpoint_with_context(&self, path: &str, context_path: &str) -> Result<String, String> {
         let path = normalize_api_path(path);
-        let base = format!("{}{}", self.cfg.server_addr, self.cfg.context_path);
+        let context_path = normalize_api_path(context_path).trim_end_matches('/').to_string();
+        let base = format!("{}{}", self.cfg.server_addr, context_path);
         let base = base.trim_end_matches('/');
-        let full = if path.starts_with("/nacos/") && self.cfg.context_path == "/nacos" {
+        let full = if path.starts_with("/nacos/") && context_path == "/nacos" {
             format!("{}{}", self.cfg.server_addr, path)
         } else {
             format!("{base}{path}")
         };
         reqwest::Url::parse(&full).map(|url| url.to_string()).map_err(|e| format!("Nacos API URL is invalid: {e}"))
+    }
+
+    async fn send_with_context_fallback(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        query: &[(String, String)],
+        form: Option<&[(String, String)]>,
+        body: Option<&Value>,
+    ) -> Result<reqwest::Response, String> {
+        let resp = self.send_once(method.clone(), path, &self.cfg.context_path, query, form, body).await?;
+        if !self.should_retry_without_context(resp.status()) {
+            return Ok(resp);
+        }
+
+        let status = resp.status();
+        let detail = resp.text().await.unwrap_or_default();
+        if self.cfg.context_path.trim().is_empty() || !looks_like_wrong_context_path(&detail, &self.cfg.context_path) {
+            return Err(format!("Nacos admin {path} returned {status}: {}", detail.trim()));
+        }
+        self.send_once(method, path, "", query, form, body).await
+    }
+
+    async fn send_once(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        context_path: &str,
+        query: &[(String, String)],
+        form: Option<&[(String, String)]>,
+        body: Option<&Value>,
+    ) -> Result<reqwest::Response, String> {
+        let mut req = self.http.request(method, self.endpoint_with_context(path, context_path)?).query(query);
+        if let Some(form) = form {
+            req = req.form(form);
+        }
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        req.send().await.map_err(|e| format!("Nacos request to {path} failed: {e}"))
+    }
+
+    fn should_retry_without_context(&self, status: reqwest::StatusCode) -> bool {
+        !self.cfg.context_path.trim().is_empty()
+            && (status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::INTERNAL_SERVER_ERROR)
     }
 
     async fn access_token(&self) -> Result<Option<String>, String> {
@@ -79,23 +125,41 @@ impl NacosOpenApiAdmin {
             }
         }
 
-        let url = self.endpoint("/v1/auth/login")?;
-        let resp = self
-            .http
-            .post(url)
-            .form(&[("username", username.as_str()), ("password", password.as_str())])
-            .send()
-            .await
-            .map_err(|e| format!("Nacos auth request failed: {e}"))?;
-        let resp = error_for_status(resp, "/v1/auth/login").await?;
+        let form = vec![("username".to_string(), username.to_string()), ("password".to_string(), password.to_string())];
+        let mut last_err = None;
+        let mut resp = None;
+        for path in ["/v1/auth/login", "/v3/auth/user/login"] {
+            match self.send_with_context_fallback(reqwest::Method::POST, path, &[], Some(&form), None).await {
+                Ok(value) if value.status().is_success() => {
+                    resp = Some(value);
+                    break;
+                }
+                Ok(value) => match error_for_status(value, path).await {
+                    Ok(value) => {
+                        resp = Some(value);
+                        break;
+                    }
+                    Err(err) => last_err = Some(err),
+                },
+                Err(err) => last_err = Some(err),
+            }
+        }
+        let resp = resp.ok_or_else(|| last_err.unwrap_or_else(|| "Nacos auth request failed".to_string()))?;
         let value: Value = resp.json().await.map_err(|e| format!("Failed to parse Nacos auth response: {e}"))?;
-        let token = value
+        let token_source = value.get("data").filter(|value| value.is_object()).unwrap_or(&value);
+        let token = token_source
             .get("accessToken")
-            .or_else(|| value.get("access_token"))
+            .or_else(|| token_source.get("access_token"))
+            .or_else(|| token_source.get("token"))
             .and_then(Value::as_str)
-            .ok_or("Nacos auth response did not include an access token")?
+            .ok_or_else(|| format!("Nacos auth response did not include an access token: {value}"))?
             .to_string();
-        let ttl = value.get("tokenTtl").or_else(|| value.get("expiresIn")).and_then(Value::as_u64).unwrap_or(18_000);
+        let ttl = token_source
+            .get("tokenTtl")
+            .or_else(|| token_source.get("expiresIn"))
+            .or_else(|| token_source.get("expireSeconds"))
+            .and_then(Value::as_u64)
+            .unwrap_or(18_000);
         *self.token.lock().await = Some(AccessToken {
             token: token.clone(),
             expires_at: Instant::now() + Duration::from_secs(ttl.saturating_sub(30).max(60)),
@@ -114,14 +178,7 @@ impl NacosOpenApiAdmin {
         if let Some(token) = self.access_token().await? {
             query.push(("accessToken".to_string(), token));
         }
-        let mut req = self.http.request(method, self.endpoint(path)?).query(&query);
-        if let Some(form) = form {
-            req = req.form(&form);
-        }
-        if let Some(body) = body {
-            req = req.json(&body);
-        }
-        req.send().await.map_err(|e| format!("Nacos request to {path} failed: {e}"))
+        self.send_with_context_fallback(method, path, &query, form.as_deref(), body.as_ref()).await
     }
 
     async fn get_json(&self, path: &str, query: Vec<(String, String)>) -> Result<Value, String> {
@@ -130,8 +187,112 @@ impl NacosOpenApiAdmin {
         response_json_or_text(resp).await
     }
 
+    async fn get_json_without_auth(&self, path: &str, query: Vec<(String, String)>) -> Result<Value, String> {
+        let resp = self.send_with_context_fallback(reqwest::Method::GET, path, &query, None, None).await?;
+        let resp = error_for_status(resp, path).await?;
+        response_json_or_text(resp).await
+    }
+
+    async fn get_server_state(&self) -> Result<Value, String> {
+        let mut errors = Vec::new();
+        for path in ["/v3/console/server/state", "/v1/ns/operator/servers", "/v1/console/server/state"] {
+            match self.get_json_without_auth(path, Vec::new()).await {
+                Ok(value) => return Ok(value),
+                Err(err) => errors.push(err),
+            }
+        }
+        Err(admin_endpoint_error(&self.cfg.server_addr, &errors))
+    }
+
     fn namespace(&self, override_ns: Option<&str>) -> String {
         override_ns.unwrap_or(&self.cfg.namespace).trim().to_string()
+    }
+
+    async fn get_config_list_value(
+        &self,
+        namespace: &str,
+        search: &str,
+        group: &str,
+        page_no: u32,
+        page_size: u32,
+    ) -> Result<Value, String> {
+        let v3_params = vec![
+            ("search".to_string(), "blur".to_string()),
+            ("dataId".to_string(), search.to_string()),
+            ("groupName".to_string(), group.to_string()),
+            ("namespaceId".to_string(), namespace.to_string()),
+            ("pageNo".to_string(), page_no.to_string()),
+            ("pageSize".to_string(), page_size.to_string()),
+        ];
+        match self.get_json("/v3/console/cs/config/list", v3_params).await {
+            Ok(value) => Ok(value),
+            Err(v3_err) => {
+                let v1_params = vec![
+                    ("search".to_string(), "blur".to_string()),
+                    ("dataId".to_string(), search.to_string()),
+                    ("group".to_string(), group.to_string()),
+                    ("tenant".to_string(), namespace.to_string()),
+                    ("pageNo".to_string(), page_no.to_string()),
+                    ("pageSize".to_string(), page_size.to_string()),
+                ];
+                self.get_json("/v1/cs/configs", v1_params).await.map_err(|v1_err| {
+                    format!("Failed to list Nacos configs with v3 and v1 APIs. v3: {v3_err}; v1: {v1_err}")
+                })
+            }
+        }
+    }
+
+    async fn get_json_from_candidates(
+        &self,
+        operation: &str,
+        attempts: Vec<(&str, Vec<(String, String)>)>,
+    ) -> Result<Value, String> {
+        let mut errors = Vec::new();
+        for (path, query) in attempts {
+            match self.get_json(path, query).await {
+                Ok(value) => return Ok(value),
+                Err(err) => errors.push(err),
+            }
+        }
+        Err(format!("Failed to {operation}: {}", errors.join("; ")))
+    }
+
+    async fn submit_form_candidates(
+        &self,
+        operation: &str,
+        method: reqwest::Method,
+        attempts: Vec<(&str, Vec<(String, String)>)>,
+    ) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for (path, form) in attempts {
+            match self.request(method.clone(), path, Vec::new(), Some(form), None).await {
+                Ok(resp) => match error_for_status(resp, path).await {
+                    Ok(_) => return Ok(()),
+                    Err(err) => errors.push(err),
+                },
+                Err(err) => errors.push(err),
+            }
+        }
+        Err(format!("Failed to {operation}: {}", errors.join("; ")))
+    }
+
+    async fn submit_query_candidates(
+        &self,
+        operation: &str,
+        method: reqwest::Method,
+        attempts: Vec<(&str, Vec<(String, String)>)>,
+    ) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for (path, query) in attempts {
+            match self.request(method.clone(), path, query, None, None).await {
+                Ok(resp) => match error_for_status(resp, path).await {
+                    Ok(_) => return Ok(()),
+                    Err(err) => errors.push(err),
+                },
+                Err(err) => errors.push(err),
+            }
+        }
+        Err(format!("Failed to {operation}: {}", errors.join("; ")))
     }
 
     async fn list_configs_by_client_filter(
@@ -152,15 +313,7 @@ impl NacosOpenApiAdmin {
         let mut current_page = 1;
 
         while current_page <= max_scan_pages {
-            let params = vec![
-                ("search".to_string(), "blur".to_string()),
-                ("dataId".to_string(), String::new()),
-                ("group".to_string(), group.clone()),
-                ("tenant".to_string(), namespace.clone()),
-                ("pageNo".to_string(), current_page.to_string()),
-                ("pageSize".to_string(), scan_page_size.to_string()),
-            ];
-            let value = self.get_json("/v1/cs/configs", params).await?;
+            let value = self.get_config_list_value(&namespace, "", &group, current_page, scan_page_size).await?;
             let list = parse_config_list(value, namespace.clone(), current_page, scan_page_size);
             matched.extend(list.items.into_iter().filter(|item| item.data_id.to_lowercase().contains(&filter)));
 
@@ -182,10 +335,8 @@ impl NacosOpenApiAdmin {
 #[async_trait]
 impl NacosAdmin for NacosOpenApiAdmin {
     async fn test_connection(&self) -> Result<NacosConnectionInfo, String> {
-        let raw = match self.get_json("/v1/ns/operator/servers", Vec::new()).await {
-            Ok(value) => value,
-            Err(_) => self.get_json("/v1/console/server/state", Vec::new()).await?,
-        };
+        let raw = self.get_server_state().await?;
+        let _ = self.access_token().await?;
         Ok(NacosConnectionInfo {
             server_addr: self.cfg.server_addr.clone(),
             namespace: self.cfg.namespace.clone(),
@@ -200,7 +351,10 @@ impl NacosAdmin for NacosOpenApiAdmin {
     }
 
     async fn list_namespaces(&self) -> Result<Vec<NacosNamespaceInfo>, String> {
-        let value = self.get_json("/v1/console/namespaces", Vec::new()).await?;
+        let value = match self.get_json("/v3/console/core/namespace/list", Vec::new()).await {
+            Ok(value) => value,
+            Err(_) => self.get_json("/v1/console/namespaces", Vec::new()).await?,
+        };
         Ok(parse_namespaces(value))
     }
 
@@ -217,15 +371,7 @@ impl NacosAdmin for NacosOpenApiAdmin {
         let search = data_id_filter.clone().unwrap_or_default();
         let group_filter = query.group.clone();
         let group = group_filter.clone().unwrap_or_default();
-        let params = vec![
-            ("search".to_string(), "blur".to_string()),
-            ("dataId".to_string(), search),
-            ("group".to_string(), group),
-            ("tenant".to_string(), namespace.clone()),
-            ("pageNo".to_string(), page_no.to_string()),
-            ("pageSize".to_string(), page_size.to_string()),
-        ];
-        let value = self.get_json("/v1/cs/configs", params).await?;
+        let value = self.get_config_list_value(&namespace, &search, &group, page_no, page_size).await?;
         let parsed = parse_config_list(value, namespace.clone(), page_no, page_size);
         if data_id_filter.is_some() && parsed.items.is_empty() {
             let fallback =
@@ -239,81 +385,151 @@ impl NacosAdmin for NacosOpenApiAdmin {
 
     async fn get_config(&self, key: NacosConfigKey) -> Result<NacosConfigItem, String> {
         let namespace = self.namespace(key.namespace.as_deref());
-        let content = self
-            .request(
-                reqwest::Method::GET,
-                "/v1/cs/configs",
-                vec![
-                    ("dataId".to_string(), key.data_id.clone()),
-                    ("group".to_string(), key.group.clone()),
-                    ("tenant".to_string(), namespace.clone()),
-                ],
-                None,
-                None,
-            )
-            .await?;
-        let resp = error_for_status(content, "/v1/cs/configs").await?;
-        let text = resp.text().await.map_err(|e| format!("Failed to read Nacos config response: {e}"))?;
-        Ok(NacosConfigItem {
-            data_id: key.data_id,
-            group: key.group,
-            namespace,
-            app_name: None,
-            desc: None,
-            config_type: None,
-            md5: None,
-            encrypted_data_key: None,
-            content: Some(text),
-        })
+        let v3_params = vec![
+            ("dataId".to_string(), key.data_id.clone()),
+            ("groupName".to_string(), key.group.clone()),
+            ("namespaceId".to_string(), namespace.clone()),
+        ];
+        let v1_params = vec![
+            ("dataId".to_string(), key.data_id.clone()),
+            ("group".to_string(), key.group.clone()),
+            ("tenant".to_string(), namespace.clone()),
+        ];
+        let mut errors = Vec::new();
+        for (path, query) in [
+            ("/v3/console/cs/config", v3_params.clone()),
+            ("/v3/console/cs/config/detail", v3_params),
+            ("/v1/cs/configs", v1_params),
+        ] {
+            match self.request(reqwest::Method::GET, path, query, None, None).await {
+                Ok(resp) => match error_for_status(resp, path).await {
+                    Ok(resp) if path == "/v1/cs/configs" => {
+                        let text =
+                            resp.text().await.map_err(|e| format!("Failed to read Nacos config response: {e}"))?;
+                        return Ok(NacosConfigItem {
+                            data_id: key.data_id,
+                            group: key.group,
+                            namespace,
+                            app_name: None,
+                            desc: None,
+                            tags: None,
+                            config_type: None,
+                            md5: None,
+                            encrypted_data_key: None,
+                            content: Some(text),
+                        });
+                    }
+                    Ok(resp) => {
+                        let value = response_json_or_text(resp).await?;
+                        return Ok(parse_config_detail(value, key.data_id, key.group, namespace));
+                    }
+                    Err(err) => errors.push(err),
+                },
+                Err(err) => errors.push(err),
+            }
+        }
+        Err(format!("Failed to get Nacos config: {}", errors.join("; ")))
     }
 
     async fn publish_config(&self, req: NacosConfigUpsert) -> Result<(), String> {
         let namespace = self.namespace(req.namespace.as_deref());
-        let mut form = vec![
+        let mut v3_query = vec![
+            ("dataId".to_string(), req.data_id.clone()),
+            ("groupName".to_string(), req.group.clone()),
+            ("content".to_string(), req.content.clone()),
+            ("namespaceId".to_string(), namespace.clone()),
+        ];
+        push_optional(&mut v3_query, "type", req.config_type.clone());
+        push_optional(&mut v3_query, "appName", req.app_name.clone());
+        push_optional(&mut v3_query, "desc", req.desc.clone());
+        push_optional(&mut v3_query, "tags", req.tags.clone());
+
+        let mut v1_form = vec![
             ("dataId".to_string(), req.data_id),
             ("group".to_string(), req.group),
             ("content".to_string(), req.content),
             ("tenant".to_string(), namespace),
         ];
-        push_optional(&mut form, "type", req.config_type);
-        push_optional(&mut form, "appName", req.app_name);
-        push_optional(&mut form, "desc", req.desc);
-        let resp = self.request(reqwest::Method::POST, "/v1/cs/configs", Vec::new(), Some(form), None).await?;
-        error_for_status(resp, "/v1/cs/configs").await?;
-        Ok(())
+        push_optional(&mut v1_form, "type", req.config_type);
+        push_optional(&mut v1_form, "appName", req.app_name);
+        push_optional(&mut v1_form, "desc", req.desc);
+        push_optional(&mut v1_form, "tags", req.tags);
+
+        let mut errors = Vec::new();
+        for (path, query) in [
+            ("/v3/console/cs/config", v3_query.clone()),
+            ("/v3/console/cs/config/publish", v3_query.clone()),
+            ("/v3/console/cs/config/update", v3_query),
+        ] {
+            match self.request(reqwest::Method::POST, path, query, None, None).await {
+                Ok(resp) => match error_for_status(resp, path).await {
+                    Ok(_) => return Ok(()),
+                    Err(err) => errors.push(err),
+                },
+                Err(err) => errors.push(err),
+            }
+        }
+        match self.request(reqwest::Method::POST, "/v1/cs/configs", Vec::new(), Some(v1_form), None).await {
+            Ok(resp) => match error_for_status(resp, "/v1/cs/configs").await {
+                Ok(_) => Ok(()),
+                Err(err) => {
+                    errors.push(err);
+                    Err(format!("Failed to publish Nacos config: {}", errors.join("; ")))
+                }
+            },
+            Err(err) => {
+                errors.push(err);
+                Err(format!("Failed to publish Nacos config: {}", errors.join("; ")))
+            }
+        }
     }
 
     async fn delete_config(&self, key: NacosConfigKey) -> Result<(), String> {
         let namespace = self.namespace(key.namespace.as_deref());
-        let resp = self
-            .request(
-                reqwest::Method::DELETE,
-                "/v1/cs/configs",
-                vec![
-                    ("dataId".to_string(), key.data_id),
-                    ("group".to_string(), key.group),
-                    ("tenant".to_string(), namespace),
-                ],
-                None,
-                None,
-            )
-            .await?;
-        error_for_status(resp, "/v1/cs/configs").await?;
-        Ok(())
+        let v3_query = vec![
+            ("dataId".to_string(), key.data_id.clone()),
+            ("groupName".to_string(), key.group.clone()),
+            ("namespaceId".to_string(), namespace.clone()),
+        ];
+        let v1_query = vec![
+            ("dataId".to_string(), key.data_id),
+            ("group".to_string(), key.group),
+            ("tenant".to_string(), namespace),
+        ];
+        self.submit_query_candidates(
+            "delete Nacos config",
+            reqwest::Method::DELETE,
+            vec![
+                ("/v3/console/cs/config", v3_query.clone()),
+                ("/v3/console/cs/config/delete", v3_query.clone()),
+                ("/v3/console/cs/config/remove", v3_query),
+                ("/v1/cs/configs", v1_query),
+            ],
+        )
+        .await
     }
 
     async fn list_services(&self, query: NacosServiceQuery) -> Result<NacosServiceList, String> {
         let page_no = query.page_no.unwrap_or(1).max(1);
         let page_size = query.page_size.unwrap_or(self.cfg.page_size).clamp(1, 500);
         let namespace = self.namespace(query.namespace.as_deref());
-        let mut params = vec![
+        let mut v3_params = vec![
             ("namespaceId".to_string(), namespace),
             ("pageNo".to_string(), page_no.to_string()),
             ("pageSize".to_string(), page_size.to_string()),
         ];
-        push_optional(&mut params, "groupName", query.group_name);
-        push_optional(&mut params, "serviceNameParam", query.service_name);
-        let value = self.get_json("/v1/ns/service/list", params).await?;
+        push_optional(&mut v3_params, "groupName", query.group_name.clone());
+        push_optional(&mut v3_params, "serviceNameParam", query.service_name.clone());
+        let value = self
+            .get_json_from_candidates(
+                "list Nacos services",
+                vec![
+                    ("/v3/console/ns/service/list", v3_params.clone()),
+                    ("/v3/console/ns/service", v3_params.clone()),
+                    ("/v1/ns/service/list", v3_params),
+                ],
+            )
+            .await?;
         Ok(parse_service_list(value, page_no, page_size))
     }
 
@@ -322,7 +538,16 @@ impl NacosAdmin for NacosOpenApiAdmin {
         let mut params = vec![("serviceName".to_string(), query.service_name), ("namespaceId".to_string(), namespace)];
         push_optional(&mut params, "groupName", query.group_name);
         push_optional(&mut params, "clusters", query.clusters);
-        let value = self.get_json("/v1/ns/instance/list", params).await?;
+        let value = self
+            .get_json_from_candidates(
+                "list Nacos instances",
+                vec![
+                    ("/v3/console/ns/instance/list", params.clone()),
+                    ("/v3/console/ns/instance", params.clone()),
+                    ("/v1/ns/instance/list", params),
+                ],
+            )
+            .await?;
         Ok(parse_instances(value))
     }
 
@@ -351,9 +576,16 @@ impl NacosAdmin for NacosOpenApiAdmin {
         if let Some(value) = req.metadata {
             form.push(("metadata".to_string(), value.to_string()));
         }
-        let resp = self.request(reqwest::Method::PUT, "/v1/ns/instance", Vec::new(), Some(form), None).await?;
-        error_for_status(resp, "/v1/ns/instance").await?;
-        Ok(())
+        self.submit_form_candidates(
+            "update Nacos instance",
+            reqwest::Method::PUT,
+            vec![
+                ("/v3/console/ns/instance", form.clone()),
+                ("/v3/console/ns/instance/update", form.clone()),
+                ("/v1/ns/instance", form),
+            ],
+        )
+        .await
     }
 
     async fn raw_request(&self, req: NacosRawRequest) -> Result<NacosRawResponse, String> {
@@ -375,19 +607,31 @@ impl NacosAdmin for NacosOpenApiAdmin {
 }
 
 fn parse_namespaces(value: Value) -> Vec<NacosNamespaceInfo> {
-    let items =
-        value.get("data").or_else(|| value.get("namespaces")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let data = value.get("data").unwrap_or(&value);
+    let items = data
+        .as_array()
+        .cloned()
+        .or_else(|| data.get("namespaces").and_then(Value::as_array).cloned())
+        .or_else(|| data.get("pageItems").and_then(Value::as_array).cloned())
+        .or_else(|| data.get("items").and_then(Value::as_array).cloned())
+        .or_else(|| value.get("namespaces").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
     let mut namespaces: Vec<NacosNamespaceInfo> = items
         .into_iter()
         .map(|item| {
-            let namespace = optional_string_field(&item, &["namespace", "namespaceId", "tenant"]).unwrap_or_default();
-            let show_name = optional_string_field(&item, &["namespaceShowName", "namespaceName", "name"])
+            let namespace =
+                optional_string_field(&item, &["namespace", "namespaceId", "namespace_id", "tenant", "tenantId"])
+                    .unwrap_or_default();
+            let show_name = optional_string_field(&item, &["namespaceShowName", "namespaceName", "name", "showName"])
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| if namespace.is_empty() { "public".to_string() } else { namespace.clone() });
             NacosNamespaceInfo {
                 namespace,
                 namespace_show_name: show_name,
-                namespace_desc: optional_string_field(&item, &["namespaceDesc", "description", "desc"]),
+                namespace_desc: optional_string_field(
+                    &item,
+                    &["namespaceDesc", "namespace_desc", "description", "desc"],
+                ),
                 config_count: optional_u64_field(&item, &["configCount"]),
                 quota: optional_u64_field(&item, &["quota"]),
                 namespace_type: optional_u64_field(&item, &["type", "namespaceType"]),
@@ -417,6 +661,32 @@ fn normalize_api_path(path: &str) -> String {
     } else {
         format!("/{trimmed}")
     }
+}
+
+fn looks_like_wrong_context_path(detail: &str, context_path: &str) -> bool {
+    let context = context_path.trim().trim_matches('/');
+    if context.is_empty() {
+        return false;
+    }
+    let detail = detail.to_ascii_lowercase();
+    let context = context.to_ascii_lowercase();
+    detail.contains(&format!("no static resource {context}/"))
+        || detail.contains(&format!("path\":\"/{context}/"))
+        || detail.contains(&format!("path=/{context}/"))
+}
+
+fn admin_endpoint_error(server_addr: &str, errors: &[String]) -> String {
+    let joined = errors.join("\n");
+    let lower = joined.to_ascii_lowercase();
+    if lower.contains("404 not found") && (lower.contains("<!doctype html>") || lower.contains("<html")) {
+        return format!(
+            "Nacos admin endpoint was not found at {server_addr}. This looks like a Nacos client/server port, not the console/admin API address. Use the console URL, for example http://127.0.0.1:8085 in Nacos 3 Docker deployments, and leave Context Path empty unless the console is actually mounted under /nacos."
+        );
+    }
+    if lower.contains("410 gone") && lower.contains("/v3/console/server/state") {
+        return "Nacos v1 console API is disabled on this server. DBX already tried the v3 console state API first; please check that Server points to the Nacos console/admin URL and Context Path matches the console mount path.".to_string();
+    }
+    format!("Failed to detect Nacos admin endpoint at {server_addr}: {}", joined.trim())
 }
 
 fn push_optional(params: &mut Vec<(String, String)>, key: &str, value: Option<String>) {
@@ -451,9 +721,20 @@ fn extract_server_version(raw: &Value) -> Option<String> {
 }
 
 fn parse_config_list(value: Value, namespace: String, page_no: u32, page_size: u32) -> NacosConfigList {
-    let total_count = value.get("totalCount").or_else(|| value.get("total")).and_then(Value::as_u64).unwrap_or(0);
-    let items = value
+    let data = value.get("data").unwrap_or(&value);
+    let total_count = data
+        .get("totalCount")
+        .or_else(|| data.get("total"))
+        .or_else(|| data.get("count"))
+        .or_else(|| value.get("totalCount"))
+        .or_else(|| value.get("total"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let items = data
         .get("pageItems")
+        .or_else(|| data.get("items"))
+        .or_else(|| data.get("list"))
+        .or_else(|| value.get("pageItems"))
         .or_else(|| value.get("items"))
         .and_then(Value::as_array)
         .cloned()
@@ -465,7 +746,8 @@ fn parse_config_list(value: Value, namespace: String, page_no: u32, page_size: u
             namespace: string_field(&item, &["tenant", "namespaceId"]).if_empty(&namespace),
             app_name: optional_string_field(&item, &["appName", "app_name"]),
             desc: optional_string_field(&item, &["desc", "description"]),
-            config_type: optional_string_field(&item, &["type", "configType"]),
+            tags: optional_string_field(&item, &["tags", "configTags"]),
+            config_type: config_format_for_item(&item),
             md5: optional_string_field(&item, &["md5"]),
             encrypted_data_key: optional_string_field(&item, &["encryptedDataKey"]),
             content: optional_string_field(&item, &["content"]),
@@ -474,9 +756,40 @@ fn parse_config_list(value: Value, namespace: String, page_no: u32, page_size: u
     NacosConfigList { page_no, page_size, total_count, items }
 }
 
+fn parse_config_detail(value: Value, data_id: String, group: String, namespace: String) -> NacosConfigItem {
+    let data = value.get("data").filter(|value| value.is_object()).unwrap_or(&value);
+    NacosConfigItem {
+        data_id: string_field(data, &["dataId", "data_id"]).if_empty(&data_id),
+        group: string_field(data, &["group", "groupName"]).if_empty(&group),
+        namespace: string_field(data, &["tenant", "namespaceId"]).if_empty(&namespace),
+        app_name: optional_string_field(data, &["appName", "app_name"]),
+        desc: optional_string_field(data, &["desc", "description"]),
+        tags: optional_string_field(data, &["tags", "configTags"]),
+        config_type: config_format_for_item(data).or_else(|| infer_config_format(&data_id)),
+        md5: optional_string_field(data, &["md5"]),
+        encrypted_data_key: optional_string_field(data, &["encryptedDataKey"]),
+        content: optional_string_field(data, &["content"]).or_else(|| value.as_str().map(str::to_string)),
+    }
+}
+
 fn parse_service_list(value: Value, page_no: u32, page_size: u32) -> NacosServiceList {
-    let total_count = value.get("count").or_else(|| value.get("totalCount")).and_then(Value::as_u64).unwrap_or(0);
-    let items_value = value.get("doms").or_else(|| value.get("services")).or_else(|| value.get("pageItems"));
+    let data = value.get("data").unwrap_or(&value);
+    let total_count = data
+        .get("count")
+        .or_else(|| data.get("totalCount"))
+        .or_else(|| data.get("total"))
+        .or_else(|| value.get("count"))
+        .or_else(|| value.get("totalCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let items_value = data
+        .get("doms")
+        .or_else(|| data.get("services"))
+        .or_else(|| data.get("pageItems"))
+        .or_else(|| data.get("items"))
+        .or_else(|| value.get("doms"))
+        .or_else(|| value.get("services"))
+        .or_else(|| value.get("pageItems"));
     let items = items_value
         .and_then(Value::as_array)
         .cloned()
@@ -508,8 +821,12 @@ fn parse_service_list(value: Value, page_no: u32, page_size: u32) -> NacosServic
 }
 
 fn parse_instances(value: Value) -> Vec<NacosInstanceInfo> {
-    value
-        .get("hosts")
+    let data = value.get("data").unwrap_or(&value);
+    data.get("hosts")
+        .or_else(|| data.get("instances"))
+        .or_else(|| data.get("pageItems"))
+        .or_else(|| data.get("items"))
+        .or_else(|| value.get("hosts"))
         .or_else(|| value.get("instances"))
         .and_then(Value::as_array)
         .cloned()
@@ -545,6 +862,47 @@ fn optional_string_field(value: &Value, keys: &[&str]) -> Option<String> {
                 .or_else(|| value.as_u64().map(|v| v.to_string()))
         })
         .filter(|value| !value.is_empty())
+}
+
+fn config_format_for_item(item: &Value) -> Option<String> {
+    optional_string_field(
+        item,
+        &[
+            "type",
+            "configType",
+            "config_type",
+            "configFormat",
+            "config_format",
+            "format",
+            "contentType",
+            "content_type",
+        ],
+    )
+    .or_else(|| optional_string_field(item, &["dataId", "data_id"]).and_then(|data_id| infer_config_format(&data_id)))
+    .map(normalize_config_format)
+}
+
+fn infer_config_format(data_id: &str) -> Option<String> {
+    let name = data_id.trim().to_ascii_lowercase();
+    let ext = name.rsplit_once('.').map(|(_, ext)| ext)?;
+    match ext {
+        "yaml" | "yml" => Some("yaml".to_string()),
+        "json" => Some("json".to_string()),
+        "xml" => Some("xml".to_string()),
+        "html" | "htm" => Some("html".to_string()),
+        "properties" | "props" => Some("properties".to_string()),
+        "txt" | "text" => Some("text".to_string()),
+        _ => None,
+    }
+}
+
+fn normalize_config_format(value: String) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "yml" => "yaml".to_string(),
+        "props" => "properties".to_string(),
+        other if !other.is_empty() => other.to_string(),
+        _ => value,
+    }
 }
 
 fn optional_u64_field(value: &Value, keys: &[&str]) -> Option<u64> {
@@ -592,12 +950,111 @@ mod tests {
         assert_eq!(parsed.total_count, 1);
         assert_eq!(parsed.items[0].data_id, "app.yaml");
         assert_eq!(parsed.items[0].namespace, "public");
+        assert_eq!(parsed.items[0].config_type.as_deref(), Some("yaml"));
+    }
+
+    #[test]
+    fn infers_config_format_when_list_shape_omits_type() {
+        let parsed = parse_config_list(
+            serde_json::json!({
+                "totalCount": 2,
+                "pageItems": [
+                    { "dataId": "application-dev.yml", "group": "DEFAULT_GROUP" },
+                    { "dataId": "feature.properties", "group": "DEFAULT_GROUP", "configType": "" }
+                ]
+            }),
+            "public".to_string(),
+            1,
+            20,
+        );
+        assert_eq!(parsed.items[0].config_type.as_deref(), Some("yaml"));
+        assert_eq!(parsed.items[1].config_type.as_deref(), Some("properties"));
+    }
+
+    #[test]
+    fn parses_v3_config_list_data_shape() {
+        let parsed = parse_config_list(
+            serde_json::json!({
+                "code": 0,
+                "data": {
+                    "totalCount": 1,
+                    "pageItems": [
+                        { "dataId": "app.json", "groupName": "DEFAULT_GROUP", "namespaceId": "public" }
+                    ]
+                }
+            }),
+            "public".to_string(),
+            1,
+            20,
+        );
+        assert_eq!(parsed.total_count, 1);
+        assert_eq!(parsed.items[0].group, "DEFAULT_GROUP");
+        assert_eq!(parsed.items[0].config_type.as_deref(), Some("json"));
+    }
+
+    #[test]
+    fn parses_v3_config_detail_data_shape() {
+        let parsed = parse_config_detail(
+            serde_json::json!({
+                "code": 0,
+                "data": {
+                    "dataId": "ttt",
+                    "groupName": "test",
+                    "namespaceId": "ops",
+                    "type": "text",
+                    "content": "hello"
+                }
+            }),
+            "fallback".to_string(),
+            "DEFAULT_GROUP".to_string(),
+            "public".to_string(),
+        );
+        assert_eq!(parsed.data_id, "ttt");
+        assert_eq!(parsed.group, "test");
+        assert_eq!(parsed.namespace, "ops");
+        assert_eq!(parsed.config_type.as_deref(), Some("text"));
+        assert_eq!(parsed.content.as_deref(), Some("hello"));
     }
 
     #[test]
     fn parses_service_list_string_shape() {
         let parsed = parse_service_list(serde_json::json!({ "count": 1, "doms": ["DEFAULT_GROUP@@svc"] }), 1, 20);
         assert_eq!(parsed.items[0].service_name, "DEFAULT_GROUP@@svc");
+    }
+
+    #[test]
+    fn parses_v3_service_list_data_shape() {
+        let parsed = parse_service_list(
+            serde_json::json!({
+                "code": 0,
+                "data": {
+                    "totalCount": 1,
+                    "pageItems": [
+                        { "serviceName": "svc", "groupName": "DEFAULT_GROUP", "ipCount": 2 }
+                    ]
+                }
+            }),
+            1,
+            20,
+        );
+        assert_eq!(parsed.total_count, 1);
+        assert_eq!(parsed.items[0].service_name, "svc");
+        assert_eq!(parsed.items[0].group_name.as_deref(), Some("DEFAULT_GROUP"));
+    }
+
+    #[test]
+    fn parses_v3_instance_list_data_shape() {
+        let parsed = parse_instances(serde_json::json!({
+            "code": 0,
+            "data": {
+                "hosts": [
+                    { "ip": "127.0.0.1", "port": 8848, "healthy": true }
+                ]
+            }
+        }));
+        assert_eq!(parsed[0].ip, "127.0.0.1");
+        assert_eq!(parsed[0].port, 8848);
+        assert_eq!(parsed[0].healthy, Some(true));
     }
 
     #[test]
@@ -612,5 +1069,20 @@ mod tests {
         assert_eq!(parsed[0].namespace_show_name, "public");
         assert_eq!(parsed[1].namespace, "dev");
         assert_eq!(parsed[1].namespace_desc.as_deref(), Some("dev ns"));
+    }
+
+    #[test]
+    fn parses_v3_namespace_page_shape() {
+        let parsed = parse_namespaces(serde_json::json!({
+            "code": 0,
+            "data": {
+                "pageItems": [
+                    { "namespaceId": "dev", "namespaceName": "Development", "namespaceDesc": "dev ns" }
+                ]
+            }
+        }));
+        assert_eq!(parsed[0].namespace, "");
+        assert_eq!(parsed[1].namespace, "dev");
+        assert_eq!(parsed[1].namespace_show_name, "Development");
     }
 }

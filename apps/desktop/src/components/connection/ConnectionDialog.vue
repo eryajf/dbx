@@ -48,6 +48,10 @@ type JdbcDriverSelectItem = {
   paths: string[];
 };
 
+const NACOS_DEFAULT_CONSOLE_URL = "http://127.0.0.1:8085";
+const NACOS_LEGACY_SERVER_PORT = "8848";
+const NACOS_DOCKER_CONSOLE_PORT = "8085";
+
 type LegacyTransportFields = {
   ssh_enabled?: boolean;
   ssh_host?: string;
@@ -307,9 +311,9 @@ const mqTlsSkipVerify = ref(false);
 const mqPinnedVersion = ref(pinnedVersionToSelection(undefined));
 const mqTokenSigningMode = ref<MqTokenSigningMode>("none");
 const mqTokenSigningKey = ref("");
-const nacosServerAddr = ref("http://127.0.0.1:8848");
+const nacosServerAddr = ref(NACOS_DEFAULT_CONSOLE_URL);
 const nacosNamespace = ref("");
-const nacosContextPath = ref("/nacos");
+const nacosContextPath = ref("");
 const nacosAuthKind = ref<NacosAuthKind>("none");
 const nacosUsername = ref("nacos");
 const nacosPassword = ref("");
@@ -580,9 +584,9 @@ function hydrateMqFields(value: unknown) {
 }
 
 function resetNacosFields(config?: Partial<NacosAdminConfig>) {
-  nacosServerAddr.value = config?.serverAddr?.trim() || "http://127.0.0.1:8848";
+  nacosServerAddr.value = config?.serverAddr?.trim() || NACOS_DEFAULT_CONSOLE_URL;
   nacosNamespace.value = config?.namespace || "";
-  nacosContextPath.value = config?.contextPath || "/nacos";
+  nacosContextPath.value = config?.contextPath || "";
   nacosTlsSkipVerify.value = !!config?.tlsSkipVerify;
   nacosPageSize.value = Number(config?.pageSize) > 0 ? Number(config?.pageSize) : 20;
   const auth = (config?.auth || { kind: "none" }) as NacosAuthConfig;
@@ -658,7 +662,7 @@ function buildNacosAuth(): NacosAuthConfig {
   if (nacosAuthKind.value === "usernamePassword") {
     return {
       kind: "usernamePassword",
-      username: requireMqField(nacosUsername.value, "Nacos username is required"),
+      username: requireMqField(nacosUsername.value, t("connection.nacosUsernameRequired")),
       password: nacosPassword.value,
     };
   }
@@ -667,13 +671,50 @@ function buildNacosAuth(): NacosAuthConfig {
 
 function buildNacosAdminConfig(): NacosAdminConfig {
   return {
-    serverAddr: requireMqField(nacosServerAddr.value, "Nacos server address is required"),
+    serverAddr: requireMqField(nacosServerAddr.value, t("connection.nacosConsoleUrlRequired")),
     namespace: nacosNamespace.value.trim() || undefined,
-    contextPath: nacosContextPath.value.trim() || undefined,
+    contextPath: nacosContextPath.value.trim(),
     auth: buildNacosAuth(),
     tlsSkipVerify: nacosTlsSkipVerify.value || undefined,
     pageSize: Number(nacosPageSize.value) > 0 ? Number(nacosPageSize.value) : 20,
   };
+}
+
+function dockerNacosConsoleFallbackUrl(serverAddr: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(serverAddr);
+  } catch {
+    return null;
+  }
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  const host = parsed.hostname.toLowerCase();
+  if (port !== NACOS_LEGACY_SERVER_PORT || !["127.0.0.1", "localhost", "::1"].includes(host)) {
+    return null;
+  }
+  parsed.port = NACOS_DOCKER_CONSOLE_PORT;
+  return parsed.toString().replace(/\/$/, "");
+}
+
+function isNacosAdminEndpointNotFound(message: string): boolean {
+  return /Nacos admin endpoint was not found/i.test(message);
+}
+
+async function tryNacosDockerConsoleFallback(config: ConnectionConfig, originalError: string): Promise<string | null> {
+  if (config.db_type !== "nacos" || !isNacosAdminEndpointNotFound(originalError)) return null;
+  const fallbackUrl = dockerNacosConsoleFallbackUrl(nacosServerAddr.value);
+  if (!fallbackUrl || fallbackUrl === nacosServerAddr.value.trim()) return null;
+
+  const previousUrl = nacosServerAddr.value;
+  nacosServerAddr.value = fallbackUrl;
+  try {
+    const fallbackConfig = connectionConfigForSubmit(config.id);
+    const message = await api.testConnection(fallbackConfig);
+    return `${message} ${t("connection.nacosConsoleUrlAutoAdjusted", { from: previousUrl.trim(), to: fallbackUrl })}`;
+  } catch {
+    nacosServerAddr.value = previousUrl;
+    return null;
+  }
 }
 
 function applyMqAdminUrl(config: LegacyConnectionConfig, adminUrl: string) {
@@ -1267,8 +1308,8 @@ async function testConnection() {
   const runId = ++testRunId;
   isTesting.value = true;
   testResult.value = null;
+  const config = connectionConfigForSubmit(editingId.value || uuid());
   try {
-    const config = connectionConfigForSubmit(editingId.value || uuid());
     const msg = await api.testConnection(config);
     if (runId !== testRunId) return;
     if (config.db_type === "mongodb" && /legacy driver/i.test(msg)) {
@@ -1277,7 +1318,10 @@ async function testConnection() {
     testResult.value = { ok: true, message: msg };
   } catch (e: any) {
     if (runId !== testRunId) return;
-    testResult.value = { ok: false, message: mongodbAuthFailureHint(String(e)) };
+    const message = mongodbAuthFailureHint(String(e));
+    const fallbackMessage = await tryNacosDockerConsoleFallback(config, message);
+    if (runId !== testRunId) return;
+    testResult.value = fallbackMessage ? { ok: true, message: fallbackMessage } : { ok: false, message };
   } finally {
     if (runId === testRunId) {
       isTesting.value = false;
@@ -2847,22 +2891,26 @@ function openExternalUrl(url: string) {
                 <!-- Nacos: server address, namespace and auth -->
                 <template v-else-if="form.db_type === 'nacos'">
                   <div class="grid grid-cols-4 items-center gap-4">
-                    <Label class="text-right">Server</Label>
-                    <Input v-model="nacosServerAddr" class="col-span-3" placeholder="http://127.0.0.1:8848" />
+                    <Label class="text-right">{{ t("connection.nacosConsoleUrl") }}</Label>
+                    <Input v-model="nacosServerAddr" class="col-span-3" placeholder="http://127.0.0.1:8085" />
+                  </div>
+                  <div class="grid grid-cols-4 items-start gap-4">
+                    <span />
+                    <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">{{ t("connection.nacosConsoleUrlHint") }}</p>
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
-                    <Label class="text-right">Namespace</Label>
+                    <Label class="text-right">{{ t("connection.nacosNamespace") }}</Label>
                     <Input v-model="nacosNamespace" class="col-span-3" placeholder="public" />
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
-                    <Label class="text-right">Context Path</Label>
-                    <Input v-model="nacosContextPath" class="col-span-3" placeholder="/nacos" />
+                    <Label class="text-right">{{ t("connection.nacosContextPath") }}</Label>
+                    <Input v-model="nacosContextPath" class="col-span-3" :placeholder="t('connection.nacosContextPathPlaceholder')" />
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
-                    <Label class="text-right">Auth</Label>
+                    <Label class="text-right">{{ t("connection.nacosAuth") }}</Label>
                     <div class="col-span-3 flex flex-wrap gap-2">
-                      <Button size="sm" :variant="nacosAuthKind === 'none' ? 'default' : 'outline'" @click="nacosAuthKind = 'none'">None</Button>
-                      <Button size="sm" :variant="nacosAuthKind === 'usernamePassword' ? 'default' : 'outline'" @click="nacosAuthKind = 'usernamePassword'">User / Password</Button>
+                      <Button size="sm" :variant="nacosAuthKind === 'none' ? 'default' : 'outline'" @click="nacosAuthKind = 'none'">{{ t("connection.nacosAuthNone") }}</Button>
+                      <Button size="sm" :variant="nacosAuthKind === 'usernamePassword' ? 'default' : 'outline'" @click="nacosAuthKind = 'usernamePassword'">{{ t("connection.nacosAuthUserPassword") }}</Button>
                     </div>
                   </div>
                   <template v-if="nacosAuthKind === 'usernamePassword'">
@@ -2876,14 +2924,14 @@ function openExternalUrl(url: string) {
                     </div>
                   </template>
                   <div class="grid grid-cols-4 items-center gap-4">
-                    <Label class="text-right text-xs">TLS</Label>
+                    <Label class="text-right text-xs">{{ t("connection.nacosTls") }}</Label>
                     <label class="col-span-3 inline-flex items-center gap-2">
                       <input type="checkbox" v-model="nacosTlsSkipVerify" class="mr-0" />
-                      <span class="text-xs text-muted-foreground">Skip certificate verification</span>
+                      <span class="text-xs text-muted-foreground">{{ t("connection.nacosTlsSkipVerify") }}</span>
                     </label>
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
-                    <Label class="text-right">Page Size</Label>
+                    <Label class="text-right">{{ t("connection.nacosPageSize") }}</Label>
                     <Input v-model.number="nacosPageSize" type="number" min="1" max="500" class="col-span-3" />
                   </div>
                 </template>

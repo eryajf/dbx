@@ -75,6 +75,8 @@ pub struct NacosConfigItem {
     #[serde(default)]
     pub desc: Option<String>,
     #[serde(default)]
+    pub tags: Option<String>,
+    #[serde(default)]
     pub config_type: Option<String>,
     #[serde(default)]
     pub md5: Option<String>,
@@ -107,6 +109,8 @@ pub struct NacosConfigUpsert {
     pub app_name: Option<String>,
     #[serde(default)]
     pub desc: Option<String>,
+    #[serde(default)]
+    pub tags: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
