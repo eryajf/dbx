@@ -9,8 +9,8 @@ pub use dbx_core::agent_connection::{
 };
 pub use dbx_core::connection::{
     agent_connect_timeout, connect_bare_metadata_pool, connect_mysql_metadata_pool, connection_url_for_endpoint,
-    metadata_connection_config, probe_connection_endpoint, redacted_connection_url_for_endpoint, AppState, MysqlMode,
-    PoolKind,
+    metadata_connection_config, prestosql_jdbc_config_for_endpoint, probe_connection_endpoint,
+    redacted_connection_url_for_endpoint, AppState, MysqlMode, PoolKind,
 };
 use dbx_core::database_capabilities;
 use dbx_core::db;
@@ -18,10 +18,40 @@ use dbx_core::db::agent_driver::AgentMethod;
 use dbx_core::models::connection::{rewrite_jdbc_url_host, ConnectionConfig, DatabaseType};
 pub use dbx_core::path_utils::expand_tilde;
 
+const MONGO_LEGACY_DRIVER_PROFILE: &str = "mongodb-legacy";
+const MONGO_LEGACY_DRIVER_LABEL: &str = "MongoDB (Legacy)";
+
 fn mongo_legacy_connect_params(config: &ConnectionConfig, host: &str, port: u16) -> serde_json::Value {
     serde_json::json!({
         "connection": agent_connect_params(config, host, port, config.effective_database().unwrap_or(""))
     })
+}
+
+fn mark_mongo_legacy_driver(config: &mut ConnectionConfig) -> bool {
+    if config.db_type != DatabaseType::MongoDb {
+        return false;
+    }
+    let changed = config.driver_profile.as_deref() != Some(MONGO_LEGACY_DRIVER_PROFILE)
+        || config.driver_label.as_deref() != Some(MONGO_LEGACY_DRIVER_LABEL);
+    config.driver_profile = Some(MONGO_LEGACY_DRIVER_PROFILE.to_string());
+    config.driver_label = Some(MONGO_LEGACY_DRIVER_LABEL.to_string());
+    changed
+}
+
+async fn persist_mongo_legacy_driver_profile(state: &AppState, config: &ConnectionConfig) -> Result<(), String> {
+    if config.one_time {
+        return Ok(());
+    }
+
+    let mut configs: Vec<ConnectionConfig> =
+        state.storage.load_connections().await?.into_iter().map(|config| config.canonicalized()).collect();
+    let Some(saved_config) = configs.iter_mut().find(|saved_config| saved_config.id == config.id) else {
+        return Ok(());
+    };
+    if !mark_mongo_legacy_driver(saved_config) {
+        return Ok(());
+    }
+    save_connection_configs(state, &configs).await
 }
 
 async fn test_agent_connection(
@@ -168,10 +198,16 @@ async fn connect_agent_pool(
 
 #[cfg(test)]
 mod tests {
-    use super::{load_connection_configs, mongo_legacy_connect_params, save_connection_configs};
-    use dbx_core::connection::{AppState, PoolKind};
+    use super::{
+        mark_mongo_legacy_driver, mongo_legacy_connect_params, MONGO_LEGACY_DRIVER_LABEL, MONGO_LEGACY_DRIVER_PROFILE,
+    };
     use dbx_core::models::connection::{ConnectionConfig, DatabaseType};
-    use dbx_core::storage::Storage;
+    #[cfg(feature = "mq-admin")]
+    use {
+        super::{load_connection_configs, save_connection_configs},
+        dbx_core::connection::{AppState, PoolKind},
+        dbx_core::storage::Storage,
+    };
 
     fn mongodb_config() -> ConnectionConfig {
         ConnectionConfig {
@@ -222,6 +258,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "mq-admin")]
     fn mq_config(id: &str, admin_url: &str) -> ConnectionConfig {
         let mut config = mongodb_config();
         config.id = id.to_string();
@@ -257,6 +294,16 @@ mod tests {
             params["connection"]["connection_string"],
             "mongodb://mongouser:secret@172.22.4.42:27017/RestCloud_V45PUB_Gateway?authSource=admin"
         );
+    }
+
+    #[test]
+    fn mark_mongo_legacy_driver_updates_profile_and_label() {
+        let mut config = mongodb_config();
+
+        assert!(mark_mongo_legacy_driver(&mut config));
+        assert_eq!(config.driver_profile.as_deref(), Some(MONGO_LEGACY_DRIVER_PROFILE));
+        assert_eq!(config.driver_label.as_deref(), Some(MONGO_LEGACY_DRIVER_LABEL));
+        assert!(!mark_mongo_legacy_driver(&mut config));
     }
 
     #[cfg(feature = "mq-admin")]
@@ -568,7 +615,7 @@ pub async fn test_connection(state: State<'_, Arc<AppState>>, config: Connection
             }
             DatabaseType::Redis => {
                 let con = if config.uses_redis_cluster() {
-                    db::redis_driver::connect_cluster(&config).await?;
+                    state.connect_redis_cluster(&tunnel_id, &config).await?;
                     return Ok("Connection successful".to_string());
                 } else if config.uses_redis_sentinel() {
                     db::redis_driver::connect_sentinel(&config).await?
@@ -665,6 +712,24 @@ pub async fn test_connection(state: State<'_, Arc<AppState>>, config: Connection
                     .await
                     .map(|_| "Connection successful".to_string())
             }
+            DatabaseType::Qdrant | DatabaseType::Milvus => {
+                let kind = match config.db_type {
+                    DatabaseType::Qdrant => db::vector_driver::VectorDbKind::Qdrant,
+                    DatabaseType::Milvus => db::vector_driver::VectorDbKind::Milvus,
+                    _ => unreachable!(),
+                };
+                let client = db::vector_driver::VectorClient::new(
+                    kind,
+                    &url,
+                    Some(&config.username),
+                    Some(&config.password),
+                    config.ssl,
+                    connect_timeout,
+                );
+                db::vector_driver::test_connection(&client, connect_timeout)
+                    .await
+                    .map(|_| "Connection successful".to_string())
+            }
             DatabaseType::Rqlite => {
                 let client = db::rqlite_driver::RqliteClient::new(
                     &url,
@@ -738,6 +803,10 @@ pub async fn test_connection(state: State<'_, Arc<AppState>>, config: Connection
             db_type if database_capabilities::is_agent_type(&db_type) => {
                 test_agent_connection(state.inner(), &config, &host, port).await
             }
+            DatabaseType::PrestoSql => {
+                let jdbc_config = prestosql_jdbc_config_for_endpoint(&config, &host, port);
+                state.test_external_driver("jdbc", &jdbc_config).await
+            }
             DatabaseType::Jdbc => {
                 let mut jdbc_config = config.clone();
                 if host != config.host || port != config.port {
@@ -763,6 +832,8 @@ pub async fn connect_db(state: State<'_, Arc<AppState>>, config: ConnectionConfi
     let config = config.canonicalized();
     let id = config.id.clone();
     let db_config = metadata_connection_config(&config);
+    let mut connected_config = config.clone();
+    let mut connected_db_config = db_config.clone();
 
     state.remove_connection_pools(&id).await;
     state.reset_connection_transport_for_config(&id, &db_config).await;
@@ -805,7 +876,7 @@ pub async fn connect_db(state: State<'_, Arc<AppState>>, config: ConnectionConfi
         DatabaseType::Redis => {
             let con = if db_config.uses_redis_cluster() {
                 PoolKind::Redis(db::redis_driver::RedisConnection::Cluster(
-                    db::redis_driver::connect_cluster(&db_config).await?,
+                    state.connect_redis_cluster(&id, &db_config).await?,
                 ))
             } else if db_config.uses_redis_sentinel() {
                 PoolKind::Redis(db::redis_driver::RedisConnection::Direct(tokio::sync::Mutex::new(
@@ -833,7 +904,8 @@ pub async fn connect_db(state: State<'_, Arc<AppState>>, config: ConnectionConfi
         DatabaseType::DuckDb => return Err("DuckDB support not compiled (enable duckdb-bundled feature)".to_string()),
         DatabaseType::MongoDb => {
             if mongo_uses_legacy_driver(&db_config) {
-                let mut client = state.agent_manager.spawn(&db_config.db_type, Some("mongodb-legacy")).await?;
+                let mut client =
+                    state.agent_manager.spawn(&db_config.db_type, Some(MONGO_LEGACY_DRIVER_PROFILE)).await?;
                 client
                     .connect(mongo_legacy_connect_params(&db_config, &host, port))
                     .await
@@ -861,13 +933,17 @@ pub async fn connect_db(state: State<'_, Arc<AppState>>, config: ConnectionConfi
                 };
                 if should_retry_mongo_with_legacy_driver(&native_err) {
                     log::info!("Native MongoDB driver failed ({native_err}), falling back to agent driver");
-                    let mut client = state.agent_manager.spawn(&db_config.db_type, Some("mongodb-legacy")).await?;
+                    let mut client =
+                        state.agent_manager.spawn(&db_config.db_type, Some(MONGO_LEGACY_DRIVER_PROFILE)).await?;
                     client.connect(mongo_legacy_connect_params(&db_config, &host, port)).await.map_err(|err| {
                         format!(
                             "{native_err}\n\nFallback with MongoDB (Legacy) driver failed: {}",
                             mongo_legacy_error_with_auth_hint(&err)
                         )
                     })?;
+                    mark_mongo_legacy_driver(&mut connected_config);
+                    connected_db_config = metadata_connection_config(&connected_config);
+                    persist_mongo_legacy_driver_profile(state.inner(), &connected_config).await?;
                     PoolKind::Agent(std::sync::Arc::new(tokio::sync::Mutex::new(client)))
                 } else {
                     return Err(native_err);
@@ -911,6 +987,23 @@ pub async fn connect_db(state: State<'_, Arc<AppState>>, config: ConnectionConfi
             );
             db::elasticsearch_driver::test_connection(&mut client, connect_timeout).await?;
             PoolKind::Elasticsearch(client)
+        }
+        DatabaseType::Qdrant | DatabaseType::Milvus => {
+            let kind = match db_config.db_type {
+                DatabaseType::Qdrant => db::vector_driver::VectorDbKind::Qdrant,
+                DatabaseType::Milvus => db::vector_driver::VectorDbKind::Milvus,
+                _ => unreachable!(),
+            };
+            let client = db::vector_driver::VectorClient::new(
+                kind,
+                &url,
+                Some(&db_config.username),
+                Some(&db_config.password),
+                db_config.ssl,
+                connect_timeout,
+            );
+            db::vector_driver::test_connection(&client, connect_timeout).await?;
+            PoolKind::VectorDb(client)
         }
         DatabaseType::Rqlite => {
             let client = db::rqlite_driver::RqliteClient::new(
@@ -984,12 +1077,16 @@ pub async fn connect_db(state: State<'_, Arc<AppState>>, config: ConnectionConfi
         db_type if database_capabilities::is_agent_type(&db_type) => {
             connect_agent_pool(state.inner(), &db_config, &host, port).await?
         }
+        DatabaseType::PrestoSql => {
+            let jdbc_config = prestosql_jdbc_config_for_endpoint(&db_config, &host, port);
+            state.external_driver_pool("jdbc", &jdbc_config).await?
+        }
         DatabaseType::Jdbc => state.external_driver_pool("jdbc", &db_config).await?,
         db_type => return Err(format!("Unsupported database type: {db_type:?}")),
     };
 
-    state.insert_connection_pool(id.clone(), pool, &db_config).await;
-    state.configs.write().await.insert(id.clone(), config);
+    state.insert_connection_pool(id.clone(), pool, &connected_db_config).await;
+    state.configs.write().await.insert(id.clone(), connected_config);
 
     Ok(id)
 }
@@ -1014,7 +1111,7 @@ pub async fn connection_final_proxy_port(
 
 #[tauri::command]
 pub async fn disconnect_db(state: State<'_, Arc<AppState>>, connection_id: String) -> Result<(), String> {
-    state.remove_connection_pools_detached(&connection_id).await;
+    state.remove_connection_pools(&connection_id).await;
     drop_nacos_adapters_for_connection_ids(state.inner(), std::slice::from_ref(&connection_id)).await;
     drop_mq_adapters_for_connection_ids(state.inner(), std::slice::from_ref(&connection_id)).await;
     state.reset_connection_transport(&connection_id).await;
@@ -1039,6 +1136,11 @@ pub async fn close_database_connection(
 pub async fn refresh_connections(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     state.refresh_connections().await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn check_connection_health(state: State<'_, Arc<AppState>>, connection_id: String) -> Result<(), String> {
+    state.check_connection_health(&connection_id).await
 }
 
 /// Check whether a connection has read-only protection enabled.

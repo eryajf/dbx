@@ -13,6 +13,8 @@ pub struct SchemaQuery {
     pub database: Option<String>,
     pub schema: Option<String>,
     pub table: Option<String>,
+    pub server: Option<String>,
+    pub catalog: Option<String>,
     pub filter: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
@@ -25,6 +27,61 @@ pub async fn list_databases(
     Query(q): Query<SchemaQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let result = dbx_core::schema::list_databases_core(&state.app, &q.connection_id).await.map_err(AppError)?;
+    Ok(Json(serde_json::to_value(result).map_err(|e| AppError(e.to_string()))?))
+}
+
+pub async fn list_sqlserver_linked_servers(
+    State(state): State<Arc<WebState>>,
+    Query(q): Query<SchemaQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let result =
+        dbx_core::schema::list_sqlserver_linked_servers_core(&state.app, &q.connection_id).await.map_err(AppError)?;
+    Ok(Json(serde_json::to_value(result).map_err(|e| AppError(e.to_string()))?))
+}
+
+pub async fn list_sqlserver_linked_server_catalogs(
+    State(state): State<Arc<WebState>>,
+    Query(q): Query<SchemaQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let server = q.server.as_deref().unwrap_or("");
+    let result = dbx_core::schema::list_sqlserver_linked_server_catalogs_core(&state.app, &q.connection_id, server)
+        .await
+        .map_err(AppError)?;
+    Ok(Json(serde_json::to_value(result).map_err(|e| AppError(e.to_string()))?))
+}
+
+pub async fn list_sqlserver_linked_server_schemas(
+    State(state): State<Arc<WebState>>,
+    Query(q): Query<SchemaQuery>,
+) -> Result<Json<Vec<String>>, AppError> {
+    let server = q.server.as_deref().unwrap_or("");
+    let catalog = q.catalog.as_deref().unwrap_or("");
+    let result =
+        dbx_core::schema::list_sqlserver_linked_server_schemas_core(&state.app, &q.connection_id, server, catalog)
+            .await
+            .map_err(AppError)?;
+    Ok(Json(result))
+}
+
+pub async fn list_sqlserver_linked_server_tables(
+    State(state): State<Arc<WebState>>,
+    Query(q): Query<SchemaQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let server = q.server.as_deref().unwrap_or("");
+    let catalog = q.catalog.as_deref().unwrap_or("");
+    let schema = q.schema.as_deref().unwrap_or("");
+    let result = dbx_core::schema::list_sqlserver_linked_server_tables_core(
+        &state.app,
+        &q.connection_id,
+        server,
+        catalog,
+        schema,
+        q.filter.as_deref(),
+        q.limit,
+        q.offset,
+    )
+    .await
+    .map_err(AppError)?;
     Ok(Json(serde_json::to_value(result).map_err(|e| AppError(e.to_string()))?))
 }
 
@@ -69,6 +126,18 @@ pub async fn list_objects(
     let schema = q.schema.as_deref().unwrap_or("");
     let result =
         dbx_core::schema::list_objects_core(&state.app, &q.connection_id, database, schema).await.map_err(AppError)?;
+    Ok(Json(serde_json::to_value(result).map_err(|e| AppError(e.to_string()))?))
+}
+
+pub async fn list_object_statistics(
+    State(state): State<Arc<WebState>>,
+    Query(q): Query<SchemaQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let database = q.database.as_deref().unwrap_or("");
+    let schema = q.schema.as_deref().unwrap_or("");
+    let result = dbx_core::schema::list_object_statistics_core(&state.app, &q.connection_id, database, schema)
+        .await
+        .map_err(AppError)?;
     Ok(Json(serde_json::to_value(result).map_err(|e| AppError(e.to_string()))?))
 }
 

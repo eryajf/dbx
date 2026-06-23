@@ -50,6 +50,8 @@ pub enum AiProvider {
     Ollama,
     #[serde(rename = "openai-compatible")]
     OpenaiCompatible,
+    #[serde(rename = "codex-cli")]
+    CodexCli,
     Custom,
 }
 
@@ -67,6 +69,29 @@ pub enum AiAuthMethod {
     #[default]
     ApiKey,
     Bearer,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiReasoningLevel {
+    #[default]
+    Default,
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
+impl AiReasoningLevel {
+    pub fn as_codex_effort(&self) -> Option<&'static str> {
+        match self {
+            AiReasoningLevel::Default => None,
+            AiReasoningLevel::Minimal => Some("minimal"),
+            AiReasoningLevel::Low => Some("low"),
+            AiReasoningLevel::Medium => Some("medium"),
+            AiReasoningLevel::High => Some("high"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,7 +115,11 @@ pub struct AiConfig {
     #[serde(default = "default_enable_thinking")]
     pub enable_thinking: bool,
     #[serde(default)]
+    pub reasoning_level: AiReasoningLevel,
+    #[serde(default)]
     pub context_window: Option<u32>,
+    #[serde(default)]
+    pub codex_cli_path: Option<String>,
 }
 
 fn default_enable_thinking() -> bool {
@@ -234,6 +263,7 @@ pub fn resolve_endpoint(config: &AiConfig) -> String {
     }
     match config.provider {
         AiProvider::Claude => format!("{ep}/messages"),
+        AiProvider::CodexCli => unreachable!(),
         AiProvider::Openai
         | AiProvider::Deepseek
         | AiProvider::Qwen
@@ -384,14 +414,39 @@ fn is_openai_reasoning_model(model: &str) -> bool {
     model.starts_with("gpt-5") || model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4")
 }
 
+/// Kimi K2.5+ models (including K2.7-Code) require fixed sampling parameters:
+/// temperature=1.0, top_p=0.95, n=1. Any other value returns an error.
+///
+/// Matches `kimi-k2.5`, `kimi-k2.6`, `kimi-k2.7-code`, K3+, and future versions,
+/// while excluding older K2 variants (`kimi-k2`, `kimi-k2-thinking`, etc.).
+/// Regex equivalent: /kimi-k(?:2\.[5-9]\d*|[3-9]\d*)/
+fn is_kimi_model(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    if let Some(rest) = model.strip_prefix("kimi-k") {
+        if rest.starts_with("2.") && rest.len() > 2 {
+            // K2.x — the digit after "2." must be >= 5 (so K2.5+)
+            rest[2..].chars().next().is_some_and(|c| c.is_ascii_digit() && c >= '5')
+        } else {
+            // K3+ — first char must be digit >= 3
+            rest.chars().next().is_some_and(|c| c.is_ascii_digit() && c >= '3')
+        }
+    } else {
+        false
+    }
+}
+
 pub fn supports_temperature(config: &AiConfig) -> bool {
-    !(is_openai_api_config(config) && is_openai_reasoning_model(&config.model))
+    !(is_kimi_model(&config.model) || is_openai_api_config(config) && is_openai_reasoning_model(&config.model))
+}
+
+fn add_temperature_if_supported_for_config(body: &mut serde_json::Value, config: &AiConfig, temperature: Option<f32>) {
+    if supports_temperature(config) {
+        body["temperature"] = json!(temperature.unwrap_or(0.2));
+    }
 }
 
 pub fn add_temperature_if_supported(body: &mut serde_json::Value, request: &AiCompletionRequest) {
-    if supports_temperature(&request.config) {
-        body["temperature"] = json!(request.temperature.unwrap_or(0.2));
-    }
+    add_temperature_if_supported_for_config(body, &request.config, request.temperature);
 }
 
 fn responses_text(data: &serde_json::Value) -> String {
@@ -444,6 +499,9 @@ pub fn build_responses_input(system_prompt: &str, messages: &[AiMessage]) -> ser
 // ---------------------------------------------------------------------------
 
 fn validate_config(config: &AiConfig) -> Result<(), String> {
+    if matches!(config.provider, AiProvider::CodexCli) {
+        return Ok(());
+    }
     if !matches!(config.provider, AiProvider::Ollama) && config.api_key.trim().is_empty() {
         return Err("API key is required".to_string());
     }
@@ -457,6 +515,9 @@ fn validate_config(config: &AiConfig) -> Result<(), String> {
 }
 
 fn validate_model_list_config(config: &AiConfig) -> Result<(), String> {
+    if matches!(config.provider, AiProvider::CodexCli) {
+        return Ok(());
+    }
     if !matches!(config.provider, AiProvider::Ollama) && config.api_key.trim().is_empty() {
         return Err("API key is required".to_string());
     }
@@ -590,6 +651,9 @@ async fn list_openai_compatible_models(
 }
 
 pub async fn list_models_core(config: &AiConfig) -> Result<Vec<AiModelInfo>, String> {
+    if matches!(config.provider, AiProvider::CodexCli) {
+        return crate::ai_codex_cli::list_codex_models(config).await;
+    }
     validate_model_list_config(config)?;
 
     let client = build_ai_http_client(config, 30)?;
@@ -602,6 +666,7 @@ pub async fn list_models_core(config: &AiConfig) -> Result<Vec<AiModelInfo>, Str
         | AiProvider::Ollama
         | AiProvider::OpenaiCompatible
         | AiProvider::Custom => list_openai_compatible_models(&client, config).await,
+        AiProvider::CodexCli => unreachable!(),
         AiProvider::Gemini => {
             Err("Model listing is only supported for OpenAI-compatible and Claude providers".to_string())
         }
@@ -654,7 +719,7 @@ pub async fn call_openai_compatible(client: &reqwest::Client, request: AiComplet
         "max_tokens": request.max_tokens.unwrap_or(2048),
     });
     add_temperature_if_supported(&mut body_obj, &request);
-    if !request.config.enable_thinking {
+    if !request.config.enable_thinking && !is_kimi_model(&request.config.model) {
         body_obj["extra_body"] = json!({
             "chat_template_kwargs": { "enable_thinking": false }
         });
@@ -823,6 +888,9 @@ fn claude_system_prompt(system_prompt: &str) -> &str {
 }
 
 pub async fn test_connection_core(config: &AiConfig) -> Result<AiTestConnectionResult, String> {
+    if matches!(config.provider, AiProvider::CodexCli) {
+        return crate::ai_codex_cli::test_codex_connection(config).await;
+    }
     validate_config(config)?;
 
     let client = build_ai_http_client(config, 15)?;
@@ -882,10 +950,10 @@ pub async fn test_connection_core(config: &AiConfig) -> Result<AiTestConnectionR
                 "model": &model,
                 "messages": messages,
                 "max_tokens": 16,
-                "temperature": 0.0,
                 "stream": true,
             });
-            if !config.enable_thinking {
+            add_temperature_if_supported_for_config(&mut body_obj, config, Some(0.0));
+            if !config.enable_thinking && !is_kimi_model(&config.model) {
                 body_obj["extra_body"] = json!({
                     "chat_template_kwargs": { "enable_thinking": false }
                 });
@@ -899,8 +967,20 @@ pub async fn test_connection_core(config: &AiConfig) -> Result<AiTestConnectionR
                 .await
                 .map_err(|e| format!("AI request failed: {e}"))?;
             if !res.status().is_success() {
-                let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
-                return Err(categorize_error(&data, config));
+                let status = res.status();
+                let body = res.text().await.unwrap_or_default();
+                // Try JSON first (APIs like OpenAI return structured error bodies)
+                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&body) {
+                    let raw = extract_error(&data).unwrap_or_else(|| "API error".to_string());
+                    return Err(format!("[{}] {}", classify_error(&raw), raw));
+                }
+                // Non-JSON body — show HTTP status + raw body
+                let msg = if body.trim().is_empty() {
+                    format!("HTTP {}", status)
+                } else {
+                    format!("HTTP {}: {}", status, body.trim())
+                };
+                return Err(format!("[{}] {}", classify_error(&msg), msg));
             }
             res.bytes_stream()
         }
@@ -940,9 +1020,14 @@ fn classify_error(msg: &str) -> &'static str {
         "modelNotFound"
     } else if lower.contains("429") || lower.contains("rate limit") || lower.contains("too many requests") {
         "rateLimit"
-    } else if lower.contains("timeout") || lower.contains("timed out") {
+    } else if lower.contains("timeout") || lower.contains("timed out") || lower.contains("504") {
         "timeout"
-    } else if lower.contains("connect") || lower.contains("dns") || lower.contains("resolve") {
+    } else if lower.contains("connect")
+        || lower.contains("dns")
+        || lower.contains("resolve")
+        || lower.contains("502")
+        || lower.contains("503")
+    {
         "network"
     } else {
         "unknown"
@@ -952,11 +1037,16 @@ fn classify_error(msg: &str) -> &'static str {
 pub async fn complete(request: &AiCompletionRequest) -> Result<String, String> {
     validate_config(&request.config)?;
 
+    if matches!(request.config.provider, AiProvider::CodexCli) {
+        return Err("Codex CLI provider is only supported in DBX AI agent mode".to_string());
+    }
+
     let client = build_ai_http_client(&request.config, 60)?;
 
     match request.config.provider {
         AiProvider::Claude => call_claude(&client, request.clone()).await,
         AiProvider::Gemini => call_gemini(&client, request.clone()).await,
+        AiProvider::CodexCli => unreachable!(),
         AiProvider::Openai
         | AiProvider::Deepseek
         | AiProvider::Qwen
@@ -984,12 +1074,17 @@ pub async fn stream(
 ) -> Result<(), String> {
     validate_config(&request.config)?;
 
+    if matches!(request.config.provider, AiProvider::CodexCli) {
+        return Err("Codex CLI provider is only supported in DBX AI agent mode".to_string());
+    }
+
     let stream_timeout = if request.config.enable_thinking { 600 } else { 120 };
     let client = build_ai_http_client(&request.config, stream_timeout)?;
 
     match request.config.provider {
         AiProvider::Claude => stream_claude(&client, session_id, request, cancelled, &on_chunk).await,
         AiProvider::Gemini => stream_gemini(&client, session_id, request, cancelled, &on_chunk).await,
+        AiProvider::CodexCli => unreachable!(),
         AiProvider::Openai
         | AiProvider::Deepseek
         | AiProvider::Qwen
@@ -1102,7 +1197,7 @@ async fn stream_openai(
         "stream": true,
     });
     add_temperature_if_supported(&mut body_obj, request);
-    if !request.config.enable_thinking {
+    if !request.config.enable_thinking && !is_kimi_model(&request.config.model) {
         body_obj["extra_body"] = json!({
             "chat_template_kwargs": { "enable_thinking": false }
         });
@@ -2001,11 +2096,11 @@ pub fn load_config(path: &Path) -> Result<Option<AiConfig>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_ai_http_client, claude_headers, claude_system_prompt, gemini_text, openai_response_text,
-        openai_stream_reasoning, openai_stream_text, parse_model_list_response, resolve_endpoint,
-        resolve_model_list_endpoint, responses_max_output_tokens, responses_text, supports_temperature,
-        validate_config, AiApiStyle, AiAuthMethod, AiConfig, AiModelInfo, AiProvider, AUTHORIZATION,
-        CLAUDE_DEFAULT_SYSTEM,
+        add_temperature_if_supported_for_config, build_ai_http_client, claude_headers, claude_system_prompt,
+        gemini_text, is_kimi_model, openai_response_text, openai_stream_reasoning, openai_stream_text,
+        parse_model_list_response, resolve_endpoint, resolve_model_list_endpoint, responses_max_output_tokens,
+        responses_text, supports_temperature, validate_config, AiApiStyle, AiAuthMethod, AiConfig, AiModelInfo,
+        AiProvider, AiReasoningLevel, AUTHORIZATION, CLAUDE_DEFAULT_SYSTEM, TEST_PROMPT,
     };
 
     #[test]
@@ -2037,7 +2132,9 @@ mod tests {
             proxy_enabled: true,
             proxy_url: "not a proxy url".to_string(),
             enable_thinking: true,
+            reasoning_level: AiReasoningLevel::Default,
             context_window: None,
+            codex_cli_path: None,
         };
 
         let err = build_ai_http_client(&config, 1).unwrap_err();
@@ -2057,7 +2154,9 @@ mod tests {
             proxy_enabled: true,
             proxy_url: "127.0.0.1:7890".to_string(),
             enable_thinking: true,
+            reasoning_level: AiReasoningLevel::Default,
             context_window: None,
+            codex_cli_path: None,
         };
 
         build_ai_http_client(&config, 1).unwrap();
@@ -2075,7 +2174,9 @@ mod tests {
             proxy_enabled: true,
             proxy_url: "not a proxy url".to_string(),
             enable_thinking: true,
+            reasoning_level: AiReasoningLevel::Default,
             context_window: None,
+            codex_cli_path: None,
         };
 
         build_ai_http_client(&config, 1).unwrap();
@@ -2093,7 +2194,9 @@ mod tests {
             proxy_enabled: false,
             proxy_url: String::new(),
             enable_thinking: true,
+            reasoning_level: AiReasoningLevel::Default,
             context_window: None,
+            codex_cli_path: None,
         };
 
         assert_eq!(
@@ -2111,7 +2214,9 @@ mod tests {
             proxy_enabled: false,
             proxy_url: String::new(),
             enable_thinking: true,
+            reasoning_level: AiReasoningLevel::Default,
             context_window: None,
+            codex_cli_path: None,
         };
 
         assert_eq!(resolve_endpoint(&ollama), "http://localhost:11434/v1/chat/completions");
@@ -2130,7 +2235,9 @@ mod tests {
             proxy_enabled: false,
             proxy_url: String::new(),
             enable_thinking: true,
+            reasoning_level: AiReasoningLevel::Default,
             context_window: None,
+            codex_cli_path: None,
         };
         assert_eq!(resolve_model_list_endpoint(&openai).unwrap(), "https://api.openai.com/v1/models");
 
@@ -2144,7 +2251,9 @@ mod tests {
             proxy_enabled: false,
             proxy_url: String::new(),
             enable_thinking: true,
+            reasoning_level: AiReasoningLevel::Default,
             context_window: None,
+            codex_cli_path: None,
         };
         assert_eq!(resolve_model_list_endpoint(&claude).unwrap(), "https://api.anthropic.com/v1/models");
     }
@@ -2162,7 +2271,9 @@ mod tests {
             proxy_enabled: false,
             proxy_url: String::new(),
             enable_thinking: true,
+            reasoning_level: AiReasoningLevel::Default,
             context_window: None,
+            codex_cli_path: None,
         };
         assert_eq!(resolve_endpoint(&config), "https://api.example.com/v1/chat/completions");
         assert_eq!(resolve_model_list_endpoint(&config).unwrap(), "https://api.example.com/v1/models");
@@ -2215,7 +2326,9 @@ mod tests {
             proxy_enabled: false,
             proxy_url: String::new(),
             enable_thinking: true,
+            reasoning_level: AiReasoningLevel::Default,
             context_window: None,
+            codex_cli_path: None,
         };
 
         let api_key_headers = claude_headers(&config).unwrap();
@@ -2284,7 +2397,9 @@ mod tests {
             proxy_enabled: false,
             proxy_url: String::new(),
             enable_thinking: true,
+            reasoning_level: AiReasoningLevel::Default,
             context_window: None,
+            codex_cli_path: None,
         };
 
         assert!(!supports_temperature(&config));
@@ -2299,6 +2414,75 @@ mod tests {
         config.endpoint = "http://localhost:11434/v1".to_string();
         config.model = "gpt-5-local".to_string();
         assert!(supports_temperature(&config));
+
+        // Kimi K2.5+ models: temperature is forced to 1.0 by the API
+        config.model = "kimi-k2.7-code".to_string();
+        assert!(!supports_temperature(&config));
+        assert!(is_kimi_model(&config.model));
+
+        config.model = "kimi-k2.6".to_string();
+        assert!(!supports_temperature(&config));
+        assert!(is_kimi_model(&config.model));
+
+        config.model = "kimi-k2.5".to_string();
+        assert!(!supports_temperature(&config));
+        assert!(is_kimi_model(&config.model));
+
+        // K3+ should also be matched
+        config.model = "kimi-k3".to_string();
+        assert!(!supports_temperature(&config));
+        assert!(is_kimi_model(&config.model));
+
+        // Older K2 variants should NOT be matched (they support custom temperature)
+        config.model = "kimi-k2".to_string();
+        assert!(supports_temperature(&config));
+        assert!(!is_kimi_model(&config.model));
+
+        config.model = "kimi-k2-thinking".to_string();
+        assert!(supports_temperature(&config));
+        assert!(!is_kimi_model(&config.model));
+
+        config.model = "kimi-k2-0711-preview".to_string();
+        assert!(supports_temperature(&config));
+        assert!(!is_kimi_model(&config.model));
+
+        config.model = "kimi-k2.4".to_string();
+        assert!(supports_temperature(&config));
+        assert!(!is_kimi_model(&config.model));
+    }
+
+    #[test]
+    fn omits_temperature_for_kimi_test_connection_body() {
+        let config = AiConfig {
+            provider: AiProvider::OpenaiCompatible,
+            api_key: "key".to_string(),
+            auth_method: AiAuthMethod::Bearer,
+            endpoint: "https://api.moonshot.cn/v1".to_string(),
+            model: "kimi-k2.5".to_string(),
+            api_style: AiApiStyle::Completions,
+            proxy_enabled: false,
+            proxy_url: String::new(),
+            enable_thinking: false,
+            reasoning_level: AiReasoningLevel::Default,
+            context_window: None,
+            codex_cli_path: None,
+        };
+        let mut body = serde_json::json!({
+            "model": &config.model,
+            "messages": [{ "role": "user", "content": TEST_PROMPT }],
+            "max_tokens": 16,
+            "stream": true,
+        });
+
+        add_temperature_if_supported_for_config(&mut body, &config, Some(0.0));
+        if !config.enable_thinking && !is_kimi_model(&config.model) {
+            body["extra_body"] = serde_json::json!({
+                "chat_template_kwargs": { "enable_thinking": false }
+            });
+        }
+
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("extra_body").is_none());
     }
 
     #[test]

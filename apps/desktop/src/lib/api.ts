@@ -53,6 +53,7 @@ export const testConnection = forward("testConnection");
 export const connectDb = forward("connectDb");
 export const connectionFinalProxyPort = forward("connectionFinalProxyPort");
 export const disconnectDb = forward("disconnectDb");
+export const checkConnectionHealth = forward("checkConnectionHealth");
 export const closeDatabaseConnection = forward("closeDatabaseConnection");
 export const refreshConnections = forward("refreshConnections");
 export const saveConnections = forward("saveConnections");
@@ -65,6 +66,7 @@ export const listJdbcDrivers = forward("listJdbcDrivers");
 export const listJdbcMavenBundles = forward("listJdbcMavenBundles");
 export const importJdbcDrivers = forward("importJdbcDrivers");
 export const installJdbcDriverFromMaven = forward("installJdbcDriverFromMaven");
+export const installPrestoSqlJdbcDriver = forward("installPrestoSqlJdbcDriver");
 export const deleteJdbcDriver = forward("deleteJdbcDriver");
 export const deleteJdbcMavenBundle = forward("deleteJdbcMavenBundle");
 export const jdbcPluginStatus = forward("jdbcPluginStatus");
@@ -97,17 +99,24 @@ export const deleteSavedSqlFile = forward("deleteSavedSqlFile");
 export const savedSqlStorageDir = forward("savedSqlStorageDir");
 export const openSavedSqlStorageDir = forward("openSavedSqlStorageDir");
 export const revealPathInFileManager = forward("revealPathInFileManager");
+export const isSqliteDatabaseFile = forward("isSqliteDatabaseFile");
 export const backupSqliteDatabase = forward("backupSqliteDatabase");
 export const syncSavedSqlDirectory = forward("syncSavedSqlDirectory");
 
 // Schema
 export const listDatabases = forward("listDatabases");
+export const listSqlServerLinkedServers = forward("listSqlServerLinkedServers");
+export const listSqlServerLinkedServerCatalogs = forward("listSqlServerLinkedServerCatalogs");
+export const listSqlServerLinkedServerSchemas = forward("listSqlServerLinkedServerSchemas");
+export const listSqlServerLinkedServerTables = forward("listSqlServerLinkedServerTables");
 export const saveSchemaCache = forward("saveSchemaCache");
 export const loadSchemaCache = forward("loadSchemaCache");
 export const deleteSchemaCachePrefix = forward("deleteSchemaCachePrefix");
 export const listSchemas = forward("listSchemas");
 export const listTables = forward("listTables");
+export const getTableComment = forward("getTableComment");
 export const listObjects = forward("listObjects");
+export const listObjectStatistics = forward("listObjectStatistics");
 export const listCompletionObjects = forward("listCompletionObjects");
 export const getObjectSource = forward("getObjectSource");
 export const getColumns = forward("getColumns");
@@ -251,6 +260,7 @@ export const cancelDatabaseExport = forward("cancelDatabaseExport");
 export const exportQueryResultCsv = forward("exportQueryResultCsv");
 export const exportTableDataCsv = forward("exportTableDataCsv");
 export const exportQueryResultXlsx = forward("exportQueryResultXlsx");
+export const exportQueryResultsXlsx = forward("exportQueryResultsXlsx");
 export const exportQueryResultJson = forward("exportQueryResultJson");
 export const exportQueryResultMarkdown = forward("exportQueryResultMarkdown");
 export const startTableExport = forward("startTableExport");
@@ -282,6 +292,8 @@ export const redisFlushDb = forward("redisFlushDb");
 export const redisExecuteCommand = forward("redisExecuteCommand");
 export const redisLoadMore = forward("redisLoadMore");
 export const redisPubSubPublish = forward("redisPubSubPublish");
+export const redisSlowlogGet = forward("redisSlowlogGet");
+export const redisClusterMasterNodes = forward("redisClusterMasterNodes");
 
 export function redisPubSubConnect(connectionId: string): WebSocket {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -339,6 +351,9 @@ export const mqRawRequest = forward("mqRawRequest");
 // MongoDB
 export const mongoListDatabases = forward("mongoListDatabases");
 export const mongoListCollections = forward("mongoListCollections");
+export const mongoCreateDatabase = forward("mongoCreateDatabase");
+export const mongoDropDatabase = forward("mongoDropDatabase");
+export const mongoDropCollection = forward("mongoDropCollection");
 export const documentFindDocuments = forward("documentFindDocuments");
 export const mongoFindDocuments = forward("mongoFindDocuments");
 export const mongoAggregateDocuments = forward("mongoAggregateDocuments");
@@ -351,6 +366,7 @@ export const mongoDeleteDocuments = forward("mongoDeleteDocuments");
 
 // Elasticsearch
 export const elasticsearchListIndices = forward("elasticsearchListIndices");
+export const vectorListCollections = forward("vectorListCollections");
 
 // History
 export const saveHistory = forward("saveHistory");
@@ -406,6 +422,8 @@ export type {
   RedisScanResult,
   RedisCommandSafety,
   RedisCommandResult,
+  RedisSlowlogEntry,
+  RedisNodeEndpoint,
   KvValueEncoding,
   KvValue,
   KvKeyMetadata,
@@ -423,6 +441,7 @@ export type {
   TransferRequest,
   TransferProgress,
   TransferMode,
+  TransferTableNameCase,
   TableImportMode,
   TableImportStatus,
   TableImportColumnMapping,

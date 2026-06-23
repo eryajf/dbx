@@ -1,10 +1,12 @@
-﻿import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ConnectionConfig,
   DatabaseInfo,
+  LinkedServerInfo,
   TableInfo,
   ObjectInfo,
+  ObjectStatistics,
   ObjectSource,
   ObjectSourceKind,
   ColumnInfo,
@@ -124,11 +126,14 @@ export interface DriverRuntimeSummary {
 export interface DesktopSettings {
   show_tray_icon: boolean;
   icon_theme: "default" | "black";
+  quit_on_close: boolean;
+  close_action_prompted: boolean;
   debug_logging_enabled: boolean;
   saved_sql_sync_dir?: string | null;
   driver_store_dir?: string | null;
   plugin_store_dir?: string | null;
   agent_store_dir?: string | null;
+  sidebar_table_page_size?: number | null;
 }
 
 export interface SavedSqlSyncEntry {
@@ -339,6 +344,8 @@ export interface DriverStoreMigrationResult {
   driver_store_dir: string | null;
   plugin_store_dir: string | null;
   agent_store_dir: string | null;
+  plugins_dir: string;
+  agents_dir: string;
   migrated_plugins: boolean;
   migrated_agents: boolean;
 }
@@ -466,12 +473,32 @@ export async function disconnectDb(connectionId: string): Promise<void> {
   return invoke("disconnect_db", { connectionId });
 }
 
+export async function checkConnectionHealth(connectionId: string): Promise<void> {
+  return invoke("check_connection_health", { connectionId });
+}
+
 export async function closeDatabaseConnection(connectionId: string, database: string): Promise<boolean> {
   return invoke("close_database_connection", { connectionId, database });
 }
 
 export async function listDatabases(connectionId: string): Promise<DatabaseInfo[]> {
   return invoke("list_databases", { connectionId });
+}
+
+export async function listSqlServerLinkedServers(connectionId: string): Promise<LinkedServerInfo[]> {
+  return invoke("list_sqlserver_linked_servers", { connectionId });
+}
+
+export async function listSqlServerLinkedServerCatalogs(connectionId: string, server: string): Promise<DatabaseInfo[]> {
+  return invoke("list_sqlserver_linked_server_catalogs", { connectionId, server });
+}
+
+export async function listSqlServerLinkedServerSchemas(connectionId: string, server: string, catalog: string): Promise<string[]> {
+  return invoke("list_sqlserver_linked_server_schemas", { connectionId, server, catalog });
+}
+
+export async function listSqlServerLinkedServerTables(connectionId: string, server: string, catalog: string, schema: string, filter?: string, limit?: number, offset?: number): Promise<TableInfo[]> {
+  return invoke("list_sqlserver_linked_server_tables", { connectionId, server, catalog, schema, filter, limit, offset });
 }
 
 export async function saveSchemaCache(cacheKey: string, payload: unknown): Promise<void> {
@@ -490,8 +517,16 @@ export async function listTables(connectionId: string, database: string, schema:
   return invoke("list_tables", { connectionId, database, schema, filter, limit, offset, objectTypes });
 }
 
+export async function getTableComment(connectionId: string, database: string, schema: string, table: string): Promise<string | null> {
+  return invoke("get_table_comment", { connectionId, database, schema, table });
+}
+
 export async function listObjects(connectionId: string, database: string, schema: string, objectTypes?: SidebarObjectKind[]): Promise<ObjectInfo[]> {
   return invoke("list_objects", { connectionId, database, schema, objectTypes });
+}
+
+export async function listObjectStatistics(connectionId: string, database: string, schema: string): Promise<ObjectStatistics[]> {
+  return invoke("list_object_statistics", { connectionId, database, schema });
 }
 
 export async function listCompletionObjects(connectionId: string, database: string, schema: string): Promise<ObjectInfo[]> {
@@ -868,6 +903,10 @@ export async function installJdbcDriverFromMaven(coordinate: string, repositorie
   return invoke("install_jdbc_driver_from_maven", { request: { coordinate, repositories } });
 }
 
+export async function installPrestoSqlJdbcDriver(): Promise<JdbcDriverInfo[]> {
+  return invoke("install_prestosql_jdbc_driver");
+}
+
 export async function deleteJdbcDriver(path: string): Promise<JdbcDriverInfo[]> {
   return invoke("delete_jdbc_driver", { path });
 }
@@ -1005,6 +1044,10 @@ export async function revealPathInFileManager(path: string): Promise<void> {
   return invoke("reveal_path_in_file_manager", { path });
 }
 
+export async function isSqliteDatabaseFile(path: string): Promise<boolean> {
+  return invoke("is_sqlite_database_file", { path });
+}
+
 export async function backupSqliteDatabase(connectionId: string, destinationPath: string): Promise<void> {
   return invoke("backup_sqlite_database", { connectionId, destinationPath });
 }
@@ -1070,10 +1113,10 @@ export async function getAppVersion(): Promise<string> {
 export interface RedisKeyInfo {
   key_display: string;
   key_raw: string;
-  key_type: string;
-  ttl: number;
-  size: number;
-  value_preview: string;
+  key_type?: string;
+  ttl?: number;
+  size?: number;
+  value_preview?: string;
 }
 
 export interface RedisDatabaseInfo {
@@ -1106,6 +1149,20 @@ export interface RedisCommandResult {
   value: any;
 }
 
+export interface RedisSlowlogEntry {
+  id: number;
+  timestamp: number;
+  duration_micros: number;
+  command: string;
+  client_addr: string | null;
+  client_name: string | null;
+}
+
+export interface RedisNodeEndpoint {
+  host: string;
+  port: number;
+}
+
 export async function redisListDatabases(connectionId: string): Promise<RedisDatabaseInfo[]> {
   return invoke("redis_list_databases", { connectionId });
 }
@@ -1114,8 +1171,8 @@ export async function redisScanKeys(connectionId: string, db: number, cursor: nu
   return invoke("redis_scan_keys", { connectionId, db, cursor, pattern, count });
 }
 
-export async function redisScanKeysBatch(connectionId: string, db: number, cursor: number, pattern: string, count: number, maxIterations: number): Promise<RedisScanResult> {
-  return invoke("redis_scan_keys_batch", { connectionId, db, cursor, pattern, count, maxIterations });
+export async function redisScanKeysBatch(connectionId: string, db: number, cursor: number, pattern: string, count: number, maxIterations: number, includeTypes = true): Promise<RedisScanResult> {
+  return invoke("redis_scan_keys_batch", { connectionId, db, cursor, pattern, count, maxIterations, includeTypes });
 }
 
 export async function redisScanValues(connectionId: string, db: number, cursor: number, pattern: string, query: string, count: number, includeKeyMatches = false): Promise<RedisScanResult> {
@@ -1206,6 +1263,14 @@ export async function redisPubSubPublish(connectionId: string, db: number, chann
   return invoke("redis_pubsub_publish", { connectionId, db, channel, message });
 }
 
+export async function redisSlowlogGet(connectionId: string, count: number, nodeHost?: string, nodePort?: number): Promise<RedisSlowlogEntry[]> {
+  return invoke("redis_slowlog_get", { connectionId, count, nodeHost, nodePort });
+}
+
+export async function redisClusterMasterNodes(connectionId: string): Promise<RedisNodeEndpoint[]> {
+  return invoke("redis_cluster_master_nodes", { connectionId });
+}
+
 // --- etcd ---
 export type KvValueEncoding = "utf8" | "base64";
 
@@ -1278,7 +1343,23 @@ export async function mongoListCollections(connectionId: string, database: strin
   return invoke("mongo_list_collections", { connectionId, database });
 }
 
+export async function mongoCreateDatabase(connectionId: string, database: string): Promise<void> {
+  return invoke("mongo_create_database", { connectionId, database });
+}
+
+export async function mongoDropDatabase(connectionId: string, database: string): Promise<void> {
+  return invoke("mongo_drop_database", { connectionId, database });
+}
+
+export async function mongoDropCollection(connectionId: string, database: string, collection: string): Promise<void> {
+  return invoke("mongo_drop_collection", { connectionId, database, collection });
+}
+
 export async function elasticsearchListIndices(connectionId: string): Promise<string[]> {
+  return mongoListCollections(connectionId, "default");
+}
+
+export async function vectorListCollections(connectionId: string): Promise<string[]> {
   return mongoListCollections(connectionId, "default");
 }
 
@@ -1426,6 +1507,7 @@ export async function listenSqlFileProgress(handler: (progress: SqlFileProgress)
 
 // --- Data Transfer ---
 export type TransferMode = "append" | "overwrite" | "upsert";
+export type TransferTableNameCase = "preserve" | "lower" | "upper";
 
 export interface TransferRequest {
   transferId: string;
@@ -1438,6 +1520,7 @@ export interface TransferRequest {
   tables: string[];
   createTable: boolean;
   mode: TransferMode;
+  targetTableNameCase: TransferTableNameCase;
   batchSize: number;
 }
 
@@ -1720,6 +1803,15 @@ export async function exportQueryResultXlsx(filePath: string, sheetName: string 
       sheetName,
       columns,
       rows,
+    },
+  });
+}
+
+export async function exportQueryResultsXlsx(filePath: string, worksheets: readonly { sheetName?: string; columns: string[]; rows: readonly (readonly XlsxCellValue[])[] }[]): Promise<void> {
+  return invoke("export_query_results_xlsx", {
+    request: {
+      filePath,
+      worksheets,
     },
   });
 }

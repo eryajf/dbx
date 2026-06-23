@@ -13,7 +13,8 @@ use std::time::Instant;
 use crate::models::connection::DatabaseType;
 use crate::sql::starts_with_executable_sql_keyword;
 use crate::types::{
-    ColumnInfo, DatabaseInfo, ForeignKeyInfo, IndexInfo, ObjectInfo, QueryResult, TableInfo, TriggerInfo,
+    ColumnInfo, DatabaseInfo, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectStatistics, QueryResult, TableInfo,
+    TriggerInfo,
 };
 
 use super::file_validator::validate_file_path;
@@ -100,6 +101,17 @@ fn get_opt_i32(row: &mysql_async::Row, name: &str) -> Option<i32> {
             row_get::<Vec<u8>, _>(row, name)
                 .and_then(|b| String::from_utf8(b).ok())
                 .and_then(|v| numeric_metadata_str_to_i32(Some(v)))
+        })
+}
+
+fn get_opt_i64(row: &mysql_async::Row, name: &str) -> Option<i64> {
+    row_get::<i64, _>(row, name)
+        .or_else(|| row_get::<u64, _>(row, name).and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| row_get::<String, _>(row, name).and_then(|value| value.parse::<i64>().ok()))
+        .or_else(|| {
+            row_get::<Vec<u8>, _>(row, name)
+                .and_then(|b| String::from_utf8(b).ok())
+                .and_then(|value| value.parse::<i64>().ok())
         })
 }
 
@@ -364,7 +376,7 @@ pub async fn connect_with_ca_cert(
     ca_cert_path: Option<&str>,
     fallback_timeout: Duration,
 ) -> Result<MySqlPool, String> {
-    connect_with_ca_cert_and_pool_limit(url, ca_cert_path, fallback_timeout, 3).await
+    connect_with_ca_cert_and_pool_limit(url, ca_cert_path, fallback_timeout, 10).await
 }
 
 pub async fn connect_with_ca_cert_and_pool_limit(
@@ -405,9 +417,13 @@ fn create_pool(url: &str, ca_cert_path: Option<&str>, max_connections: usize) ->
         mysql_async::Opts::from_url(&mysql_async_url(&tls_url.url)).map_err(|e| format!("Invalid MySQL URL: {e}"))?;
     let base_ssl_opts = opts.ssl_opts().cloned();
     let max_connections = max_connections.max(1);
+    // Single-connection pools (max_connections == 1) are client session pools that
+    // must preserve session state (e.g. TEMPORARY TABLEs) across queries.
+    // Disable COM_RESET_CONNECTION for these pools to avoid clearing that state.
     let pool_opts = mysql_async::PoolOpts::new()
         .with_constraints(mysql_async::PoolConstraints::new(1, max_connections).unwrap())
-        .with_inactive_connection_ttl(Duration::from_secs(300));
+        .with_inactive_connection_ttl(Duration::from_secs(300))
+        .with_reset_connection(max_connections > 1);
     let mut builder = mysql_async::OptsBuilder::from_opts(opts)
         .stmt_cache_size(0)
         .prefer_socket(false)
@@ -1009,6 +1025,29 @@ pub async fn list_tables(pool: &MySqlPool, database: &str) -> Result<Vec<TableIn
     Ok(tables)
 }
 
+fn table_comment_sql(database: &str, table: &str) -> String {
+    format!(
+        "SELECT TABLE_COMMENT \
+         FROM information_schema.TABLES \
+         WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {} AND TABLE_TYPE <> 'VIEW' \
+         LIMIT 1",
+        quote_value(database),
+        quote_value(table),
+    )
+}
+
+pub async fn get_table_comment(pool: &MySqlPool, database: &str, table: &str) -> Result<Option<String>, String> {
+    let sql = table_comment_sql(database, table);
+    let mut conn = pool.get_conn().await.map_err(|e| e.to_string())?;
+    let result = conn.query_iter(&sql).await.map_err(|e| e.to_string())?;
+    let rows: Vec<mysql_async::Row> = result.collect_and_drop().await.map_err(|e| e.to_string())?;
+    Ok(rows
+        .first()
+        .and_then(|row| get_opt_str(row, "TABLE_COMMENT"))
+        .map(|s| fix_potential_double_encoding(&s))
+        .filter(|s| !s.is_empty()))
+}
+
 #[derive(Clone, Debug, Default)]
 struct TableStatusMeta {
     comment: Option<String>,
@@ -1195,6 +1234,31 @@ pub async fn list_objects(pool: &MySqlPool, database: &str) -> Result<Vec<Object
     Ok(objects)
 }
 
+pub async fn list_object_statistics(pool: &MySqlPool, database: &str) -> Result<Vec<ObjectStatistics>, String> {
+    let sql = format!(
+        "SELECT TABLE_NAME, TABLE_ROWS, COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS TOTAL_BYTES \
+         FROM information_schema.TABLES \
+         WHERE TABLE_SCHEMA = {} AND TABLE_TYPE <> 'VIEW' \
+         ORDER BY TABLE_NAME",
+        quote_value(database),
+    );
+    let mut conn = pool.get_conn().await.map_err(|e| e.to_string())?;
+    let result = conn.query_iter(&sql).await.map_err(|e| e.to_string())?;
+    let rows: Vec<mysql_async::Row> = result.collect_and_drop().await.map_err(|e| e.to_string())?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let name = get_str_by_name(row, "TABLE_NAME").trim().to_string();
+            (!name.is_empty()).then_some(ObjectStatistics {
+                name,
+                schema: Some(database.to_string()),
+                estimated_rows: get_opt_i64(row, "TABLE_ROWS"),
+                total_bytes: get_opt_i64(row, "TOTAL_BYTES"),
+            })
+        })
+        .collect())
+}
+
 pub async fn list_table_objects_show(pool: &MySqlPool, database: &str) -> Result<Vec<ObjectInfo>, String> {
     let (tables, routines) =
         tokio::join!(list_tables_show_with_status(pool, database), list_routine_objects(pool, database));
@@ -1260,15 +1324,8 @@ pub async fn list_completion_objects(pool: &MySqlPool, database: &str) -> Result
 fn columns_sql(database: &str, table: &str) -> String {
     format!(
         "SELECT c.COLUMN_NAME, c.COLUMN_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, c.EXTRA, \
-         c.COLUMN_COMMENT, \
-         c.COLUMN_KEY, c.NUMERIC_PRECISION, c.NUMERIC_SCALE, c.CHARACTER_MAXIMUM_LENGTH, \
-         CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS is_pk \
+         c.COLUMN_COMMENT, c.COLUMN_KEY, c.NUMERIC_PRECISION, c.NUMERIC_SCALE, c.CHARACTER_MAXIMUM_LENGTH \
          FROM information_schema.COLUMNS c \
-         LEFT JOIN information_schema.KEY_COLUMN_USAGE pk \
-           ON pk.TABLE_SCHEMA = c.TABLE_SCHEMA \
-           AND pk.TABLE_NAME = c.TABLE_NAME \
-           AND pk.COLUMN_NAME = c.COLUMN_NAME \
-           AND pk.CONSTRAINT_NAME = 'PRIMARY' \
          WHERE c.TABLE_SCHEMA = {} AND c.TABLE_NAME = {} \
          ORDER BY c.ORDINAL_POSITION",
         quote_value(database),
@@ -1362,9 +1419,8 @@ pub async fn get_columns(pool: &MySqlPool, database: &str, table: &str) -> Resul
                 return None;
             }
             let column_key = get_str_by_name(row, "COLUMN_KEY");
-            let from_pk_join = row.get::<i32, &str>("is_pk").unwrap_or(0) == 1;
             Some(ColumnInfo {
-                is_primary_key: from_pk_join || column_key.eq_ignore_ascii_case("PRI"),
+                is_primary_key: column_key.eq_ignore_ascii_case("PRI"),
                 name,
                 data_type: get_str_by_name(row, "COLUMN_TYPE"),
                 is_nullable: get_str_by_name(row, "IS_NULLABLE") == "YES",
@@ -1553,9 +1609,9 @@ fn skip_mysql_quoted(sql: &str, start: usize, quote: u8) -> usize {
 /// (e.g. after app was backgrounded), it tries again with a fresh connection.
 pub async fn get_conn_with_health_check(pool: &MySqlPool) -> Result<mysql_async::Conn, String> {
     let mut conn = pool.get_conn().await.map_err(|e| e.to_string())?;
-    match conn.ping().await {
-        Ok(()) => Ok(conn),
-        Err(_) => {
+    match tokio::time::timeout(crate::db::connection_timeout(), conn.ping()).await {
+        Ok(Ok(())) => Ok(conn),
+        _ => {
             let _ = conn.disconnect().await;
             pool.get_conn().await.map_err(|e| e.to_string())
         }
@@ -1688,6 +1744,16 @@ pub async fn execute_query_with_max_rows(
 ) -> Result<QueryResult, String> {
     let mut conn = get_conn_with_health_check(pool).await?;
     execute_query_on_conn_with_max_rows(&mut conn, sql, bare, max_rows, dialect).await
+}
+
+pub async fn kill_query(pool: &MySqlPool, connection_id: u32) -> Result<(), String> {
+    let mut conn = pool.get_conn().await.map_err(|e| e.to_string())?;
+    conn.query_drop(format!("KILL QUERY {connection_id}")).await.map_err(|e| e.to_string())
+}
+
+pub async fn kill_query_with_opts(opts: mysql_async::Opts, connection_id: u32) -> Result<(), String> {
+    let mut conn = mysql_async::Conn::new(opts).await.map_err(|e| e.to_string())?;
+    conn.query_drop(format!("KILL QUERY {connection_id}")).await.map_err(|e| e.to_string())
 }
 
 pub async fn execute_query_on_conn_with_max_rows(
@@ -2032,6 +2098,18 @@ mod tests {
     }
 
     #[test]
+    fn mysql_table_comment_sql_targets_single_table() {
+        let sql = table_comment_sql("app", "users");
+
+        assert!(sql.contains("SELECT TABLE_COMMENT"));
+        assert!(sql.contains("TABLE_SCHEMA = 'app'"));
+        assert!(sql.contains("TABLE_NAME = 'users'"));
+        assert!(sql.contains("TABLE_TYPE <> 'VIEW'"));
+        assert!(sql.contains("LIMIT 1"));
+        assert!(!sql.contains("ORDER BY"));
+    }
+
+    #[test]
     fn mysql_database_infos_filter_blank_names_and_keep_catalogless_marker() {
         let regular = database_infos_from_names(vec!["".to_string(), " app ".to_string(), "mysql".to_string()], true);
         assert_eq!(regular.iter().map(|db| db.name.as_str()).collect::<Vec<_>>(), vec!["app", "mysql"]);
@@ -2076,11 +2154,12 @@ mod tests {
     }
 
     #[test]
-    fn mysql_columns_sql_joins_key_column_usage_for_primary_keys() {
+    fn mysql_columns_sql_uses_column_key_for_primary_keys_without_join() {
         let sql = columns_sql("app", "users");
 
-        assert!(sql.contains("LEFT JOIN information_schema.KEY_COLUMN_USAGE"));
-        assert!(sql.contains("CONSTRAINT_NAME = 'PRIMARY'"));
+        assert!(sql.contains("information_schema.COLUMNS"));
+        assert!(!sql.contains("KEY_COLUMN_USAGE"));
+        assert!(!sql.contains("CONSTRAINT_NAME = 'PRIMARY'"));
         assert!(sql.contains("c.COLUMN_KEY"));
         assert!(!sql.contains("COLLATE"));
     }
@@ -2149,11 +2228,9 @@ mod tests {
     }
 
     #[test]
-    fn mysql_column_key_marks_primary_when_pk_join_returns_null() {
-        // COLUMN_KEY='PRI' provides a fallback when KEY_COLUMN_USAGE LEFT JOIN returns NULL
-        let from_pk_join = false;
+    fn mysql_column_key_marks_primary() {
         let column_key = "PRI";
-        let is_pk = from_pk_join || column_key.eq_ignore_ascii_case("PRI");
+        let is_pk = column_key.eq_ignore_ascii_case("PRI");
         assert!(is_pk);
     }
 

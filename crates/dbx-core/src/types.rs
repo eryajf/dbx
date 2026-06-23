@@ -6,6 +6,14 @@ pub struct DatabaseInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkedServerInfo {
+    pub name: String,
+    pub product: Option<String>,
+    pub provider: Option<String>,
+    pub data_source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableInfo {
     pub name: String,
     pub table_type: String, // "TABLE" or "VIEW"
@@ -24,6 +32,14 @@ pub struct ObjectInfo {
     pub updated_at: Option<String>,
     pub parent_schema: Option<String>,
     pub parent_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectStatistics {
+    pub name: String,
+    pub schema: Option<String>,
+    pub estimated_rows: Option<i64>,
+    pub total_bytes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

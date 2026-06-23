@@ -37,6 +37,10 @@ pub struct DesktopSettings {
     pub show_tray_icon: bool,
     pub icon_theme: DesktopIconTheme,
     #[serde(default)]
+    pub quit_on_close: bool,
+    #[serde(default)]
+    pub close_action_prompted: bool,
+    #[serde(default)]
     pub debug_logging_enabled: bool,
     #[serde(default)]
     pub saved_sql_sync_dir: Option<String>,
@@ -51,7 +55,7 @@ pub struct DesktopSettings {
 }
 
 fn default_sidebar_table_page_size() -> usize {
-    500
+    1000
 }
 
 impl Default for DesktopSettings {
@@ -59,12 +63,14 @@ impl Default for DesktopSettings {
         Self {
             show_tray_icon: true,
             icon_theme: DesktopIconTheme::Default,
+            quit_on_close: false,
+            close_action_prompted: false,
             debug_logging_enabled: false,
             saved_sql_sync_dir: None,
             driver_store_dir: None,
             plugin_store_dir: None,
             agent_store_dir: None,
-            sidebar_table_page_size: 500,
+            sidebar_table_page_size: default_sidebar_table_page_size(),
         }
     }
 }
@@ -557,6 +563,11 @@ impl Storage {
             "icon_theme".to_string(),
             serde_json::to_value(desktop_settings.icon_theme).map_err(|e| e.to_string())?,
         );
+        settings.insert("quit_on_close".to_string(), serde_json::Value::Bool(desktop_settings.quit_on_close));
+        settings.insert(
+            "close_action_prompted".to_string(),
+            serde_json::Value::Bool(desktop_settings.close_action_prompted),
+        );
         settings.insert(
             "debug_logging_enabled".to_string(),
             serde_json::Value::Bool(desktop_settings.debug_logging_enabled),
@@ -593,6 +604,10 @@ impl Storage {
                 settings.remove("agent_store_dir");
             }
         }
+        settings.insert(
+            "sidebar_table_page_size".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(desktop_settings.sidebar_table_page_size)),
+        );
         self.save_app_settings_json(&settings).await
     }
 
@@ -605,6 +620,14 @@ impl Storage {
                 .or_else(|| settings.get("run_in_background").and_then(|value| value.as_bool()))
                 .unwrap_or_else(|| DesktopSettings::default().show_tray_icon),
             icon_theme: DesktopIconTheme::from_settings_value(settings.get("icon_theme")),
+            quit_on_close: settings
+                .get("quit_on_close")
+                .and_then(|value| value.as_bool())
+                .unwrap_or_else(|| DesktopSettings::default().quit_on_close),
+            close_action_prompted: settings
+                .get("close_action_prompted")
+                .and_then(|value| value.as_bool())
+                .unwrap_or_else(|| DesktopSettings::default().close_action_prompted),
             debug_logging_enabled: settings
                 .get("debug_logging_enabled")
                 .and_then(|value| value.as_bool())
@@ -2080,6 +2103,8 @@ mod tests {
             .save_desktop_settings(&DesktopSettings {
                 show_tray_icon: false,
                 icon_theme: DesktopIconTheme::Black,
+                quit_on_close: true,
+                close_action_prompted: false,
                 debug_logging_enabled: true,
                 saved_sql_sync_dir: None,
                 driver_store_dir: Some("/tmp/dbx-drivers".to_string()),
@@ -2096,6 +2121,8 @@ mod tests {
             DesktopSettings {
                 show_tray_icon: false,
                 icon_theme: DesktopIconTheme::Black,
+                quit_on_close: true,
+                close_action_prompted: false,
                 debug_logging_enabled: true,
                 saved_sql_sync_dir: None,
                 driver_store_dir: Some("/tmp/dbx-drivers".to_string()),
@@ -2127,6 +2154,23 @@ mod tests {
         assert_eq!(settings.get("show_tray_icon").and_then(|value| value.as_bool()), Some(true));
         assert_eq!(settings.get("icon_theme").and_then(|value| value.as_str()), Some("black"));
         assert_eq!(settings.get("debug_logging_enabled").and_then(|value| value.as_bool()), Some(false));
+        assert_eq!(
+            settings.get("sidebar_table_page_size").and_then(|value| value.as_u64()),
+            Some(DesktopSettings::default().sidebar_table_page_size as u64)
+        );
+    }
+
+    #[tokio::test]
+    async fn desktop_settings_persist_sidebar_table_page_size() {
+        let path = temp_db_path("desktop-settings-sidebar-page-size");
+        let storage = Storage::open(&path).await.unwrap();
+
+        storage
+            .save_desktop_settings(&DesktopSettings { sidebar_table_page_size: 1234, ..DesktopSettings::default() })
+            .await
+            .unwrap();
+
+        assert_eq!(storage.load_desktop_settings().await.unwrap().sidebar_table_page_size, 1234);
     }
 
     #[tokio::test]

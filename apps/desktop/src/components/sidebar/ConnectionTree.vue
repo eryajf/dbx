@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, watch, provide, type Component } from "vue";
+import { ref, computed, nextTick, watch, provide, onMounted, onUnmounted, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Search, X, ListFilter, Crosshair, Server, Database, FolderTree, Table2, Eye, RotateCcw } from "@lucide/vue";
 import { useConnectionStore } from "@/stores/connectionStore";
@@ -8,6 +8,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import type { TreeNode, TreeNodeType } from "@/types/database";
 import { filterSidebarSearchRootsByConnectionState, filterSidebarTree } from "@/lib/sidebarSearchTree";
 import { isCancelSearchShortcut } from "@/lib/keyboardShortcuts";
+import { isEditableSidebarTypeSearchTarget, sidebarTypeSearchNextQuery } from "@/lib/sidebarTypeSearch";
 import { usesTreeSchemaMode } from "@/lib/databaseFeatureSupport";
 import { connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection } from "@/lib/jdbcDialect";
 import { activeTabSidebarTarget, findSidebarNodeForActiveTab, findSidebarNodeForTarget, findNodePathForTarget, scrollTopForSidebarNode, shouldScrollActiveSidebarSelection, type ActiveTabSidebarTarget } from "@/lib/sidebarActiveTabTarget";
@@ -26,6 +27,7 @@ const settingsStore = useSettingsStore();
 const searchQuery = ref("");
 const deferredSearchQuery = ref("");
 const searchInputRef = ref<HTMLInputElement>();
+const pointerInsideTree = ref(false);
 const treeScrollerRef = ref<InstanceType<typeof RecycleScroller> | null>(null);
 const plainTreeScrollerRef = ref<HTMLElement | null>(null);
 type SearchScope = "connection" | "database" | "schema" | "table" | "view";
@@ -81,7 +83,7 @@ const SEARCH_SCOPE_TO_NODE_TYPES: Record<SearchScope, TreeNodeType[]> = {
   connection: ["connection"],
   database: ["database", "redis-db", "mq-tenant", "nacos-namespace", "mongo-db"],
   schema: ["schema"],
-  table: ["table", "mongo-collection", "elasticsearch-index"],
+  table: ["table", "mongo-collection", "vector-collection", "elasticsearch-index"],
   view: ["view"],
 };
 
@@ -334,6 +336,8 @@ async function ensureTreeLoadedForTarget(target: ActiveTabSidebarTarget, opts?: 
         await store.loadMongoDatabases(connId);
       } else if (config.db_type === "elasticsearch") {
         await store.loadElasticsearchIndices(connId);
+      } else if (config.db_type === "qdrant" || config.db_type === "milvus") {
+        await store.loadVectorCollections(connId);
       } else if (config.db_type === "mq") {
         await store.loadMqTenants(connId, loadOptions);
       } else if (config.db_type === "nacos") {
@@ -527,11 +531,45 @@ function onSearchKeydown(event: KeyboardEvent) {
   searchQuery.value = "";
 }
 
+function focusSearchAtEnd() {
+  nextTick(() => {
+    const input = searchInputRef.value;
+    if (!input) return;
+    input.focus();
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  });
+}
+
+function onWindowKeydown(event: KeyboardEvent) {
+  if (!pointerInsideTree.value || event.defaultPrevented || isEditableSidebarTypeSearchTarget(event.target)) return;
+  if (isCancelSearchShortcut(event)) {
+    if (!searchQuery.value) return;
+    event.preventDefault();
+    searchQuery.value = "";
+    focusSearchAtEnd();
+    return;
+  }
+  const nextQuery = sidebarTypeSearchNextQuery(searchQuery.value, event);
+  if (nextQuery == null) return;
+  event.preventDefault();
+  searchQuery.value = nextQuery;
+  focusSearchAtEnd();
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", onWindowKeydown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", onWindowKeydown);
+});
+
 defineExpose({ focusSearch, createNewGroup });
 </script>
 
 <template>
-  <div class="h-full min-h-0 flex flex-col text-sm select-none">
+  <div class="h-full min-h-0 flex flex-col text-sm select-none" @pointerenter="pointerInsideTree = true" @pointerleave="pointerInsideTree = false">
     <div class="sticky top-0 z-10 bg-background px-2 py-1">
       <div class="relative flex items-center gap-1">
         <div class="relative flex-1">

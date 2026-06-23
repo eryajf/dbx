@@ -22,6 +22,7 @@ export function buildTableTreeNodes({ nodeId, connectionId, database, schema, ta
         includeSchemaInId: false,
         name,
         objectType,
+        tableType: table.table_type,
         comment: table.comment,
         parentSchema: table.parent_schema,
         parentName: table.parent_name,
@@ -49,6 +50,7 @@ function makeTableTreeEntry({
   includeSchemaInId,
   name,
   objectType,
+  tableType,
   comment,
   parentSchema,
   parentName,
@@ -60,6 +62,7 @@ function makeTableTreeEntry({
   includeSchemaInId?: boolean;
   name: string;
   objectType: DatabaseObjectTreeKind;
+  tableType?: string;
   comment?: string | null;
   parentSchema?: string | null;
   parentName?: string | null;
@@ -71,6 +74,7 @@ function makeTableTreeEntry({
     id: `${nodeId}:${nodeIdSchemaSuffix}${name}`,
     label: name,
     type: objectType === "VIEW" ? ("view" as const) : objectType === "MATERIALIZED_VIEW" ? ("materialized_view" as const) : ("table" as const),
+    tableType,
     comment,
     connectionId,
     database,
@@ -78,6 +82,8 @@ function makeTableTreeEntry({
     isExpanded: false,
     children: [],
   };
+  if (normalizedParentSchema) node.partitionParentSchema = normalizedParentSchema;
+  if (normalizedParentName) node.partitionParentName = normalizedParentName;
 
   return {
     key: objectIdentityKey(objectType, schema, name),
@@ -233,7 +239,9 @@ export function mergeTableInfosIntoObjects(objects: readonly ObjectInfo[], table
     seen.add(key);
     merged.push({
       name,
-      object_type: objectType,
+      // Keep original driver-reported type (e.g. TDengine STABLE) so
+      // downstream template strategies can distinguish special table kinds.
+      object_type: table.table_type,
       schema: tableSchema,
       comment: table.comment,
       created_at: undefined,
@@ -305,6 +313,98 @@ export function hasTablePartitionGroups(node: TreeNode): boolean {
   return partitionGroupChildren(node).length > 0;
 }
 
+export function mergeTableTreePageChildren(currentChildren: TreeNode[], pageChildren: TreeNode[], connectionId: string, database: string): TreeNode[] {
+  const roots = [...currentChildren];
+  const nodesByKey = new Map<string, TreeNode>();
+  const rootKeys = new Set<string>();
+
+  const nodeKey = (node: TreeNode) => objectIdentityKey("TABLE", node.schema, node.label);
+  const collect = (nodes: readonly TreeNode[]) => {
+    for (const node of nodes) {
+      if (node.type === "table") {
+        nodesByKey.set(nodeKey(node), node);
+      }
+      collect(node.children ?? []);
+      collect(node.hiddenChildren?.filter((child) => !(node.children ?? []).includes(child)) ?? []);
+    }
+  };
+
+  collect(roots);
+  for (const node of roots) {
+    if (node.type === "table") rootKeys.add(nodeKey(node));
+  }
+
+  const ensurePartitionGroup = (parent: TreeNode): TreeNode => {
+    const existing = partitionGroupChildren(parent)[0];
+    if (existing) return existing;
+    const group: TreeNode = {
+      id: `${parent.id}:__partitions`,
+      label: "tree.partitions",
+      type: "group-partitions",
+      connectionId,
+      database,
+      schema: parent.schema,
+      tableName: parent.label,
+      objectCount: 0,
+      isExpanded: false,
+      children: [],
+    };
+    parent.children = [...(parent.children ?? []), group];
+    parent.hiddenChildren = [...(parent.hiddenChildren ?? []), group];
+    return group;
+  };
+
+  const addToParent = (parent: TreeNode, child: TreeNode) => {
+    const group = ensurePartitionGroup(parent);
+    const children = group.children ?? [];
+    if (!children.some((node) => nodeKey(node) === nodeKey(child))) {
+      group.children = sortDatabaseObjectsByName([...children, child], (node) => node.label);
+      group.objectCount = group.children.length;
+    }
+  };
+
+  const addNode = (node: TreeNode) => {
+    if (node.type !== "table") {
+      roots.push(node);
+      return;
+    }
+
+    const key = nodeKey(node);
+    if (nodesByKey.has(key)) return;
+
+    const parentName = node.partitionParentName;
+    const parentSchema = node.partitionParentSchema || node.schema;
+    const parentKey = parentName ? objectIdentityKey("TABLE", parentSchema, parentName) : "";
+    const parent = parentKey ? nodesByKey.get(parentKey) : undefined;
+    nodesByKey.set(key, node);
+    if (parent && parent !== node) {
+      addToParent(parent, node);
+      return;
+    }
+
+    if (!rootKeys.has(key)) {
+      roots.push(node);
+      rootKeys.add(key);
+    }
+  };
+
+  const flattenIncomingTables = (node: TreeNode): TreeNode[] => {
+    if (node.type !== "table") return [node];
+    const descendants = partitionGroupChildren(node)
+      .flatMap((group) => group.children ?? [])
+      .flatMap(flattenIncomingTables);
+    node.children = (node.children ?? []).filter((child) => child.type !== "group-partitions");
+    node.hiddenChildren = (node.hiddenChildren ?? []).filter((child) => child.type !== "group-partitions");
+    return [node, ...descendants];
+  };
+
+  for (const node of pageChildren.flatMap(flattenIncomingTables)) {
+    addNode(node);
+  }
+
+  return sortDatabaseObjectsByName(roots, (node) => node.label);
+}
+
 export type DatabaseObjectTreeKind = SidebarObjectKind;
 
 function buildObjectTreeEntries({ nodeId, connectionId, database, schema, objects, objectType }: { nodeId: string; connectionId: string; database: string; schema?: string; objects: ObjectInfo[]; objectType: "TABLE" | "VIEW" | "MATERIALIZED_VIEW" }): TreeNode[] {
@@ -320,6 +420,7 @@ function buildObjectTreeEntries({ nodeId, connectionId, database, schema, object
         schema: childSchema,
         name,
         objectType,
+        tableType: obj.object_type,
         comment: obj.comment,
         parentSchema: obj.parent_schema,
         parentName: obj.parent_name,
@@ -356,6 +457,7 @@ export function buildSimpleObjectTreeNodes({ nodeId, connectionId, database, sch
       schema: childSchema,
       name,
       objectType,
+      tableType: obj.object_type,
       comment: obj.comment,
       parentSchema: obj.parent_schema,
       parentName: obj.parent_name,

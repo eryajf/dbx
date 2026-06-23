@@ -51,11 +51,12 @@ export interface DrawCanvasDataGridOptions {
   currentSearchMatch: CanvasSearchMatch | null;
   formatCell: (value: CellValue, columnIndex: number) => string;
   isRowActive: (rowIndex: number) => boolean;
-  isRowSelected: (rowId: number) => boolean;
-  isSelectingAll: boolean;
   rowCellsUseSelectionVisual: (rowId: number) => boolean;
   cellIsSelected: (rowIndex: number, visibleColIdx: number) => boolean;
   cellCanHover: (row: CanvasDataGridRow, actualColIdx: number) => boolean;
+  infiniteScrollEnabled: boolean;
+  pageSize: number;
+  currentPage: number;
 }
 
 type NumericCanvasContext = CanvasRenderingContext2D & {
@@ -103,14 +104,16 @@ function fitCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: nu
     fitCanvasTextCache.set(cacheKey, text);
     return text;
   }
+  const ellipsis = "...";
+  const ellipsisWidth = ctx.measureText(ellipsis).width;
   let low = 0;
   let high = text.length;
   while (low < high) {
     const mid = Math.ceil((low + high) / 2);
-    if (ctx.measureText(text.slice(0, mid)).width <= maxWidth) low = mid;
+    if (ctx.measureText(text.slice(0, mid)).width + ellipsisWidth <= maxWidth) low = mid;
     else high = mid - 1;
   }
-  const result = text.slice(0, low);
+  const result = text.slice(0, low) + ellipsis;
   if (fitCanvasTextCache.size >= FIT_CANVAS_TEXT_CACHE_MAX) fitCanvasTextCache.clear();
   fitCanvasTextCache.set(cacheKey, result);
   return result;
@@ -220,11 +223,12 @@ export function drawCanvasDataGrid(options: DrawCanvasDataGridOptions) {
     currentSearchMatch,
     formatCell,
     isRowActive,
-    isRowSelected,
-    isSelectingAll,
     rowCellsUseSelectionVisual,
     cellIsSelected,
     cellCanHover,
+    infiniteScrollEnabled,
+    pageSize,
+    currentPage,
   } = options;
   const dpr = Math.max(1, options.pixelRatio ?? window.devicePixelRatio ?? 1);
   const pixelWidth = Math.max(1, Math.ceil(width * dpr));
@@ -277,26 +281,25 @@ export function drawCanvasDataGrid(options: DrawCanvasDataGridOptions) {
     ctx.fillStyle = rowIsActive && !item.isDeleted ? theme.cellSelectedSingle : rowBase;
     ctx.fillRect(0, y, width, CANVAS_DATA_GRID_ROW_HEIGHT);
 
-    let rowNumberFill = item.status === "new" ? theme.rowNumberNew : item.status === "edited" ? theme.rowNumberEdited : item.status === "deleted" ? theme.rowNumberDeleted : theme.rowNumberDefault;
-    if ((rowIsActive || isRowSelected(item.id)) && !item.isDeleted) rowNumberFill = theme.cellSelectedSingle;
+    const rowNumberFill = item.status === "new" ? theme.rowNumberNew : item.status === "edited" ? theme.rowNumberEdited : item.status === "deleted" ? theme.rowNumberDeleted : theme.rowNumberDefault;
     ctx.fillStyle = rowNumberFill;
     ctx.fillRect(0, y, rowNumberWidth, CANVAS_DATA_GRID_ROW_HEIGHT);
-    if (hoverCell?.rowIndex === item.displayIndex && hoverCell.visibleColIdx < 0 && !isScrolling && item.status === "clean" && !rowIsActive && !isRowSelected(item.id)) {
-      ctx.fillStyle = theme.cellHover;
-      ctx.fillRect(0, y, rowNumberWidth, CANVAS_DATA_GRID_ROW_HEIGHT);
-    }
     ctx.strokeStyle = theme.border;
     ctx.beginPath();
     ctx.moveTo(rowNumberBorderX, y);
     ctx.lineTo(rowNumberBorderX, y + CANVAS_DATA_GRID_ROW_HEIGHT);
     ctx.stroke();
 
-    const rowNumberText = item.status === "new" ? theme.rowNumberTextNew : item.status === "edited" ? theme.rowNumberTextEdited : item.status === "deleted" ? theme.rowNumberTextDeleted : isRowSelected(item.id) ? theme.primary : theme.rowNumberTextClean;
+    const rowNumberText = item.status === "new" ? theme.rowNumberTextNew : item.status === "edited" ? theme.rowNumberTextEdited : item.status === "deleted" ? theme.rowNumberTextDeleted : theme.rowNumberTextClean;
     ctx.fillStyle = rowNumberText;
-    ctx.font = item.status === "new" || item.status === "edited" || isRowSelected(item.id) ? semiboldFont : normalFont;
+    ctx.font = item.status === "new" || item.status === "edited" ? semiboldFont : normalFont;
     ctx.textAlign = "center";
     const textY = alignCanvasPixel(y + rowTextOffsetY, dpr);
-    ctx.fillText(String(item.displayIndex + 1), rowNumberTextX, textY);
+    if (infiniteScrollEnabled) {
+      ctx.fillText(String(item.displayIndex + 1), rowNumberTextX, textY);
+    } else {
+      ctx.fillText(String(item.displayIndex + 1 + pageSize * (currentPage - 1)), rowNumberTextX, textY);
+    }
     ctx.font = normalFont;
 
     ctx.strokeStyle = theme.border;
@@ -304,24 +307,6 @@ export function drawCanvasDataGrid(options: DrawCanvasDataGridOptions) {
     ctx.moveTo(0, rowBorderY);
     ctx.lineTo(width, rowBorderY);
     ctx.stroke();
-    if ((isRowSelected(item.id) || isSelectingAll) && !item.isDeleted) {
-      const selectedLeftX = 0.5;
-      const selectedRightX = rowNumberWidth - 1.5;
-      const selectedTopY = Math.max(y + 0.5, 1);
-      ctx.strokeStyle = theme.cellSelectedSingleBorder;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(selectedLeftX, selectedTopY);
-      ctx.lineTo(selectedRightX, selectedTopY);
-      ctx.moveTo(selectedLeftX, rowBorderY);
-      ctx.lineTo(selectedRightX, rowBorderY);
-      ctx.moveTo(selectedLeftX, selectedTopY);
-      ctx.lineTo(selectedLeftX, rowBorderY);
-      ctx.moveTo(selectedRightX, selectedTopY);
-      ctx.lineTo(selectedRightX, rowBorderY);
-      ctx.stroke();
-    }
-
     let x = rowNumberWidth + columnOffset - scrollLeft;
     for (let visibleColIdx = firstCol; visibleColIdx < renderedColumnWidths.length && x < width; visibleColIdx++) {
       const colWidth = renderedColumnWidths[visibleColIdx] ?? 0;
@@ -366,6 +351,12 @@ export function drawCanvasDataGrid(options: DrawCanvasDataGridOptions) {
           ctx.fillRect(clippedX, y, cellPaintWidth, CANVAS_DATA_GRID_ROW_HEIGHT);
         }
 
+        ctx.strokeStyle = theme.border;
+        ctx.beginPath();
+        ctx.moveTo(clippedX, rowBorderY);
+        ctx.lineTo(Math.min(width, clippedX + cellPaintWidth), rowBorderY);
+        ctx.stroke();
+
         ctx.save();
         ctx.beginPath();
         ctx.rect(clippedX, y, Math.min(cellPaintWidth, width - clippedX), CANVAS_DATA_GRID_ROW_HEIGHT);
@@ -381,7 +372,7 @@ export function drawCanvasDataGrid(options: DrawCanvasDataGridOptions) {
         const displayText = isEditingThisCell ? "" : formatCell(value, actualColIdx);
         const needsTruncation = ctx.measureText(displayText).width > paddedMaxWidth;
         const textMaxWidth = needsTruncation ? Math.max(0, x + colWidth - textLeft) : paddedMaxWidth;
-        const text = isEditingThisCell ? displayText : fitCanvasText(ctx, displayText, textMaxWidth);
+        const text = isEditingThisCell ? displayText : fitCanvasText(ctx, displayText, textMaxWidth - 12);
         ctx.fillText(text, textLeft, textY);
         if (item.isDeleted && text) {
           const textWidth = Math.min(ctx.measureText(text).width, textMaxWidth);

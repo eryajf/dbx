@@ -18,6 +18,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::connection::{AppState, PoolKind};
+use crate::database_capabilities;
 use crate::db;
 use crate::models::connection::DatabaseType;
 #[cfg(feature = "duckdb-bundled")]
@@ -29,6 +30,13 @@ pub const MAX_ROWS: usize = 10000;
 pub const QUERY_CANCELED: &str = "Query canceled";
 #[cfg(feature = "duckdb-bundled")]
 const DUCKDB_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolErrorAction {
+    Keep,
+    Discard,
+    ReconnectAndRetry,
+}
 
 /// Check read-only protection for a connection, blocking write SQL statements.
 /// Only clones the connection name when read-only mode is active, avoiding
@@ -683,6 +691,28 @@ fn should_discard_agent_pool_after_error(err: &str) -> bool {
         || lower.contains("agent rpc task failed")
 }
 
+pub fn pool_error_action(db_type: Option<DatabaseType>, err: &str) -> PoolErrorAction {
+    let lower = err.to_lowercase();
+    if db::sqlserver::is_driver_panic_error(err)
+        || (db_type == Some(DatabaseType::SqlServer) && is_dbx_query_timeout_error(&lower))
+        || (db_type.is_some_and(|db_type| database_capabilities::is_agent_type(&db_type))
+            && should_discard_agent_pool_after_error(err)
+            && !is_connection_error(err))
+    {
+        return PoolErrorAction::Discard;
+    }
+
+    if is_connection_error(err) {
+        PoolErrorAction::ReconnectAndRetry
+    } else {
+        PoolErrorAction::Keep
+    }
+}
+
+pub fn should_discard_pool_after_error(db_type: Option<DatabaseType>, err: &str) -> bool {
+    matches!(pool_error_action(db_type, err), PoolErrorAction::Discard | PoolErrorAction::ReconnectAndRetry)
+}
+
 fn is_os_connection_error(lower: &str) -> bool {
     let os_error_codes = ["10053", "10054", "10057", "10058", "10060", "10061"];
     if let Some(pos) = lower.find("os error ") {
@@ -775,6 +805,12 @@ pub async fn do_execute(
     cancel_token: Option<CancellationToken>,
     options: QueryExecutionOptions,
 ) -> Result<db::QueryResult, String> {
+    if let Some(execution_id) = options.execution_id.as_deref() {
+        state.running_queries.set_pool_key(execution_id, pool_key.to_string());
+    }
+    state.touch_pool_activity(pool_key).await;
+    let _activity_touch = state.pool_activity_touch(pool_key);
+
     let query_timeout = resolve_query_timeout(options.timeout_secs);
     let (_duckdb_attached_names, conn_name_if_readonly) = {
         let configs = state.configs.read().await;
@@ -792,7 +828,7 @@ pub async fn do_execute(
     let connections = state.connections.read().await;
     let pool = connections.get(pool_key).ok_or("Connection not found")?;
 
-    match pool {
+    let result = match pool {
         #[cfg(feature = "duckdb-bundled")]
         PoolKind::DuckDb(con) => {
             let con = con.clone();
@@ -823,10 +859,23 @@ pub async fn do_execute(
             let bare = *mode == crate::connection::MysqlMode::Bare;
             let max_rows = options.max_rows;
             drop(connections);
+            let mut conn = db::mysql::get_conn_with_health_check(&p).await?;
+            let connection_id = conn.id();
+            if let Some(ref execution_id) = options.execution_id {
+                let kill_opts = conn.opts().clone();
+                state.running_queries.register_interrupt(execution_id, move || {
+                    let kill_opts = kill_opts.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = db::mysql::kill_query_with_opts(kill_opts, connection_id).await {
+                            log::warn!("Failed to cancel MySQL query {connection_id}: {error}");
+                        }
+                    });
+                });
+            }
             wait_for_query_opt(
                 cancel_token,
                 query_timeout,
-                db::mysql::execute_query_with_max_rows(&p, sql, bare, max_rows, mysql_dialect),
+                db::mysql::execute_query_on_conn_with_max_rows(&mut conn, sql, bare, max_rows, mysql_dialect),
             )
             .await
         }
@@ -834,21 +883,21 @@ pub async fn do_execute(
             let p = p.clone();
             let schema = schema.map(|s| s.to_string());
             let max_rows = options.max_rows;
+            let query_timeout = query_timeout;
             drop(connections);
             if let Some(schema) = schema {
-                wait_for_query_opt(
+                db::postgres::execute_query_with_schema_and_max_rows_and_cancel(
+                    &p,
+                    &schema,
+                    sql,
+                    max_rows,
                     cancel_token,
                     query_timeout,
-                    db::postgres::execute_query_with_schema_and_max_rows(&p, &schema, sql, max_rows),
                 )
                 .await
             } else {
-                wait_for_query_opt(
-                    cancel_token,
-                    query_timeout,
-                    db::postgres::execute_query_with_max_rows(&p, sql, max_rows),
-                )
-                .await
+                db::postgres::execute_query_with_max_rows_and_cancel(&p, sql, max_rows, cancel_token, query_timeout)
+                    .await
             }
         }
         PoolKind::Sqlite(p) => {
@@ -885,13 +934,17 @@ pub async fn do_execute(
             let database = pool_key.split(':').nth(1).unwrap_or("default").to_string();
             let max_rows = options.max_rows;
             drop(connections);
-            wait_for_query_opt(
+            let result = wait_for_query_opt(
                 cancel_token,
                 query_timeout,
                 db::clickhouse_driver::execute_query_with_max_rows(&client, &database, sql, max_rows),
             )
             .await
-            .map(|result| truncate_result_with_max_rows(result, max_rows))
+            .map(|result| truncate_result_with_max_rows(result, max_rows));
+            if matches!(result.as_ref(), Err(err) if should_discard_pool_after_error(pool_db_type, err)) {
+                state.remove_pool_by_key(pool_key).await;
+            }
+            result
         }
         PoolKind::SqlServer(client) => {
             let client = client.clone();
@@ -905,22 +958,49 @@ pub async fn do_execute(
                 },
                 None => client.lock().await,
             };
-            wait_for_query_opt(
+            let result = wait_for_query_opt(
                 cancel_token,
                 query_timeout,
                 db::sqlserver::execute_query_with_max_rows(&mut client, sql, max_rows),
             )
             .await
-            .map(|result| truncate_result_with_max_rows(result, max_rows))
+            .map(|result| truncate_result_with_max_rows(result, max_rows));
+            drop(client);
+            if matches!(result.as_ref(), Err(err) if should_discard_pool_after_error(pool_db_type, err)) {
+                state.remove_pool_by_key(pool_key).await;
+            }
+            result
         }
         PoolKind::Elasticsearch(client) => {
             let client = client.clone();
             let sql = sql.to_string();
             let max_rows = options.max_rows;
             drop(connections);
-            wait_for_query_opt(cancel_token, query_timeout, db::elasticsearch_driver::execute_rest_query(&client, &sql))
-                .await
-                .map(|result| truncate_result_with_max_rows(result, max_rows))
+            let result = wait_for_query_opt(
+                cancel_token,
+                query_timeout,
+                db::elasticsearch_driver::execute_rest_query(&client, &sql),
+            )
+            .await
+            .map(|result| truncate_result_with_max_rows(result, max_rows));
+            if matches!(result.as_ref(), Err(err) if should_discard_pool_after_error(pool_db_type, err)) {
+                state.remove_pool_by_key(pool_key).await;
+            }
+            result
+        }
+        PoolKind::VectorDb(client) => {
+            let client = client.clone();
+            let sql = sql.to_string();
+            let max_rows = options.max_rows;
+            drop(connections);
+            let result =
+                wait_for_query_opt(cancel_token, query_timeout, db::vector_driver::execute_rest_query(&client, &sql))
+                    .await
+                    .map(|result| truncate_result_with_max_rows(result, max_rows));
+            if matches!(result.as_ref(), Err(err) if should_discard_pool_after_error(pool_db_type, err)) {
+                state.remove_pool_by_key(pool_key).await;
+            }
+            result
         }
         PoolKind::Redis(_) => Err("Use Redis-specific commands".to_string()),
         PoolKind::MongoDb(_) => Err("Use MongoDB-specific commands".to_string()),
@@ -931,9 +1011,17 @@ pub async fn do_execute(
             let database = pool_key.split(':').nth(1).unwrap_or("default").to_string();
             let max_rows = options.max_rows;
             drop(connections);
-            wait_for_query_opt(cancel_token, query_timeout, db::influxdb_driver::execute_query(&client, &database, sql))
-                .await
-                .map(|result| truncate_result_with_max_rows(result, max_rows))
+            let result = wait_for_query_opt(
+                cancel_token,
+                query_timeout,
+                db::influxdb_driver::execute_query(&client, &database, sql),
+            )
+            .await
+            .map(|result| truncate_result_with_max_rows(result, max_rows));
+            if matches!(result.as_ref(), Err(err) if should_discard_pool_after_error(pool_db_type, err)) {
+                state.remove_pool_by_key(pool_key).await;
+            }
+            result
         }
         PoolKind::Agent(client) => {
             let client = client.clone();
@@ -943,22 +1031,40 @@ pub async fn do_execute(
             let max_rows = options.max_rows;
             let rpc_timeout = query_timeout;
             drop(connections);
-            let result = wait_for_query_opt(cancel_token, query_timeout, async move {
-                let mut client = client.lock().await;
+            if is_canceled(&cancel_token) {
+                return Err(canceled_error());
+            }
+            let cancel_for_agent = cancel_token.clone();
+            let result = async move {
+                let mut client = match cancel_for_agent.as_ref() {
+                    Some(token) => {
+                        tokio::select! {
+                            biased;
+                            _ = token.cancelled() => return Err(canceled_error()),
+                            guard = client.lock() => guard,
+                        }
+                    }
+                    None => client.lock().await,
+                };
                 if let Some(session_id) = options.result_session_id.as_deref() {
                     let params = agent_fetch_query_page_params(session_id, options.page_size.unwrap_or(MAX_ROWS));
-                    client.fetch_query_page_with_timeout(params, rpc_timeout).await
+                    client.fetch_query_page_with_timeout_and_cancel(params, rpc_timeout, cancel_for_agent.clone()).await
                 } else if options.page_size.is_some() {
                     let params = agent_execute_query_page_params(&sql, database.as_deref(), schema.as_deref(), options);
-                    client.execute_query_page_with_timeout(params, rpc_timeout).await
+                    client
+                        .execute_query_page_with_timeout_and_cancel(params, rpc_timeout, cancel_for_agent.clone())
+                        .await
                 } else {
                     let params = agent_execute_query_params(&sql, database.as_deref(), schema.as_deref(), options);
-                    client.execute_query_with_timeout(params, rpc_timeout).await
+                    client.execute_query_with_timeout_and_cancel(params, rpc_timeout, cancel_for_agent.clone()).await
                 }
-            })
+            }
             .await
-            .map(|result| normalize_query_result_for_js(truncate_result_with_max_rows(result, max_rows)));
-            if matches!(result.as_ref(), Err(err) if should_discard_agent_pool_after_error(err)) {
+            .map(|result| truncate_result_with_max_rows(result, max_rows));
+            if matches!(result.as_ref(), Err(err) if err == QUERY_CANCELED) {
+                state.remove_pool_by_key(pool_key).await;
+            }
+            if matches!(result.as_ref(), Err(err) if should_discard_pool_after_error(pool_db_type, err)) {
                 state.remove_pool_by_key(pool_key).await;
             }
             result
@@ -999,14 +1105,28 @@ pub async fn do_execute(
             let plugin_timeout = query_timeout;
             drop(connections);
             wait_for_query_opt(cancel_token, query_timeout, async move {
-                let params =
-                    external_driver_query_params(config.as_ref(), &sql, &database, schema.as_deref(), &options);
-                session.invoke_with_timeout::<db::QueryResult>("executeQuery", params, plugin_timeout).await
+                if let Some(session_id) = options.result_session_id.as_deref() {
+                    let params = external_driver_fetch_query_page_params(
+                        config.as_ref(),
+                        session_id,
+                        options.page_size.unwrap_or(MAX_ROWS),
+                    );
+                    session.invoke_with_timeout::<db::QueryResult>("fetchQueryPage", params, plugin_timeout).await
+                } else if options.page_size.is_some() {
+                    let params =
+                        external_driver_query_params(config.as_ref(), &sql, &database, schema.as_deref(), &options);
+                    session.invoke_with_timeout::<db::QueryResult>("executeQueryPage", params, plugin_timeout).await
+                } else {
+                    let params =
+                        external_driver_query_params(config.as_ref(), &sql, &database, schema.as_deref(), &options);
+                    session.invoke_with_timeout::<db::QueryResult>("executeQuery", params, plugin_timeout).await
+                }
             })
             .await
-            .map(|result| normalize_query_result_for_js(truncate_result_with_max_rows(result, max_rows)))
+            .map(|result| truncate_result_with_max_rows(result, max_rows))
         }
-    }
+    };
+    result.map(normalize_query_result_for_js)
 }
 
 fn external_driver_query_params(
@@ -1029,7 +1149,22 @@ fn external_driver_query_params(
     if let Some(timeout_secs) = options.timeout_secs {
         params["timeoutSecs"] = serde_json::json!(timeout_secs);
     }
+    if let Some(page_size) = options.page_size {
+        params["pageSize"] = serde_json::json!(page_size);
+    }
     params
+}
+
+fn external_driver_fetch_query_page_params(
+    config: &crate::models::connection::ConnectionConfig,
+    session_id: &str,
+    page_size: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "connection": config,
+        "sessionId": session_id,
+        "pageSize": page_size,
+    })
 }
 
 pub async fn execute_sql_statement(
@@ -1104,7 +1239,9 @@ pub async fn execute_sql_statement_with_options(
             .await;
 
     match &result {
-        Err(e) if is_connection_error(e) && !is_canceled(&cancel_token) => {
+        Err(e)
+            if pool_error_action(db_type, e) == PoolErrorAction::ReconnectAndRetry && !is_canceled(&cancel_token) =>
+        {
             let db_opt = if database.is_empty() { None } else { Some(database) };
             let new_key =
                 state.reconnect_pool_for_session(connection_id, db_opt, options.client_session_id.as_deref()).await?;
@@ -1128,6 +1265,11 @@ async fn execute_postgres_drop_database(
     let pool_key = state
         .get_or_create_pool_for_session(connection_id, Some(admin_database), options.client_session_id.as_deref())
         .await?;
+    if let Some(execution_id) = options.execution_id.as_deref() {
+        state.running_queries.set_pool_key(execution_id, pool_key.clone());
+    }
+    state.touch_pool_activity(&pool_key).await;
+    let _activity_touch = state.pool_activity_touch(pool_key.as_str());
 
     if is_canceled(&cancel_token) {
         return Err(canceled_error());
@@ -1206,6 +1348,16 @@ pub async fn close_query_session(
             let mut client = client.lock().await;
             client.close_query_session(session_id).await
         }
+        PoolKind::ExternalDriver { config, session, .. } => {
+            let config = config.clone();
+            let session = session.clone();
+            drop(connections);
+            let params = external_driver_fetch_query_page_params(config.as_ref(), session_id, 1);
+            session
+                .invoke::<serde_json::Value>("closeQuerySession", params)
+                .await
+                .map(|value| value.get("ok").and_then(|ok| ok.as_bool()).unwrap_or(false))
+        }
         _ => Ok(false),
     }
 }
@@ -1251,6 +1403,11 @@ pub async fn execute_multi_core_with_options(
             .get_or_create_pool_for_session(connection_id, Some(database), options.client_session_id.as_deref())
             .await?
     };
+    if let Some(execution_id) = options.execution_id.as_deref() {
+        state.running_queries.set_pool_key(execution_id, pool_key.clone());
+    }
+    state.touch_pool_activity(&pool_key).await;
+    let _activity_touch = state.pool_activity_touch(pool_key.as_str());
 
     let is_sqlserver = {
         let connections = state.connections.read().await;
@@ -1453,9 +1610,13 @@ async fn execute_multi_sqlserver(
             None => client.lock().await,
         };
 
-        match db::sqlserver::execute_batch_with_max_rows(&mut client, batch, max_rows).await {
+        let result = db::sqlserver::execute_batch_with_max_rows(&mut client, batch, max_rows).await;
+        drop(client);
+
+        match result {
             Ok(results) => all_results.extend(results),
             Err(e) => {
+                let action = pool_error_action(Some(DatabaseType::SqlServer), &e);
                 all_results.push(db::QueryResult {
                     columns: vec!["Error".to_string()],
                     column_types: Vec::new(),
@@ -1467,6 +1628,10 @@ async fn execute_multi_sqlserver(
                     session_id: None,
                     has_more: false,
                 });
+                if matches!(action, PoolErrorAction::Discard | PoolErrorAction::ReconnectAndRetry) {
+                    state.remove_pool_by_key(pool_key).await;
+                    break;
+                }
             }
         }
     }
@@ -1523,9 +1688,15 @@ pub async fn execute_statements(
                 total_affected += result.affected_rows;
             }
             Err(e) => {
-                if is_connection_error(&e) {
-                    let db_opt = if database.is_empty() { None } else { Some(database) };
-                    let _ = state.reconnect_pool(connection_id, db_opt).await;
+                match pool_error_action(connection_database_type(state, connection_id).await, &e) {
+                    PoolErrorAction::ReconnectAndRetry => {
+                        let db_opt = if database.is_empty() { None } else { Some(database) };
+                        let _ = state.reconnect_pool(connection_id, db_opt).await;
+                    }
+                    PoolErrorAction::Discard => {
+                        let _ = state.remove_pool_by_key(&pool_key).await;
+                    }
+                    PoolErrorAction::Keep => {}
                 }
                 return Err(format!(
                     "Statement {} failed: {}. Previous {} statement(s) may have been committed.",
@@ -1593,6 +1764,7 @@ pub async fn execute_statements_in_transaction(
             | PoolKind::Redis(_)
             | PoolKind::MongoDb(_)
             | PoolKind::Elasticsearch(_)
+            | PoolKind::VectorDb(_)
             | PoolKind::InfluxDb(_)
             | PoolKind::ExternalTabular(_)
             | PoolKind::ExternalDriver { .. } => TxPath::None,
@@ -1601,6 +1773,7 @@ pub async fn execute_statements_in_transaction(
             | PoolKind::Redis(_)
             | PoolKind::MongoDb(_)
             | PoolKind::Elasticsearch(_)
+            | PoolKind::VectorDb(_)
             | PoolKind::InfluxDb(_)
             | PoolKind::ExternalTabular(_)
             | PoolKind::ExternalDriver { .. } => TxPath::None,
@@ -2014,6 +2187,31 @@ mod tests {
         assert!(!is_connection_error("os error 13"));
     }
 
+    #[test]
+    fn pool_error_action_discards_sqlserver_driver_panic_without_retry() {
+        let err = format!("{} the current client will be rebuilt.", db::sqlserver::SQLSERVER_DRIVER_PANIC_ERROR_PREFIX);
+
+        assert_eq!(pool_error_action(Some(DatabaseType::SqlServer), &err), PoolErrorAction::Discard);
+        assert!(should_discard_pool_after_error(Some(DatabaseType::SqlServer), &err));
+        assert!(!is_connection_error(&err));
+    }
+
+    #[test]
+    fn pool_error_action_discards_sqlserver_timeout_without_retry() {
+        let err = "Query timed out after 30 seconds";
+
+        assert_eq!(pool_error_action(Some(DatabaseType::SqlServer), err), PoolErrorAction::Discard);
+        assert_eq!(pool_error_action(Some(DatabaseType::Mysql), err), PoolErrorAction::Keep);
+    }
+
+    #[test]
+    fn pool_error_action_reconnects_connection_errors() {
+        let err = "connection reset by peer";
+
+        assert_eq!(pool_error_action(Some(DatabaseType::SqlServer), err), PoolErrorAction::ReconnectAndRetry);
+        assert_eq!(pool_error_action(Some(DatabaseType::Postgres), err), PoolErrorAction::ReconnectAndRetry);
+    }
+
     #[cfg(feature = "duckdb-bundled")]
     #[test]
     fn duckdb_execute_preserves_double_precision() {
@@ -2398,6 +2596,10 @@ mod tests {
         assert!(should_discard_agent_pool_after_error("Query timed out after 30 seconds"));
         assert!(should_discard_agent_pool_after_error("Agent RPC call timed out (30s)"));
         assert!(!is_connection_error("Agent RPC call timed out (30s)"));
+        assert_eq!(
+            pool_error_action(Some(DatabaseType::Oracle), "Agent RPC call timed out (30s)"),
+            PoolErrorAction::Discard
+        );
     }
 
     #[test]
@@ -2406,6 +2608,10 @@ mod tests {
         assert!(should_discard_agent_pool_after_error("Agent stdout not available"));
         assert!(is_connection_error("Agent stdin not available"));
         assert!(is_connection_error("Agent stdout not available"));
+        assert_eq!(
+            pool_error_action(Some(DatabaseType::Oracle), "Agent stdin not available"),
+            PoolErrorAction::ReconnectAndRetry
+        );
     }
 
     #[test]

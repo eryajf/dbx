@@ -11,6 +11,8 @@ export type DatabaseType =
   | "mongodb"
   | "oracle"
   | "elasticsearch"
+  | "qdrant"
+  | "milvus"
   | "doris"
   | "starrocks"
   | "manticoresearch"
@@ -38,6 +40,7 @@ export type DatabaseType =
   | "h2"
   | "snowflake"
   | "trino"
+  | "prestosql"
   | "hive"
   | "db2"
   | "informix"
@@ -208,6 +211,13 @@ export interface DatabaseInfo {
   name: string;
 }
 
+export interface LinkedServerInfo {
+  name: string;
+  product?: string | null;
+  provider?: string | null;
+  data_source?: string | null;
+}
+
 export interface TableInfo {
   name: string;
   table_type: string;
@@ -227,6 +237,13 @@ export interface ObjectInfo {
   updated_at?: string | null;
   parent_schema?: string | null;
   parent_name?: string | null;
+}
+
+export interface ObjectStatistics {
+  name: string;
+  schema?: string | null;
+  estimated_rows?: number | null;
+  total_bytes?: number | null;
 }
 
 export type ObjectSourceKind = "VIEW" | "MATERIALIZED_VIEW" | "PROCEDURE" | "FUNCTION" | "SEQUENCE" | "PACKAGE" | "PACKAGE_BODY";
@@ -392,6 +409,10 @@ export type TreeNodeType =
   | "connection"
   | "connection-group"
   | "database"
+  | "linked-server-root"
+  | "linked-server"
+  | "linked-server-catalog"
+  | "linked-server-schema"
   | "schema"
   | "table"
   | "view"
@@ -429,6 +450,7 @@ export type TreeNodeType =
   | "etcd-root"
   | "mongo-db"
   | "mongo-collection"
+  | "vector-collection"
   | "elasticsearch-index";
 
 export interface ConnectionGroup {
@@ -454,15 +476,21 @@ export interface TreeNode {
   pinned?: boolean;
   connectionId?: string;
   database?: string;
+  linkedServer?: string;
+  linkedCatalog?: string;
+  linkedSchema?: string;
   mqTenant?: string;
   nacosNamespace?: string;
   nacosNamespaceName?: string;
   schema?: string;
   tableName?: string;
+  tableType?: string;
   comment?: string | null;
   objectCount?: number;
   loadedKeyCount?: number;
   totalKeyCount?: number;
+  partitionParentSchema?: string;
+  partitionParentName?: string;
   hiddenChildren?: TreeNode[];
   savedSqlId?: string;
   savedSqlFolderId?: string;
@@ -509,6 +537,7 @@ export interface QueryTab {
   activeResultIndex?: number;
   resultRuns?: QueryResultRun[];
   activeResultRunId?: string;
+  resultAutoSave?: boolean;
   explainPlan?: import("@/lib/explainPlan").ParsedExplainPlan;
   explainError?: string;
   explainSql?: string;
@@ -527,7 +556,7 @@ export interface QueryTab {
   executionId?: string;
   isExplaining?: boolean;
   explainExecutionId?: string;
-  mode: "data" | "query" | "redis" | "mongo" | "etcd" | "mq" | "nacos" | "objects" | "structure" | "users";
+  mode: "data" | "query" | "redis" | "mongo" | "vector" | "etcd" | "mq" | "nacos" | "objects" | "structure" | "users";
   mqTenant?: string;
   nacosNamespace?: string;
   nacosNamespaceName?: string;
@@ -548,6 +577,7 @@ export interface QueryTab {
     columns: ColumnInfo[];
     primaryKeys: string[];
   };
+  tableMetaUpdatedAt?: number;
   tableInfoTab?: TableInfoTab;
   queryAnalysis?: {
     schema?: string;

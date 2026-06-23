@@ -43,6 +43,7 @@ export interface SavedOpenTab {
   resultCacheKey?: string;
   resultRuns?: SavedQueryResultRun[];
   activeResultRunId?: string;
+  resultAutoSave?: boolean;
 }
 
 export interface RestoredOpenTabs {
@@ -96,6 +97,7 @@ export function serializeOpenTabs(tabs: QueryTab[]): SavedOpenTab[] {
         }
       : {}),
     ...(tab.mode === "query" && tab.activeResultRunId !== undefined ? { activeResultRunId: tab.activeResultRunId } : {}),
+    ...(tab.mode === "query" && tab.resultAutoSave ? { resultAutoSave: true } : {}),
   }));
 }
 
@@ -139,6 +141,7 @@ export function restoreOpenTabsState(rawTabs: string | null, rawActiveTabId: str
         resultCacheState: mode !== "data" && tab.resultCacheKey ? "disk" : undefined,
         resultRuns,
         activeResultRunId: resultRuns?.some((run) => run.id === tab.activeResultRunId) ? tab.activeResultRunId : resultRuns?.[0]?.id,
+        resultAutoSave: mode === "query" && tab.resultAutoSave ? true : undefined,
       };
     });
     const activeTabId = rawActiveTabId || null;
