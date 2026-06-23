@@ -327,6 +327,8 @@ async fn main() {
         // Nacos
         .route("/nacos/test-connection", post(routes::nacos::test_connection))
         .route("/nacos/namespaces/list", post(routes::nacos::list_namespaces))
+        .route("/nacos/namespaces/create", post(routes::nacos::create_namespace))
+        .route("/nacos/namespaces/update", post(routes::nacos::update_namespace))
         .route("/nacos/configs/list", post(routes::nacos::list_configs))
         .route("/nacos/configs/get", post(routes::nacos::get_config))
         .route("/nacos/configs/publish", post(routes::nacos::publish_config))

@@ -51,6 +51,25 @@ pub struct NacosNamespaceInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct NacosNamespaceCreate {
+    #[serde(default)]
+    pub namespace_id: Option<String>,
+    pub namespace_name: String,
+    #[serde(default)]
+    pub namespace_desc: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NacosNamespaceUpdate {
+    pub namespace_id: String,
+    pub namespace_name: String,
+    #[serde(default)]
+    pub namespace_desc: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct NacosConfigQuery {
     #[serde(default)]
     pub namespace: Option<String>,

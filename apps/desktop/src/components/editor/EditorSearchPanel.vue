@@ -8,6 +8,7 @@ import { ChevronUp, ChevronDown, ChevronRight, X } from "@lucide/vue";
 
 const props = defineProps<{
   view: EditorView | null;
+  tone?: "app" | "editor";
 }>();
 
 const { t } = useI18n();
@@ -214,7 +215,7 @@ defineExpose({ openSearch, openReplace, closeSearch });
 
 <template>
   <Transition enter-active-class="transition-[transform,opacity] duration-150" leave-active-class="transition-[transform,opacity] duration-100" enter-from-class="opacity-0 -translate-y-1" leave-to-class="opacity-0 -translate-y-1">
-    <div v-if="searchVisible" class="editor-search-panel absolute right-4 top-3 z-[9999] isolate flex flex-col gap-1 rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-xl ring-1 ring-border/60">
+    <div v-if="searchVisible" class="editor-search-panel absolute right-4 top-3 z-[9999] isolate flex flex-col gap-1 rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-xl ring-1 ring-border/60" :class="{ 'editor-search-panel--editor': tone === 'editor' }">
       <div class="flex items-center gap-1">
         <button class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" :title="showReplace ? t('editor.search.collapseReplace') : t('editor.search.expandReplace')" @click="showReplace = !showReplace">
           <ChevronRight class="h-4 w-4 transition-transform" :class="showReplace && 'rotate-90'" />
@@ -289,6 +290,143 @@ defineExpose({ openSearch, openReplace, closeSearch });
 <style scoped>
 .editor-search-panel {
   max-width: min(calc(100vw - 2rem), 620px);
+}
+
+.editor-search-panel--editor {
+  background: #f6f7f9;
+  border-color: #d8dce3;
+  border-radius: 6px;
+  box-shadow:
+    0 8px 22px rgb(15 23 42 / 0.14),
+    0 1px 0 rgb(255 255 255 / 0.78) inset;
+  color: #20242a;
+  gap: 3px;
+  max-width: min(calc(100vw - 2rem), 500px);
+  padding: 4px 6px;
+  right: 0.75rem;
+  top: 0.75rem;
+}
+
+.editor-search-panel--editor :deep(.h-8) {
+  height: 27px;
+}
+
+.editor-search-panel--editor :deep(.h-7) {
+  height: 27px;
+}
+
+.editor-search-panel--editor :deep(.w-7) {
+  width: 27px;
+}
+
+.editor-search-panel--editor :deep(.w-64) {
+  width: 230px;
+}
+
+.editor-search-panel--editor :deep(button) {
+  font-size: 12px;
+}
+
+.editor-search-panel--editor :deep(button.px-2) {
+  padding-left: 7px;
+  padding-right: 7px;
+}
+
+.editor-search-panel--editor :deep(.min-w-\[3\.4rem\]) {
+  min-width: 3.25rem;
+}
+
+.editor-search-panel--editor :deep(.border-input) {
+  background: #ffffff;
+  border-color: #c7ccd5;
+  border-radius: 5px;
+  box-shadow: 0 1px 0 rgb(15 23 42 / 0.03) inset;
+}
+
+.editor-search-panel--editor :deep(.focus-within\:border-ring:focus-within) {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+.editor-search-panel--editor :deep(input) {
+  color: #20242a;
+  font-size: 12px;
+}
+
+.editor-search-panel--editor :deep(input::placeholder) {
+  color: #7a828e;
+}
+
+.editor-search-panel--editor :deep(.text-muted-foreground) {
+  color: #6e7681;
+}
+
+.editor-search-panel--editor :deep(.text-destructive) {
+  color: #c2410c;
+}
+
+.editor-search-panel--editor :deep(.hover\:bg-accent:hover),
+.editor-search-panel--editor :deep(.bg-accent) {
+  background: #e6e9ef;
+}
+
+.editor-search-panel--editor :deep(.hover\:text-foreground:hover),
+.editor-search-panel--editor :deep(.text-foreground) {
+  color: #1f2329;
+}
+
+.editor-search-panel--editor :deep(button.border-border) {
+  border-color: #d0d5dd;
+}
+
+:global(.dark) .editor-search-panel--editor {
+  background: #20252d;
+  border-color: #2c333d;
+  box-shadow:
+    0 8px 24px rgb(0 0 0 / 0.28),
+    0 1px 0 rgb(255 255 255 / 0.04) inset;
+  color: #d4d7dc;
+}
+
+:global(.dark) .editor-search-panel--editor :deep(.border-input) {
+  background: #191d25;
+  border-color: #2f3742;
+  box-shadow: none;
+}
+
+:global(.dark) .editor-search-panel--editor :deep(.focus-within\:border-ring:focus-within) {
+  border-color: #4d8dff;
+  box-shadow: 0 0 0 1px #4d8dff;
+}
+
+:global(.dark) .editor-search-panel--editor :deep(input) {
+  color: #d7dae0;
+}
+
+:global(.dark) .editor-search-panel--editor :deep(input::placeholder) {
+  color: #858c97;
+}
+
+:global(.dark) .editor-search-panel--editor :deep(.text-muted-foreground) {
+  color: #9aa2ad;
+}
+
+:global(.dark) .editor-search-panel--editor :deep(.text-destructive) {
+  color: #f59e7a;
+}
+
+:global(.dark) .editor-search-panel--editor :deep(.hover\:bg-accent:hover),
+:global(.dark) .editor-search-panel--editor :deep(.bg-accent) {
+  background: #303844;
+}
+
+:global(.dark) .editor-search-panel--editor :deep(.hover\:text-foreground:hover),
+:global(.dark) .editor-search-panel--editor :deep(.text-foreground) {
+  color: #f2f4f8;
+}
+
+:global(.dark) .editor-search-panel--editor :deep(button.border-border) {
+  border-color: #38414d;
 }
 
 @media (max-width: 720px) {

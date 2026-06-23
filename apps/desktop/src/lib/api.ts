@@ -221,6 +221,8 @@ export const readExternalSqlFile = forward("readExternalSqlFile");
 // Nacos
 export const nacosTestConnection = forward("nacosTestConnection");
 export const nacosListNamespaces = forward("nacosListNamespaces");
+export const nacosCreateNamespace = forward("nacosCreateNamespace");
+export const nacosUpdateNamespace = forward("nacosUpdateNamespace");
 export const nacosListConfigs = forward("nacosListConfigs");
 export const nacosGetConfig = forward("nacosGetConfig");
 export const nacosPublishConfig = forward("nacosPublishConfig");

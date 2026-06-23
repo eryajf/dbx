@@ -13,6 +13,26 @@ pub async fn nacos_list_namespaces_core(state: &AppState, conn_id: &str) -> Resu
     admin.list_namespaces().await
 }
 
+pub async fn nacos_create_namespace_core(
+    state: &AppState,
+    conn_id: &str,
+    req: NacosNamespaceCreate,
+) -> Result<(), String> {
+    ensure_connection_writable(state, conn_id, "Create Nacos namespace").await?;
+    let admin = get_admin(state, conn_id).await?;
+    admin.create_namespace(req).await
+}
+
+pub async fn nacos_update_namespace_core(
+    state: &AppState,
+    conn_id: &str,
+    req: NacosNamespaceUpdate,
+) -> Result<(), String> {
+    ensure_connection_writable(state, conn_id, "Update Nacos namespace").await?;
+    let admin = get_admin(state, conn_id).await?;
+    admin.update_namespace(req).await
+}
+
 pub async fn nacos_list_configs_core(
     state: &AppState,
     conn_id: &str,

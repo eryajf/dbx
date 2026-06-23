@@ -14,6 +14,20 @@ pub(crate) struct ConnReq {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct NamespaceCreateReq {
+    connection_id: String,
+    req: dbx_core::nacos::NacosNamespaceCreate,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NamespaceUpdateReq {
+    connection_id: String,
+    req: dbx_core::nacos::NacosNamespaceUpdate,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ConfigListReq {
     connection_id: String,
     query: dbx_core::nacos::NacosConfigQuery,
@@ -98,6 +112,26 @@ pub async fn list_namespaces(
     let result =
         dbx_core::nacos::service::nacos_list_namespaces_core(&state.app, &req.connection_id).await.map_err(AppError)?;
     Ok(Json(result))
+}
+
+pub async fn create_namespace(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<NamespaceCreateReq>,
+) -> Result<Json<()>, AppError> {
+    dbx_core::nacos::service::nacos_create_namespace_core(&state.app, &req.connection_id, req.req)
+        .await
+        .map_err(AppError)?;
+    Ok(Json(()))
+}
+
+pub async fn update_namespace(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<NamespaceUpdateReq>,
+) -> Result<Json<()>, AppError> {
+    dbx_core::nacos::service::nacos_update_namespace_core(&state.app, &req.connection_id, req.req)
+        .await
+        .map_err(AppError)?;
+    Ok(Json(()))
 }
 
 pub async fn list_configs(

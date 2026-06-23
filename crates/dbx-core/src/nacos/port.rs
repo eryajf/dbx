@@ -6,6 +6,8 @@ use crate::nacos::types::*;
 pub trait NacosAdmin: Send + Sync {
     async fn test_connection(&self) -> Result<NacosConnectionInfo, String>;
     async fn list_namespaces(&self) -> Result<Vec<NacosNamespaceInfo>, String>;
+    async fn create_namespace(&self, req: NacosNamespaceCreate) -> Result<(), String>;
+    async fn update_namespace(&self, req: NacosNamespaceUpdate) -> Result<(), String>;
     async fn list_configs(&self, query: NacosConfigQuery) -> Result<NacosConfigList, String>;
     async fn get_config(&self, key: NacosConfigKey) -> Result<NacosConfigItem, String>;
     async fn publish_config(&self, req: NacosConfigUpsert) -> Result<(), String>;

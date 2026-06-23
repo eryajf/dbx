@@ -15,6 +15,8 @@ const props = withDefaults(
     title?: string;
     beforeLabel?: string;
     afterLabel?: string;
+    confirmLabel?: string;
+    confirmVariant?: "default" | "destructive";
     showConfirm?: boolean;
     loading?: boolean;
   }>(),
@@ -22,6 +24,8 @@ const props = withDefaults(
     title: "",
     beforeLabel: "",
     afterLabel: "",
+    confirmLabel: "",
+    confirmVariant: "default",
     showConfirm: true,
     loading: false,
   },
@@ -175,9 +179,9 @@ function onConfirm() {
       </div>
 
       <DialogFooter class="shrink-0 gap-3 border-t bg-muted/20 px-5 pb-6 pt-4">
-        <Button v-if="showConfirm" class="min-w-24 gap-1.5 px-5" :disabled="loading" @click="onConfirm">
+        <Button v-if="showConfirm" :variant="confirmVariant" class="min-w-24 gap-1.5 px-5" :disabled="loading" @click="onConfirm">
           <Loader2 v-if="loading" class="h-3.5 w-3.5 animate-spin" />
-          {{ t("nacos.publish") }}
+          {{ confirmLabel || t("nacos.publish") }}
         </Button>
         <Button variant="outline" class="min-w-24 px-5" :disabled="loading" @click="open = false">{{ t("dangerDialog.cancel") }}</Button>
       </DialogFooter>

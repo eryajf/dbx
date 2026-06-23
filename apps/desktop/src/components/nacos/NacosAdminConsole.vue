@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
-import type { Extension } from "@codemirror/state";
+import { Compartment, type Extension } from "@codemirror/state";
+import { StreamLanguage } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
 import { CheckCircle2, Clipboard, Download, FileClock, FileText, Loader2, Network, Plus, RefreshCw, Save, Send, Server, Trash2 } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,9 @@ import * as api from "@/lib/api";
 import { buildNacosConfigCopy, buildNacosConfigDeleteConfirm, buildNacosConfigExport, buildNacosConfigHistoryRollbackConfirm, buildNacosInstanceConfirm, createNacosSaveAsCopy } from "@/lib/nacosAdmin";
 import { copyToClipboard } from "@/lib/clipboard";
 import { safeLocalStorageGet, safeLocalStorageSet } from "@/lib/safeStorage";
+import { editorFontTheme, loadEditorTheme } from "@/lib/editorThemes";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { useTheme } from "@/composables/useTheme";
 import type { NacosConfigHistoryItem, NacosConfigItem, NacosConfigKey, NacosConnectionInfo, NacosInstanceInfo, NacosServiceInfo } from "@/types/nacos";
 import { Splitpanes, Pane } from "splitpanes";
 import "splitpanes/dist/splitpanes.css";
@@ -32,6 +36,8 @@ type AdminTab = "configs" | "services";
 
 const { toast } = useToast();
 const { t } = useI18n();
+const settingsStore = useSettingsStore();
+const { isDark } = useTheme();
 const activeTab = ref<AdminTab>("configs");
 const connectionInfo = ref<NacosConnectionInfo | null>(null);
 const connectionError = ref("");
@@ -70,12 +76,16 @@ const historyCompareOpen = ref(false);
 const historyCompareCurrent = ref("");
 const historyCompareContent = ref("");
 const historyCompareLoading = ref(false);
+const historyCompareItem = ref<NacosConfigHistoryItem | null>(null);
 const pendingHistoryRollback = ref<NacosConfigHistoryItem | null>(null);
 const rollingBackHistory = ref(false);
 const configFormatOptions = ["text", "json", "xml", "yaml", "html", "properties", "toml"];
 const configEditorHost = ref<HTMLDivElement | null>(null);
 const configEditorView = shallowRef<EditorView | null>(null);
 const configSearchPanelRef = ref<InstanceType<typeof EditorSearchPanel>>();
+const configEditorTheme = new Compartment();
+const configEditorFontTheme = new Compartment();
+const configEditorLanguage = new Compartment();
 
 const servicesLoading = ref(false);
 const servicesError = ref("");
@@ -121,12 +131,46 @@ const selectedConfigKey = computed<NacosConfigKey | null>(() => {
   };
 });
 
+function editorThemeAppearance() {
+  return isDark.value ? "dark" : "light";
+}
+
+function currentCustomThemeColors() {
+  const settings = settingsStore.editorSettings;
+  if (settings.theme !== "custom") return settings.customThemeColors;
+  const activeTheme = settings.customThemes?.find((theme) => theme.id === settings.activeCustomThemeId) || settings.customThemes?.[0];
+  return activeTheme?.colors ?? settings.customThemeColors;
+}
+
 async function configLanguageExtension(format: string): Promise<Extension[]> {
-  if (format === "json") {
-    const { json } = await import("@codemirror/lang-json");
-    return [json()];
+  switch (format) {
+    case "json": {
+      const { json } = await import("@codemirror/lang-json");
+      return [json()];
+    }
+    case "yaml": {
+      const { yaml } = await import("@codemirror/lang-yaml");
+      return [yaml()];
+    }
+    case "xml": {
+      const { xml } = await import("@codemirror/lang-xml");
+      return [xml()];
+    }
+    case "html": {
+      const { html } = await import("@codemirror/lang-html");
+      return [html({ matchClosingTags: false })];
+    }
+    case "properties": {
+      const { properties } = await import("@codemirror/legacy-modes/mode/properties");
+      return [StreamLanguage.define(properties)];
+    }
+    case "toml": {
+      const { toml } = await import("@codemirror/legacy-modes/mode/toml");
+      return [StreamLanguage.define(toml)];
+    }
+    default:
+      return [];
   }
-  return [];
 }
 
 async function mountConfigEditor() {
@@ -140,6 +184,8 @@ async function mountConfigEditor() {
     import("@codemirror/search"),
     configLanguageExtension(configType.value),
   ]);
+  const editorSettings = settingsStore.editorSettings;
+  const theme = await loadEditorTheme(editorSettings.theme, editorThemeAppearance(), currentCustomThemeColors());
   const view = new EditorView({
     parent: configEditorHost.value,
     state: EditorState.create({
@@ -161,7 +207,9 @@ async function mountConfigEditor() {
           ]),
         ),
         keymap.of([...defaultKeymap, ...historyKeymap]),
-        ...language,
+        configEditorLanguage.of(language),
+        configEditorTheme.of(theme),
+        configEditorFontTheme.of(editorFontTheme(EditorView, editorSettings.fontSize, editorSettings.fontFamily, { fixedHeight: true, scrollable: true })),
         EditorView.lineWrapping,
         EditorView.editable.of(!props.readOnly),
         EditorView.updateListener.of((update) => {
@@ -170,9 +218,18 @@ async function mountConfigEditor() {
           configSaveNotice.value = "";
         }),
         EditorView.theme({
-          "&": { height: "100%" },
-          ".cm-scroller": { fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace)" },
-          ".cm-content": { minHeight: "100%" },
+          "&": {
+            height: "100%",
+          },
+          ".cm-scroller": {
+            overflow: "auto",
+          },
+          ".cm-content": {
+            minHeight: "100%",
+          },
+          ".cm-lineNumbers .cm-gutterElement": {
+            padding: "0 10px 0 8px",
+          },
         }),
       ],
     }),
@@ -206,7 +263,35 @@ function inferConfigFormat(dataId: string): string {
 }
 
 function configFormatValue(item: Pick<NacosConfigItem, "dataId" | "configType">): string {
-  return item.configType?.trim().toLowerCase() || inferConfigFormat(item.dataId);
+  const value = normalizeConfigFormat(item.configType);
+  return value || inferConfigFormat(item.dataId);
+}
+
+function normalizeConfigFormat(value?: string): string {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "txt") return "text";
+  if (normalized === "yml") return "yaml";
+  if (normalized === "props") return "properties";
+  return normalized;
+}
+
+function mergeSelectedConfigFormat(items: NacosConfigItem[]): NacosConfigItem[] {
+  const selected = selectedConfig.value;
+  const selectedKey = selectedConfigOriginalKey.value;
+  if (!selected || !selectedKey) return items;
+  const selectedFormat = configFormatValue(selected);
+  if (!selectedFormat) return items;
+  return items.map((item) => {
+    if (!isSameConfigKey(item, selectedKey) || configFormatValue(item)) return item;
+    return { ...item, configType: selectedFormat };
+  });
+}
+
+function normalizeConfigItemFormat<T extends NacosConfigItem>(item: T): T {
+  const value = normalizeConfigFormat(item.configType);
+  if (!value || value === item.configType) return item;
+  return { ...item, configType: value };
 }
 
 function configFormatDisplayLabel(value: string): string {
@@ -234,6 +319,7 @@ function isSameConfigKey(item: NacosConfigItem, key: NacosConfigKey): boolean {
 }
 
 function upsertConfigInList(item: NacosConfigItem) {
+  item = normalizeConfigItemFormat(item);
   const key = {
     namespace: item.namespace || namespace.value || undefined,
     dataId: item.dataId,
@@ -272,7 +358,7 @@ async function loadConfigs(page = configPageNo.value) {
       pageNo: configPageNo.value,
       pageSize: configPageSize.value,
     });
-    configs.value = result.items;
+    configs.value = mergeSelectedConfigFormat(result.items.map(normalizeConfigItemFormat));
     configTotal.value = result.totalCount;
   } catch (error) {
     configError.value = error instanceof Error ? error.message : String(error);
@@ -307,15 +393,16 @@ async function selectConfig(item: NacosConfigItem) {
       dataId: item.dataId,
       group: item.group,
     });
-    selectedConfig.value = detail;
+    const normalizedDetail = normalizeConfigItemFormat(detail);
+    selectedConfig.value = normalizedDetail;
     selectedConfigOriginalKey.value = {
-      namespace: detail.namespace || item.namespace || namespace.value || undefined,
-      dataId: detail.dataId || item.dataId,
-      group: detail.group || item.group,
+      namespace: normalizedDetail.namespace || item.namespace || namespace.value || undefined,
+      dataId: normalizedDetail.dataId || item.dataId,
+      group: normalizedDetail.group || item.group,
     };
-    configContent.value = detail.content || "";
+    configContent.value = normalizedDetail.content || "";
     originalConfigContent.value = configContent.value;
-    configType.value = detail.configType || configFormatValue(item) || "text";
+    configType.value = configFormatValue(normalizedDetail) || configFormatValue(item) || "text";
     await refreshConfigEditor();
   } catch (error) {
     configError.value = error instanceof Error ? error.message : String(error);
@@ -415,6 +502,8 @@ async function loadHistoryDetail(item: NacosConfigHistoryItem): Promise<NacosCon
 }
 
 async function viewConfigHistory(item: NacosConfigHistoryItem) {
+  historyViewingItem.value = null;
+  await nextTick();
   historyViewingItem.value = item;
   historyViewingContent.value = "";
   historyViewingLoading.value = true;
@@ -423,10 +512,17 @@ async function viewConfigHistory(item: NacosConfigHistoryItem) {
   historyViewingLoading.value = false;
 }
 
+function closeHistoryDetail() {
+  historyViewingItem.value = null;
+  historyViewingContent.value = "";
+  historyViewingLoading.value = false;
+}
+
 async function compareConfigHistory(item: NacosConfigHistoryItem) {
   if (!selectedConfigOriginalKey.value) return;
   historyCompareLoading.value = true;
   historyCompareOpen.value = true;
+  historyCompareItem.value = item;
   historyCompareCurrent.value = "";
   historyCompareContent.value = "";
   try {
@@ -439,6 +535,12 @@ async function compareConfigHistory(item: NacosConfigHistoryItem) {
   } finally {
     historyCompareLoading.value = false;
   }
+}
+
+function requestRollbackComparedHistory() {
+  if (!historyCompareItem.value || props.readOnly) return;
+  historyCompareOpen.value = false;
+  requestRollbackHistory(historyCompareItem.value);
 }
 
 function requestRollbackHistory(item: NacosConfigHistoryItem) {
@@ -455,10 +557,11 @@ async function rollbackConfigHistory() {
     configSaveNotice.value = t("nacos.rollbackSuccess");
     if (selectedConfigOriginalKey.value) {
       const detail = await api.nacosGetConfig(props.connectionId, selectedConfigOriginalKey.value);
-      selectedConfig.value = detail;
-      configContent.value = detail.content || "";
+      const normalizedDetail = normalizeConfigItemFormat(detail);
+      selectedConfig.value = normalizedDetail;
+      configContent.value = normalizedDetail.content || "";
       originalConfigContent.value = configContent.value;
-      configType.value = detail.configType || configFormatValue(detail) || "text";
+      configType.value = configFormatValue(normalizedDetail) || "text";
       await refreshConfigEditor();
     }
     await Promise.all([loadConfigs(configPageNo.value), loadConfigHistory(historyPageNo.value)]);
@@ -641,6 +744,24 @@ async function updateInstance(instance: NacosInstanceInfo, patch: Partial<NacosI
   }
 }
 
+watch(historyCompareOpen, (value) => {
+  if (!value && !historyCompareLoading.value) historyCompareItem.value = null;
+});
+
+watch(
+  [() => settingsStore.editorSettings, () => isDark.value],
+  async ([settings]) => {
+    const view = configEditorView.value;
+    if (!view) return;
+    const [{ EditorView }, theme] = await Promise.all([import("@codemirror/view"), loadEditorTheme(settings.theme, editorThemeAppearance(), currentCustomThemeColors())]);
+    if (configEditorView.value !== view) return;
+    view.dispatch({
+      effects: [configEditorTheme.reconfigure(theme), configEditorFontTheme.reconfigure(editorFontTheme(EditorView, settings.fontSize, settings.fontFamily, { fixedHeight: true, scrollable: true }))],
+    });
+  },
+  { deep: true },
+);
+
 watch(
   () => [props.connectionId, props.namespace] as const,
   async () => {
@@ -694,19 +815,16 @@ onBeforeUnmount(() => {
     <Splitpanes v-if="activeTab === 'configs'" class="nacos-admin-splitpanes min-h-0 flex-1" @resized="handleNacosSplitResized">
       <Pane :size="nacosSplitSize" min-size="24">
         <div class="flex h-full min-h-0 flex-col">
-          <div class="grid shrink-0 grid-cols-[minmax(160px,1fr)_130px_auto] gap-2 border-b p-2">
-            <Input v-model="configDataId" class="h-8" placeholder="dataId" @keyup.enter="loadConfigsWithRetry(1)" />
-            <Input v-model="configGroup" class="h-8" :placeholder="t('nacos.allGroups')" @keyup.enter="loadConfigsWithRetry(1)" />
-            <div class="flex gap-2">
-              <Button size="sm" variant="outline" class="h-8 flex-1 gap-1.5" :disabled="configLoading" @click="loadConfigsWithRetry(1)">
-                <Loader2 v-if="configLoading" class="h-3.5 w-3.5 animate-spin" />
-                <RefreshCw v-else class="h-3.5 w-3.5" />
-                {{ t("nacos.load") }}
-              </Button>
-              <Button size="sm" class="h-8" :disabled="readOnly" @click="newConfig">
-                <Plus class="h-3.5 w-3.5" />
-              </Button>
-            </div>
+          <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 border-b p-2">
+            <Input v-model="configDataId" class="h-8 min-w-0" placeholder="dataId" @keyup.enter="loadConfigsWithRetry(1)" />
+            <Input v-model="configGroup" class="h-8 min-w-0" :placeholder="t('nacos.allGroups')" @keyup.enter="loadConfigsWithRetry(1)" />
+            <Button size="sm" variant="outline" class="h-8 w-9 px-0" :title="t('nacos.load')" :disabled="configLoading" @click="loadConfigsWithRetry(1)">
+              <Loader2 v-if="configLoading" class="h-3.5 w-3.5 animate-spin" />
+              <RefreshCw v-else class="h-3.5 w-3.5" />
+            </Button>
+            <Button size="sm" class="h-8 w-9 px-0" :disabled="readOnly" @click="newConfig">
+              <Plus class="h-3.5 w-3.5" />
+            </Button>
           </div>
           <div v-if="configError" class="border-b px-3 py-2 text-xs text-destructive">{{ configError }}</div>
           <div class="min-h-0 flex-1 overflow-auto">
@@ -832,7 +950,7 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="selectedConfig" class="relative min-h-0 flex-1 overflow-hidden bg-background">
             <div ref="configEditorHost" class="h-full min-h-0 overflow-hidden" />
-            <EditorSearchPanel ref="configSearchPanelRef" :view="configEditorView" />
+            <EditorSearchPanel ref="configSearchPanelRef" :view="configEditorView" tone="editor" />
           </div>
           <div v-else class="flex h-full items-center justify-center text-sm text-muted-foreground">{{ t("nacos.selectConfig") }}</div>
         </div>
@@ -842,10 +960,10 @@ onBeforeUnmount(() => {
     <Splitpanes v-else-if="activeTab === 'services'" class="nacos-admin-splitpanes min-h-0 flex-1" @resized="handleNacosSplitResized">
       <Pane :size="nacosSplitSize" min-size="24">
         <div class="flex h-full min-h-0 flex-col">
-          <div class="grid shrink-0 grid-cols-[1fr_130px_130px_auto] gap-2 border-b p-2">
-            <Input v-model="serviceName" class="h-8" :placeholder="t('nacos.service')" @keyup.enter="loadServicesWithRetry(1)" />
-            <Input v-model="serviceGroup" class="h-8" :placeholder="t('nacos.allGroups')" @keyup.enter="loadServicesWithRetry(1)" />
-            <Input v-model="serviceCluster" class="h-8" :placeholder="t('nacos.cluster')" @keyup.enter="loadInstances" />
+          <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 border-b p-2">
+            <Input v-model="serviceName" class="h-8 min-w-0" :placeholder="t('nacos.service')" @keyup.enter="loadServicesWithRetry(1)" />
+            <Input v-model="serviceGroup" class="h-8 min-w-0" :placeholder="t('nacos.allGroups')" @keyup.enter="loadServicesWithRetry(1)" />
+            <Input v-model="serviceCluster" class="h-8 min-w-0" :placeholder="t('nacos.cluster')" @keyup.enter="loadInstances" />
             <Button size="sm" variant="outline" class="h-8 gap-1.5" :disabled="servicesLoading" @click="loadServicesWithRetry(1)">
               <Loader2 v-if="servicesLoading" class="h-3.5 w-3.5 animate-spin" />
               <RefreshCw v-else class="h-3.5 w-3.5" />
@@ -965,6 +1083,7 @@ onBeforeUnmount(() => {
       :viewing-loading="historyViewingLoading"
       @load="loadConfigHistory"
       @view="viewConfigHistory"
+      @close-detail="closeHistoryDetail"
       @compare="compareConfigHistory"
       @rollback="requestRollbackHistory"
     />
@@ -977,7 +1096,10 @@ onBeforeUnmount(() => {
       :before="historyCompareCurrent"
       :after="historyCompareContent"
       :loading="historyCompareLoading"
-      :show-confirm="false"
+      :show-confirm="!readOnly"
+      :confirm-label="t('nacos.rollback')"
+      confirm-variant="destructive"
+      @confirm="requestRollbackComparedHistory"
     />
 
     <DangerConfirmDialog

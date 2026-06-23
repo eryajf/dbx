@@ -13,7 +13,9 @@ import type {
   NacosInstanceInfo,
   NacosInstanceQuery,
   NacosInstanceUpdate,
+  NacosNamespaceCreate,
   NacosNamespaceInfo,
+  NacosNamespaceUpdate,
   NacosRawRequest,
   NacosRawResponse,
   NacosServiceList,
@@ -26,6 +28,14 @@ export async function nacosTestConnection(connectionId: string): Promise<NacosCo
 
 export async function nacosListNamespaces(connectionId: string): Promise<NacosNamespaceInfo[]> {
   return invoke("nacos_list_namespaces", { connectionId });
+}
+
+export async function nacosCreateNamespace(connectionId: string, req: NacosNamespaceCreate): Promise<void> {
+  return invoke("nacos_create_namespace", { connectionId, req });
+}
+
+export async function nacosUpdateNamespace(connectionId: string, req: NacosNamespaceUpdate): Promise<void> {
+  return invoke("nacos_update_namespace", { connectionId, req });
 }
 
 export async function nacosListConfigs(connectionId: string, query: NacosConfigQuery): Promise<NacosConfigList> {

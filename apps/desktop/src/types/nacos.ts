@@ -24,6 +24,18 @@ export interface NacosNamespaceInfo {
   namespaceType?: number;
 }
 
+export interface NacosNamespaceCreate {
+  namespaceId?: string;
+  namespaceName: string;
+  namespaceDesc?: string;
+}
+
+export interface NacosNamespaceUpdate {
+  namespaceId: string;
+  namespaceName: string;
+  namespaceDesc?: string;
+}
+
 export interface NacosAuthConfig {
   kind: "none" | "usernamePassword";
   username?: string;

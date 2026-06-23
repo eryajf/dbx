@@ -21,6 +21,24 @@ pub async fn nacos_list_namespaces(
 }
 
 #[tauri::command]
+pub async fn nacos_create_namespace(
+    state: State<'_, Arc<AppState>>,
+    connection_id: String,
+    req: dbx_core::nacos::NacosNamespaceCreate,
+) -> Result<(), String> {
+    dbx_core::nacos::service::nacos_create_namespace_core(&state, &connection_id, req).await
+}
+
+#[tauri::command]
+pub async fn nacos_update_namespace(
+    state: State<'_, Arc<AppState>>,
+    connection_id: String,
+    req: dbx_core::nacos::NacosNamespaceUpdate,
+) -> Result<(), String> {
+    dbx_core::nacos::service::nacos_update_namespace_core(&state, &connection_id, req).await
+}
+
+#[tauri::command]
 pub async fn nacos_list_configs(
     state: State<'_, Arc<AppState>>,
     connection_id: String,

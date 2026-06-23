@@ -359,6 +359,85 @@ impl NacosAdmin for NacosOpenApiAdmin {
         Ok(parse_namespaces(value))
     }
 
+    async fn create_namespace(&self, req: NacosNamespaceCreate) -> Result<(), String> {
+        let namespace_id = req.namespace_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+        let namespace_name = req.namespace_name.trim().to_string();
+        if namespace_name.is_empty() {
+            return Err(classified_error("invalidNamespace", "Nacos namespace name is required"));
+        }
+        let namespace_desc = req
+            .namespace_desc
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| namespace_name.clone());
+
+        let mut v3_form = vec![
+            ("namespaceName".to_string(), namespace_name.clone()),
+            ("namespaceDesc".to_string(), namespace_desc.clone()),
+        ];
+        let mut v1_form =
+            vec![("namespaceName".to_string(), namespace_name), ("namespaceDesc".to_string(), namespace_desc)];
+        if let Some(namespace_id) = namespace_id {
+            v3_form.push(("namespaceId".to_string(), namespace_id.clone()));
+            v1_form.push(("customNamespaceId".to_string(), namespace_id.clone()));
+            v1_form.push(("namespaceId".to_string(), namespace_id));
+        }
+
+        self.submit_form_candidates(
+            "create Nacos namespace",
+            reqwest::Method::POST,
+            vec![
+                ("/v3/console/core/namespace", v3_form.clone()),
+                ("/v3/console/core/namespace/create", v3_form),
+                ("/v1/console/namespaces", v1_form.clone()),
+                ("/v1/console/namespaces/create", v1_form),
+            ],
+        )
+        .await
+    }
+
+    async fn update_namespace(&self, req: NacosNamespaceUpdate) -> Result<(), String> {
+        let namespace_id = req.namespace_id.trim().to_string();
+        if namespace_id.is_empty() {
+            return Err(classified_error("invalidNamespace", "Nacos namespace ID is required"));
+        }
+        let namespace_name = req.namespace_name.trim().to_string();
+        if namespace_name.is_empty() {
+            return Err(classified_error("invalidNamespace", "Nacos namespace name is required"));
+        }
+        let namespace_desc = req
+            .namespace_desc
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| namespace_name.clone());
+
+        let v3_form = vec![
+            ("namespaceId".to_string(), namespace_id.clone()),
+            ("namespaceName".to_string(), namespace_name.clone()),
+            ("namespaceDesc".to_string(), namespace_desc.clone()),
+        ];
+        let v1_form = vec![
+            ("namespace".to_string(), namespace_id.clone()),
+            ("namespaceId".to_string(), namespace_id.clone()),
+            ("customNamespaceId".to_string(), namespace_id),
+            ("namespaceShowName".to_string(), namespace_name.clone()),
+            ("namespaceName".to_string(), namespace_name),
+            ("namespaceDesc".to_string(), namespace_desc),
+        ];
+
+        self.submit_form_candidates(
+            "update Nacos namespace",
+            reqwest::Method::PUT,
+            vec![
+                ("/v3/console/core/namespace", v3_form.clone()),
+                ("/v3/console/core/namespace/update", v3_form),
+                ("/v1/console/namespaces", v1_form.clone()),
+                ("/v1/console/namespaces/update", v1_form),
+            ],
+        )
+        .await
+    }
+
     async fn list_configs(&self, query: NacosConfigQuery) -> Result<NacosConfigList, String> {
         let page_no = query.page_no.unwrap_or(1).max(1);
         let page_size = query.page_size.unwrap_or(self.cfg.page_size).clamp(1, 500);
@@ -675,19 +754,34 @@ impl NacosAdmin for NacosOpenApiAdmin {
         let page_size = query.page_size.unwrap_or(self.cfg.page_size).clamp(1, 500);
         let namespace = self.namespace(query.namespace.as_deref());
         let mut v3_params = vec![
+            ("namespaceId".to_string(), namespace.clone()),
+            ("pageNo".to_string(), page_no.to_string()),
+            ("pageSize".to_string(), page_size.to_string()),
+        ];
+        push_optional(&mut v3_params, "groupNameParam", query.group_name.clone());
+        push_optional(&mut v3_params, "serviceNameParam", query.service_name.clone());
+        let mut v1_catalog_params = vec![
+            ("namespaceId".to_string(), namespace.clone()),
+            ("pageNo".to_string(), page_no.to_string()),
+            ("pageSize".to_string(), page_size.to_string()),
+        ];
+        push_optional(&mut v1_catalog_params, "groupNameParam", query.group_name.clone());
+        push_optional(&mut v1_catalog_params, "serviceNameParam", query.service_name.clone());
+        let mut v1_legacy_params = vec![
             ("namespaceId".to_string(), namespace),
             ("pageNo".to_string(), page_no.to_string()),
             ("pageSize".to_string(), page_size.to_string()),
         ];
-        push_optional(&mut v3_params, "groupName", query.group_name.clone());
-        push_optional(&mut v3_params, "serviceNameParam", query.service_name.clone());
+        push_optional(&mut v1_legacy_params, "groupName", query.group_name);
+        push_optional(&mut v1_legacy_params, "serviceName", query.service_name);
         let value = self
             .get_json_from_candidates(
                 "list Nacos services",
                 vec![
                     ("/v3/console/ns/service/list", v3_params.clone()),
-                    ("/v3/console/ns/service", v3_params.clone()),
-                    ("/v1/ns/service/list", v3_params),
+                    ("/v1/ns/catalog/services", v1_catalog_params.clone()),
+                    ("/v3/console/ns/service", v3_params),
+                    ("/v1/ns/service/list", v1_legacy_params),
                 ],
             )
             .await?;
@@ -1096,31 +1190,38 @@ fn parse_service_list(value: Value, page_no: u32, page_size: u32) -> NacosServic
         .unwrap_or(0);
     let items_value = data
         .get("doms")
+        .or_else(|| data.get("serviceList"))
         .or_else(|| data.get("services"))
+        .or_else(|| data.get("list"))
         .or_else(|| data.get("pageItems"))
         .or_else(|| data.get("items"))
         .or_else(|| value.get("doms"))
+        .or_else(|| value.get("serviceList"))
         .or_else(|| value.get("services"))
+        .or_else(|| value.get("list"))
         .or_else(|| value.get("pageItems"));
-    let items = items_value
+    let items: Vec<NacosServiceInfo> = items_value
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()
         .into_iter()
         .map(|item| {
             if let Some(name) = item.as_str() {
+                let (group_name, service_name) = split_nacos_service_name(name);
                 NacosServiceInfo {
-                    service_name: name.to_string(),
-                    group_name: None,
+                    service_name,
+                    group_name,
                     cluster_count: None,
                     ip_count: None,
                     healthy_instance_count: None,
                     trigger_flag: None,
                 }
             } else {
+                let raw_name = string_field(&item, &["name", "serviceName"]);
+                let (embedded_group_name, service_name) = split_nacos_service_name(&raw_name);
                 NacosServiceInfo {
-                    service_name: string_field(&item, &["name", "serviceName"]),
-                    group_name: optional_string_field(&item, &["groupName"]),
+                    service_name,
+                    group_name: optional_string_field(&item, &["groupName"]).or(embedded_group_name),
                     cluster_count: optional_u64_field(&item, &["clusterCount"]),
                     ip_count: optional_u64_field(&item, &["ipCount"]),
                     healthy_instance_count: optional_u64_field(&item, &["healthyInstanceCount"]),
@@ -1129,7 +1230,20 @@ fn parse_service_list(value: Value, page_no: u32, page_size: u32) -> NacosServic
             }
         })
         .collect();
+    let total_count = if total_count == 0 { items.len() as u64 } else { total_count };
     NacosServiceList { page_no, page_size, total_count, items }
+}
+
+fn split_nacos_service_name(value: &str) -> (Option<String>, String) {
+    let trimmed = value.trim();
+    if let Some((group, name)) = trimmed.split_once("@@") {
+        let group = group.trim();
+        let name = name.trim();
+        if !group.is_empty() && !name.is_empty() {
+            return (Some(group.to_string()), name.to_string());
+        }
+    }
+    (None, trimmed.to_string())
 }
 
 fn parse_instances(value: Value) -> Vec<NacosInstanceInfo> {
@@ -1185,9 +1299,13 @@ fn config_format_for_item(item: &Value) -> Option<String> {
             "config_type",
             "configFormat",
             "config_format",
+            "configTypeName",
+            "config_type_name",
             "format",
             "contentType",
             "content_type",
+            "fileType",
+            "file_type",
         ],
     )
     .or_else(|| optional_string_field(item, &["dataId", "data_id"]).and_then(|data_id| infer_config_format(&data_id)))
@@ -1210,6 +1328,7 @@ fn infer_config_format(data_id: &str) -> Option<String> {
 
 fn normalize_config_format(value: String) -> String {
     match value.trim().to_ascii_lowercase().as_str() {
+        "txt" => "text".to_string(),
         "yml" => "yaml".to_string(),
         "props" => "properties".to_string(),
         other if !other.is_empty() => other.to_string(),
@@ -1287,6 +1406,24 @@ mod tests {
         );
         assert_eq!(parsed.items[0].config_type.as_deref(), Some("yaml"));
         assert_eq!(parsed.items[1].config_type.as_deref(), Some("properties"));
+    }
+
+    #[test]
+    fn normalizes_txt_config_format_from_list_shape() {
+        let parsed = parse_config_list(
+            serde_json::json!({
+                "totalCount": 2,
+                "pageItems": [
+                    { "dataId": "qilong-test1", "group": "qilong-test", "type": "txt" },
+                    { "dataId": "qilong-test2", "group": "qilong-test", "configTypeName": "TXT" }
+                ]
+            }),
+            "public".to_string(),
+            1,
+            20,
+        );
+        assert_eq!(parsed.items[0].config_type.as_deref(), Some("text"));
+        assert_eq!(parsed.items[1].config_type.as_deref(), Some("text"));
     }
 
     #[test]
@@ -1442,7 +1579,8 @@ mod tests {
     #[test]
     fn parses_service_list_string_shape() {
         let parsed = parse_service_list(serde_json::json!({ "count": 1, "doms": ["DEFAULT_GROUP@@svc"] }), 1, 20);
-        assert_eq!(parsed.items[0].service_name, "DEFAULT_GROUP@@svc");
+        assert_eq!(parsed.items[0].service_name, "svc");
+        assert_eq!(parsed.items[0].group_name.as_deref(), Some("DEFAULT_GROUP"));
     }
 
     #[test]
@@ -1463,6 +1601,26 @@ mod tests {
         assert_eq!(parsed.total_count, 1);
         assert_eq!(parsed.items[0].service_name, "svc");
         assert_eq!(parsed.items[0].group_name.as_deref(), Some("DEFAULT_GROUP"));
+    }
+
+    #[test]
+    fn parses_catalog_service_list_shape() {
+        let parsed = parse_service_list(
+            serde_json::json!({
+                "count": 2,
+                "serviceList": [
+                    { "name": "dev@@rokid-device-service", "ipCount": 3 },
+                    { "serviceName": "DEFAULT_GROUP@@coze_plugin_service", "groupName": "DEFAULT_GROUP" }
+                ]
+            }),
+            1,
+            20,
+        );
+        assert_eq!(parsed.total_count, 2);
+        assert_eq!(parsed.items[0].service_name, "rokid-device-service");
+        assert_eq!(parsed.items[0].group_name.as_deref(), Some("dev"));
+        assert_eq!(parsed.items[1].service_name, "coze_plugin_service");
+        assert_eq!(parsed.items[1].group_name.as_deref(), Some("DEFAULT_GROUP"));
     }
 
     #[test]

@@ -37,6 +37,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   load: [pageNo: number];
   view: [item: NacosConfigHistoryItem];
+  "close-detail": [];
   compare: [item: NacosConfigHistoryItem];
   rollback: [item: NacosConfigHistoryItem];
 }>();
@@ -58,6 +59,10 @@ watch(
     if (item) detailOpen.value = true;
   },
 );
+
+watch(detailOpen, (value) => {
+  if (!value) emit("close-detail");
+});
 
 function display(value?: string | null) {
   const trimmed = value?.trim();
@@ -177,14 +182,14 @@ function loadPage(pageNo: number) {
   </Dialog>
 
   <Dialog v-model:open="detailOpen">
-    <DialogContent class="flex h-[min(78vh,720px)] max-w-5xl flex-col gap-0 overflow-hidden p-0">
+    <DialogContent class="nacos-config-history-detail-dialog flex h-[min(88vh,900px)] flex-col gap-0 overflow-hidden p-0">
       <DialogHeader class="shrink-0 border-b px-5 py-4">
         <DialogTitle class="truncate text-base font-semibold">{{ t("nacos.historyDetail") }}</DialogTitle>
-        <div v-if="viewingItem" class="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
-          <span>namespace={{ viewingItem.namespace || "public" }}</span>
-          <span>dataId={{ viewingItem.dataId }}</span>
-          <span>group={{ viewingItem.group || "DEFAULT_GROUP" }}</span>
-          <span>{{ t("nacos.updatedAt") }}={{ display(viewingItem.lastModifiedTime) }}</span>
+        <div v-if="viewingItem" class="mt-2 grid gap-1.5 text-xs text-muted-foreground sm:grid-cols-2">
+          <div class="min-w-0 truncate font-mono" :title="viewingItem.namespace || 'public'">namespace={{ viewingItem.namespace || "public" }}</div>
+          <div class="min-w-0 truncate font-mono" :title="viewingItem.dataId">dataId={{ viewingItem.dataId }}</div>
+          <div class="min-w-0 truncate font-mono" :title="viewingItem.group || 'DEFAULT_GROUP'">group={{ viewingItem.group || "DEFAULT_GROUP" }}</div>
+          <div class="min-w-0 truncate" :title="display(viewingItem.lastModifiedTime)">{{ t("nacos.updatedAt") }}={{ display(viewingItem.lastModifiedTime) }}</div>
         </div>
       </DialogHeader>
       <div class="min-h-0 flex-1 overflow-auto bg-muted/20 p-4">
@@ -192,9 +197,9 @@ function loadPage(pageNo: number) {
           <Loader2 class="mr-2 h-4 w-4 animate-spin" />
           {{ t("nacos.loadingHistory") }}
         </div>
-        <pre v-else class="min-h-full whitespace-pre-wrap rounded-md border bg-background p-3 font-mono text-xs leading-5">{{ viewingContent || "" }}</pre>
+        <pre v-else class="min-h-full rounded-md border bg-background p-3 font-mono text-xs leading-5">{{ viewingContent || "" }}</pre>
       </div>
-      <DialogFooter class="shrink-0 border-t px-5 py-3">
+      <DialogFooter class="m-0 shrink-0 rounded-none border-t bg-background px-5 py-5 sm:py-4">
         <Button variant="outline" @click="detailOpen = false">{{ t("dangerDialog.cancel") }}</Button>
       </DialogFooter>
     </DialogContent>
@@ -205,5 +210,15 @@ function loadPage(pageNo: number) {
 .nacos-config-history-dialog {
   width: min(96vw, 1280px) !important;
   max-width: min(96vw, 1280px) !important;
+}
+
+.nacos-config-history-detail-dialog {
+  width: min(92vw, 1180px) !important;
+  max-width: min(92vw, 1180px) !important;
+}
+
+.nacos-config-history-detail-dialog pre {
+  min-width: max-content;
+  white-space: pre;
 }
 </style>

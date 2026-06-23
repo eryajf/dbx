@@ -494,6 +494,8 @@ pub fn run() {
             commands::etcd_cmd::etcd_delete,
             commands::nacos_cmd::nacos_test_connection,
             commands::nacos_cmd::nacos_list_namespaces,
+            commands::nacos_cmd::nacos_create_namespace,
+            commands::nacos_cmd::nacos_update_namespace,
             commands::nacos_cmd::nacos_list_configs,
             commands::nacos_cmd::nacos_get_config,
             commands::nacos_cmd::nacos_publish_config,
