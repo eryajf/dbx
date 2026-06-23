@@ -214,56 +214,87 @@ defineExpose({ openSearch, openReplace, closeSearch });
 
 <template>
   <Transition enter-active-class="transition-[transform,opacity] duration-150" leave-active-class="transition-[transform,opacity] duration-100" enter-from-class="opacity-0 -translate-y-1" leave-to-class="opacity-0 -translate-y-1">
-    <div v-if="searchVisible" class="absolute top-1 right-4 z-[9999] isolate flex flex-col gap-1 rounded-md border bg-popover p-1.5 text-popover-foreground shadow-lg">
-      <div class="flex items-center gap-0.5">
-        <button class="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground" :title="showReplace ? t('editor.search.collapseReplace') : t('editor.search.expandReplace')" @click="showReplace = !showReplace">
-          <ChevronRight class="w-3 h-3 transition-transform" :class="showReplace && 'rotate-90'" />
+    <div v-if="searchVisible" class="editor-search-panel absolute right-4 top-3 z-[9999] isolate flex flex-col gap-1 rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-xl ring-1 ring-border/60">
+      <div class="flex items-center gap-1">
+        <button class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" :title="showReplace ? t('editor.search.collapseReplace') : t('editor.search.expandReplace')" @click="showReplace = !showReplace">
+          <ChevronRight class="h-4 w-4 transition-transform" :class="showReplace && 'rotate-90'" />
         </button>
-        <input
-          ref="searchInputRef"
-          v-model="searchText"
-          autocapitalize="off"
-          autocorrect="off"
-          spellcheck="false"
-          class="w-48 h-6 text-xs bg-input border rounded px-2 outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
-          :placeholder="t('editor.search.find')"
-          @keydown="onSearchKeydown"
-        />
-        <button class="w-6 h-6 flex items-center justify-center rounded text-xs font-mono hover:bg-accent" :class="caseSensitive ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'" :title="t('editor.search.caseSensitive')" @click="caseSensitive = !caseSensitive">Aa</button>
-        <button class="w-6 h-6 flex items-center justify-center rounded text-xs font-mono hover:bg-accent" :class="useRegex ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'" :title="t('editor.search.regex')" @click="useRegex = !useRegex">.*</button>
-        <span class="text-xs text-muted-foreground min-w-[3rem] text-center shrink-0">
+        <div class="flex h-8 w-64 items-center rounded-md border border-input bg-background focus-within:border-ring focus-within:ring-1 focus-within:ring-ring">
+          <input
+            ref="searchInputRef"
+            v-model="searchText"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            class="h-full min-w-0 flex-1 bg-transparent px-2 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            :placeholder="t('editor.search.find')"
+            @keydown="onSearchKeydown"
+          />
+          <button
+            class="flex h-6 min-w-7 items-center justify-center rounded px-1.5 text-xs font-medium transition-colors hover:bg-accent hover:text-foreground"
+            :class="caseSensitive ? 'bg-accent text-foreground' : 'text-muted-foreground'"
+            :title="t('editor.search.caseSensitive')"
+            @click="caseSensitive = !caseSensitive"
+          >
+            Aa
+          </button>
+          <button
+            class="mr-1 flex h-6 min-w-7 items-center justify-center rounded px-1.5 font-mono text-xs transition-colors hover:bg-accent hover:text-foreground"
+            :class="useRegex ? 'bg-accent text-foreground' : 'text-muted-foreground'"
+            :title="t('editor.search.regex')"
+            @click="useRegex = !useRegex"
+          >
+            .*
+          </button>
+        </div>
+        <span class="min-w-[3.4rem] shrink-0 text-center text-xs" :class="searchText && matchCount === 0 ? 'text-destructive' : 'text-muted-foreground'">
           {{ searchText && matchCount > 0 ? `${currentMatchIndex}/${matchCount}${matchCountLimited ? "+" : ""}` : t("editor.search.noResults") }}
         </span>
-        <button class="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground" :title="t('editor.search.prevMatch')" @click="prevMatch">
-          <ChevronUp class="w-3.5 h-3.5" />
+        <button class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" :title="t('editor.search.prevMatch')" @click="prevMatch">
+          <ChevronUp class="h-4 w-4" />
         </button>
-        <button class="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground" :title="t('editor.search.nextMatch')" @click="nextMatch">
-          <ChevronDown class="w-3.5 h-3.5" />
+        <button class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" :title="t('editor.search.nextMatch')" @click="nextMatch">
+          <ChevronDown class="h-4 w-4" />
         </button>
-        <button class="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground" :title="t('editor.search.close')" @click="closeSearch">
-          <X class="w-3.5 h-3.5" />
+        <button class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" :title="t('editor.search.close')" @click="closeSearch">
+          <X class="h-4 w-4" />
         </button>
       </div>
-      <div v-if="showReplace" class="flex items-center gap-0.5">
-        <div class="w-5 h-5 shrink-0" />
-        <input
-          ref="replaceInputRef"
-          v-model="replaceText"
-          autocapitalize="off"
-          autocorrect="off"
-          spellcheck="false"
-          class="w-48 h-6 text-xs bg-input border rounded px-2 outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
-          :placeholder="t('editor.search.replace')"
-          @keydown.enter.prevent="doReplace"
-          @keydown.escape.prevent="closeSearch"
-        />
-        <button class="h-6 px-1.5 flex items-center justify-center rounded text-xs text-muted-foreground hover:bg-accent hover:text-foreground border" :title="t('editor.search.replace')" @click="doReplace">
+      <div v-if="showReplace" class="flex items-center gap-1">
+        <div class="h-7 w-7 shrink-0" />
+        <div class="flex h-8 w-64 items-center rounded-md border border-input bg-background focus-within:border-ring focus-within:ring-1 focus-within:ring-ring">
+          <input
+            ref="replaceInputRef"
+            v-model="replaceText"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            class="h-full min-w-0 flex-1 bg-transparent px-2 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            :placeholder="t('editor.search.replace')"
+            @keydown.enter.prevent="doReplace"
+            @keydown.escape.prevent="closeSearch"
+          />
+        </div>
+        <button class="flex h-7 items-center justify-center rounded-md border border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" :title="t('editor.search.replace')" @click="doReplace">
           {{ t("editor.search.replace") }}
         </button>
-        <button class="h-6 px-1.5 flex items-center justify-center rounded text-xs text-muted-foreground hover:bg-accent hover:text-foreground border" :title="t('editor.search.replaceAll')" @click="doReplaceAll">
+        <button class="flex h-7 items-center justify-center rounded-md border border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" :title="t('editor.search.replaceAll')" @click="doReplaceAll">
           {{ t("editor.search.replaceAll") }}
         </button>
       </div>
     </div>
   </Transition>
 </template>
+
+<style scoped>
+.editor-search-panel {
+  max-width: min(calc(100vw - 2rem), 620px);
+}
+
+@media (max-width: 720px) {
+  .editor-search-panel {
+    left: 0.75rem;
+    right: 0.75rem;
+  }
+}
+</style>

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct NacosCapabilities {
     pub supports_config_management: bool,
+    pub supports_config_history: bool,
     pub supports_service_management: bool,
     pub supports_instance_update: bool,
     pub supports_raw_api: bool,
@@ -13,6 +14,7 @@ impl Default for NacosCapabilities {
     fn default() -> Self {
         Self {
             supports_config_management: true,
+            supports_config_history: true,
             supports_service_management: true,
             supports_instance_update: true,
             supports_raw_api: true,
@@ -120,6 +122,77 @@ pub struct NacosConfigKey {
     pub namespace: Option<String>,
     pub data_id: String,
     pub group: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NacosConfigHistoryQuery {
+    #[serde(default)]
+    pub namespace: Option<String>,
+    pub data_id: String,
+    pub group: String,
+    #[serde(default)]
+    pub page_no: Option<u32>,
+    #[serde(default)]
+    pub page_size: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NacosConfigHistoryItem {
+    pub history_id: String,
+    #[serde(default)]
+    pub nid: Option<i64>,
+    pub data_id: String,
+    pub group: String,
+    pub namespace: String,
+    #[serde(default)]
+    pub app_name: Option<String>,
+    #[serde(default)]
+    pub operation: Option<String>,
+    #[serde(default)]
+    pub operator: Option<String>,
+    #[serde(default)]
+    pub last_modified_time: Option<String>,
+    #[serde(default)]
+    pub config_type: Option<String>,
+    #[serde(default)]
+    pub tags: Option<String>,
+    #[serde(default)]
+    pub md5: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NacosConfigHistoryList {
+    pub page_no: u32,
+    pub page_size: u32,
+    pub total_count: u64,
+    pub items: Vec<NacosConfigHistoryItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NacosConfigHistoryKey {
+    #[serde(default)]
+    pub namespace: Option<String>,
+    pub data_id: String,
+    pub group: String,
+    pub history_id: String,
+    #[serde(default)]
+    pub nid: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NacosConfigRollbackRequest {
+    #[serde(default)]
+    pub namespace: Option<String>,
+    pub data_id: String,
+    pub group: String,
+    pub history_id: String,
+    #[serde(default)]
+    pub nid: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

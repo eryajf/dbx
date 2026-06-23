@@ -1,5 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { NacosConfigItem, NacosConfigKey, NacosConfigList, NacosConfigQuery, NacosConfigUpsert, NacosConnectionInfo, NacosInstanceInfo, NacosInstanceQuery, NacosInstanceUpdate, NacosNamespaceInfo, NacosRawRequest, NacosRawResponse, NacosServiceList, NacosServiceQuery } from "@/types/nacos";
+import type {
+  NacosConfigHistoryKey,
+  NacosConfigHistoryList,
+  NacosConfigHistoryQuery,
+  NacosConfigItem,
+  NacosConfigKey,
+  NacosConfigList,
+  NacosConfigQuery,
+  NacosConfigRollbackRequest,
+  NacosConfigUpsert,
+  NacosConnectionInfo,
+  NacosInstanceInfo,
+  NacosInstanceQuery,
+  NacosInstanceUpdate,
+  NacosNamespaceInfo,
+  NacosRawRequest,
+  NacosRawResponse,
+  NacosServiceList,
+  NacosServiceQuery,
+} from "@/types/nacos";
 
 export async function nacosTestConnection(connectionId: string): Promise<NacosConnectionInfo> {
   return invoke("nacos_test_connection", { connectionId });
@@ -23,6 +42,18 @@ export async function nacosPublishConfig(connectionId: string, req: NacosConfigU
 
 export async function nacosDeleteConfig(connectionId: string, key: NacosConfigKey): Promise<void> {
   return invoke("nacos_delete_config", { connectionId, key });
+}
+
+export async function nacosListConfigHistory(connectionId: string, query: NacosConfigHistoryQuery): Promise<NacosConfigHistoryList> {
+  return invoke("nacos_list_config_history", { connectionId, query });
+}
+
+export async function nacosGetConfigHistory(connectionId: string, key: NacosConfigHistoryKey): Promise<NacosConfigItem> {
+  return invoke("nacos_get_config_history", { connectionId, key });
+}
+
+export async function nacosRollbackConfig(connectionId: string, req: NacosConfigRollbackRequest): Promise<void> {
+  return invoke("nacos_rollback_config", { connectionId, req });
 }
 
 export async function nacosListServices(connectionId: string, query: NacosServiceQuery): Promise<NacosServiceList> {

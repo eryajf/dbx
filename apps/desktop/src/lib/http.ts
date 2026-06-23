@@ -90,7 +90,26 @@ import type { DatabaseNameSqlOptions, DropTableChildObjectSqlOptions, DropObject
 import type { BuildDatabaseSqlExportOptions, BuildExportInsertStatementsOptions } from "@/lib/databaseExport";
 import type { DataCompareFromTablesOptions, DataCompareFromTablesPreparation, DataCompareSyncPlan, DataCompareSyncPlanOptions, DataComparePreparation, DataComparePreparationOptions } from "@/lib/dataCompare";
 import type { DataGridSavePreparation } from "./tauri";
-import type { NacosConfigItem, NacosConfigKey, NacosConfigList, NacosConfigQuery, NacosConfigUpsert, NacosConnectionInfo, NacosInstanceInfo, NacosInstanceQuery, NacosInstanceUpdate, NacosNamespaceInfo, NacosRawRequest, NacosRawResponse, NacosServiceList, NacosServiceQuery } from "@/types/nacos";
+import type {
+  NacosConfigHistoryKey,
+  NacosConfigHistoryList,
+  NacosConfigHistoryQuery,
+  NacosConfigItem,
+  NacosConfigKey,
+  NacosConfigList,
+  NacosConfigQuery,
+  NacosConfigRollbackRequest,
+  NacosConfigUpsert,
+  NacosConnectionInfo,
+  NacosInstanceInfo,
+  NacosInstanceQuery,
+  NacosInstanceUpdate,
+  NacosNamespaceInfo,
+  NacosRawRequest,
+  NacosRawResponse,
+  NacosServiceList,
+  NacosServiceQuery,
+} from "@/types/nacos";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1425,6 +1444,18 @@ export async function nacosPublishConfig(connectionId: string, req: NacosConfigU
 
 export async function nacosDeleteConfig(connectionId: string, key: NacosConfigKey): Promise<void> {
   return post("/api/nacos/configs/delete", { connectionId, key });
+}
+
+export async function nacosListConfigHistory(connectionId: string, query: NacosConfigHistoryQuery): Promise<NacosConfigHistoryList> {
+  return post("/api/nacos/configs/history/list", { connectionId, query });
+}
+
+export async function nacosGetConfigHistory(connectionId: string, key: NacosConfigHistoryKey): Promise<NacosConfigItem> {
+  return post("/api/nacos/configs/history/get", { connectionId, key });
+}
+
+export async function nacosRollbackConfig(connectionId: string, req: NacosConfigRollbackRequest): Promise<void> {
+  return post("/api/nacos/configs/history/rollback", { connectionId, req });
 }
 
 export async function nacosListServices(connectionId: string, query: NacosServiceQuery): Promise<NacosServiceList> {

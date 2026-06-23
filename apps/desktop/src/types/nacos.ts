@@ -1,5 +1,6 @@
 export interface NacosCapabilities {
   supportsConfigManagement: boolean;
+  supportsConfigHistory?: boolean;
   supportsServiceManagement: boolean;
   supportsInstanceUpdate: boolean;
   supportsRawApi: boolean;
@@ -80,6 +81,40 @@ export interface NacosConfigUpsert extends NacosConfigKey {
   desc?: string;
   tags?: string;
 }
+
+export interface NacosConfigHistoryQuery extends NacosConfigKey {
+  pageNo?: number;
+  pageSize?: number;
+}
+
+export interface NacosConfigHistoryItem {
+  historyId: string;
+  nid?: number;
+  dataId: string;
+  group: string;
+  namespace: string;
+  appName?: string;
+  operation?: string;
+  operator?: string;
+  lastModifiedTime?: string;
+  configType?: string;
+  tags?: string;
+  md5?: string;
+}
+
+export interface NacosConfigHistoryList {
+  pageNo: number;
+  pageSize: number;
+  totalCount: number;
+  items: NacosConfigHistoryItem[];
+}
+
+export interface NacosConfigHistoryKey extends NacosConfigKey {
+  historyId: string;
+  nid?: number;
+}
+
+export interface NacosConfigRollbackRequest extends NacosConfigHistoryKey {}
 
 export interface NacosServiceQuery {
   namespace?: string;

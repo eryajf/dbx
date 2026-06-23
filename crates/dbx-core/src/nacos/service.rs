@@ -43,6 +43,34 @@ pub async fn nacos_delete_config_core(state: &AppState, conn_id: &str, key: Naco
     admin.delete_config(key).await
 }
 
+pub async fn nacos_list_config_history_core(
+    state: &AppState,
+    conn_id: &str,
+    query: NacosConfigHistoryQuery,
+) -> Result<NacosConfigHistoryList, String> {
+    let admin = get_admin(state, conn_id).await?;
+    admin.list_config_history(query).await
+}
+
+pub async fn nacos_get_config_history_core(
+    state: &AppState,
+    conn_id: &str,
+    key: NacosConfigHistoryKey,
+) -> Result<NacosConfigItem, String> {
+    let admin = get_admin(state, conn_id).await?;
+    admin.get_config_history(key).await
+}
+
+pub async fn nacos_rollback_config_core(
+    state: &AppState,
+    conn_id: &str,
+    req: NacosConfigRollbackRequest,
+) -> Result<(), String> {
+    ensure_connection_writable(state, conn_id, "Rollback Nacos config").await?;
+    let admin = get_admin(state, conn_id).await?;
+    admin.rollback_config(req).await
+}
+
 pub async fn nacos_list_services_core(
     state: &AppState,
     conn_id: &str,
@@ -76,6 +104,7 @@ pub async fn nacos_raw_request_core(
     conn_id: &str,
     req: NacosRawRequest,
 ) -> Result<NacosRawResponse, String> {
+    crate::nacos::http::validate_raw_api_path(&req.path)?;
     if req.method.to_ascii_uppercase() != "GET" {
         ensure_connection_writable(state, conn_id, "Run mutating Nacos raw request").await?;
     }
@@ -163,6 +192,73 @@ mod tests {
             &state,
             "nacos-1",
             NacosRawRequest { method: "POST".to_string(), path: "/v1/cs/configs".to_string(), query: None, body: None },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("read-only"));
+    }
+
+    #[tokio::test]
+    async fn config_rollback_requires_writable_connection_before_adapter_build() {
+        let dir = std::env::temp_dir().join(format!("dbx-nacos-service-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage = crate::storage::Storage::open(&dir.join("storage.db")).await.unwrap();
+        let state = AppState::new(storage);
+        let cfg = crate::models::connection::ConnectionConfig {
+            id: "nacos-rollback".to_string(),
+            name: "Nacos".to_string(),
+            db_type: DatabaseType::Nacos,
+            driver_profile: None,
+            driver_label: None,
+            url_params: None,
+            host: "127.0.0.1".to_string(),
+            port: 8848,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            visible_databases: None,
+            attached_databases: Vec::new(),
+            color: None,
+            transport_layers: Vec::new(),
+            connect_timeout_secs: 5,
+            query_timeout_secs: 30,
+            idle_timeout_secs: 60,
+            keepalive_interval_secs: crate::models::connection::default_keepalive_interval_secs(),
+            ssl: false,
+            ca_cert_path: String::new(),
+            client_cert_path: String::new(),
+            client_key_path: String::new(),
+            sysdba: false,
+            oracle_connection_type: None,
+            connection_string: None,
+            redis_connection_mode: None,
+            redis_sentinel_master: String::new(),
+            redis_sentinel_nodes: String::new(),
+            redis_sentinel_username: String::new(),
+            redis_sentinel_password: String::new(),
+            redis_sentinel_tls: false,
+            redis_cluster_nodes: String::new(),
+            redis_key_separator: ":".to_string(),
+            etcd_endpoints: String::new(),
+            gbase_server: String::new(),
+            informix_server: String::new(),
+            external_config: Some(serde_json::json!({ "serverAddr": "http://127.0.0.1:9" })),
+            jdbc_driver_class: None,
+            jdbc_driver_paths: Vec::new(),
+            one_time: false,
+            read_only: true,
+        };
+        state.configs.write().await.insert(cfg.id.clone(), cfg);
+        let err = nacos_rollback_config_core(
+            &state,
+            "nacos-rollback",
+            NacosConfigRollbackRequest {
+                namespace: None,
+                data_id: "app.yaml".to_string(),
+                group: "DEFAULT_GROUP".to_string(),
+                history_id: "1".to_string(),
+                nid: None,
+            },
         )
         .await
         .unwrap_err();

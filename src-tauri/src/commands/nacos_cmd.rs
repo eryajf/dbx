@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::commands::connection::{ensure_connection_writable, AppState};
+use crate::commands::connection::AppState;
 
 #[tauri::command]
 pub async fn nacos_test_connection(
@@ -44,7 +44,6 @@ pub async fn nacos_publish_config(
     connection_id: String,
     req: dbx_core::nacos::NacosConfigUpsert,
 ) -> Result<(), String> {
-    ensure_connection_writable(&state, &connection_id, "Publish Nacos config").await?;
     dbx_core::nacos::service::nacos_publish_config_core(&state, &connection_id, req).await
 }
 
@@ -54,8 +53,34 @@ pub async fn nacos_delete_config(
     connection_id: String,
     key: dbx_core::nacos::NacosConfigKey,
 ) -> Result<(), String> {
-    ensure_connection_writable(&state, &connection_id, "Delete Nacos config").await?;
     dbx_core::nacos::service::nacos_delete_config_core(&state, &connection_id, key).await
+}
+
+#[tauri::command]
+pub async fn nacos_list_config_history(
+    state: State<'_, Arc<AppState>>,
+    connection_id: String,
+    query: dbx_core::nacos::NacosConfigHistoryQuery,
+) -> Result<dbx_core::nacos::NacosConfigHistoryList, String> {
+    dbx_core::nacos::service::nacos_list_config_history_core(&state, &connection_id, query).await
+}
+
+#[tauri::command]
+pub async fn nacos_get_config_history(
+    state: State<'_, Arc<AppState>>,
+    connection_id: String,
+    key: dbx_core::nacos::NacosConfigHistoryKey,
+) -> Result<dbx_core::nacos::NacosConfigItem, String> {
+    dbx_core::nacos::service::nacos_get_config_history_core(&state, &connection_id, key).await
+}
+
+#[tauri::command]
+pub async fn nacos_rollback_config(
+    state: State<'_, Arc<AppState>>,
+    connection_id: String,
+    req: dbx_core::nacos::NacosConfigRollbackRequest,
+) -> Result<(), String> {
+    dbx_core::nacos::service::nacos_rollback_config_core(&state, &connection_id, req).await
 }
 
 #[tauri::command]
@@ -82,7 +107,6 @@ pub async fn nacos_update_instance(
     connection_id: String,
     req: dbx_core::nacos::NacosInstanceUpdate,
 ) -> Result<(), String> {
-    ensure_connection_writable(&state, &connection_id, "Update Nacos instance").await?;
     dbx_core::nacos::service::nacos_update_instance_core(&state, &connection_id, req).await
 }
 
@@ -92,8 +116,5 @@ pub async fn nacos_raw_request(
     connection_id: String,
     req: dbx_core::nacos::NacosRawRequest,
 ) -> Result<dbx_core::nacos::NacosRawResponse, String> {
-    if req.method.to_ascii_uppercase() != "GET" {
-        ensure_connection_writable(&state, &connection_id, "Run mutating Nacos raw request").await?;
-    }
     dbx_core::nacos::service::nacos_raw_request_core(&state, &connection_id, req).await
 }

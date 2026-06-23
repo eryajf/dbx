@@ -35,6 +35,27 @@ pub(crate) struct ConfigPublishReq {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ConfigHistoryListReq {
+    connection_id: String,
+    query: dbx_core::nacos::NacosConfigHistoryQuery,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConfigHistoryKeyReq {
+    connection_id: String,
+    key: dbx_core::nacos::NacosConfigHistoryKey,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConfigRollbackReq {
+    connection_id: String,
+    req: dbx_core::nacos::NacosConfigRollbackRequest,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ServiceListReq {
     connection_id: String,
     query: dbx_core::nacos::NacosServiceQuery,
@@ -114,6 +135,36 @@ pub async fn delete_config(
     Json(req): Json<ConfigKeyReq>,
 ) -> Result<Json<()>, AppError> {
     dbx_core::nacos::service::nacos_delete_config_core(&state.app, &req.connection_id, req.key)
+        .await
+        .map_err(AppError)?;
+    Ok(Json(()))
+}
+
+pub async fn list_config_history(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ConfigHistoryListReq>,
+) -> Result<Json<dbx_core::nacos::NacosConfigHistoryList>, AppError> {
+    let result = dbx_core::nacos::service::nacos_list_config_history_core(&state.app, &req.connection_id, req.query)
+        .await
+        .map_err(AppError)?;
+    Ok(Json(result))
+}
+
+pub async fn get_config_history(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ConfigHistoryKeyReq>,
+) -> Result<Json<dbx_core::nacos::NacosConfigItem>, AppError> {
+    let result = dbx_core::nacos::service::nacos_get_config_history_core(&state.app, &req.connection_id, req.key)
+        .await
+        .map_err(AppError)?;
+    Ok(Json(result))
+}
+
+pub async fn rollback_config(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ConfigRollbackReq>,
+) -> Result<Json<()>, AppError> {
+    dbx_core::nacos::service::nacos_rollback_config_core(&state.app, &req.connection_id, req.req)
         .await
         .map_err(AppError)?;
     Ok(Json(()))
