@@ -37,6 +37,7 @@ import {
   type CustomTheme,
 } from "@/stores/settingsStore";
 import { loadEditorTheme, editorFontTheme } from "@/lib/editorThemes";
+import { formatAiModelOption } from "@/lib/aiModelPresentation";
 import ThemeCustomizerDialog from "./ThemeCustomizerDialog.vue";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { useTheme } from "@/composables/useTheme";
@@ -1594,6 +1595,14 @@ function displayAiModelName(modelId: string): string {
   return aiModelOptions.value.find((model) => model.id === modelId)?.displayName || modelId;
 }
 
+function aiModelOptionPresentation(modelId: string, label = displayAiModelName(modelId)) {
+  return formatAiModelOption(label, modelId);
+}
+
+function aiModelOptionSecondary(modelId: string, label = displayAiModelName(modelId)) {
+  return aiModelOptionPresentation(modelId, label).secondary;
+}
+
 async function aiRefreshModels() {
   if (aiModelLoading.value) return;
   if (!aiModelListSupported.value) {
@@ -2985,6 +2994,7 @@ watch(
                         :display-name="displayAiModelName"
                         trigger-class="h-8 min-w-[104px] max-w-[150px] shrink-0 border border-border bg-background px-2 text-xs shadow-none hover:bg-muted/50"
                         content-class="w-72"
+                        item-class="h-auto min-h-8 py-1.5"
                         @update:model-value="aiSelectModel"
                         @update:open="onAiModelListOpen"
                       >
@@ -2992,9 +3002,9 @@ watch(
                           <span class="truncate">{{ loading ? t("ai.loadingModels") : t("ai.browseModels") }}</span>
                         </template>
                         <template #option-label="{ option, label }">
-                          <span class="flex min-w-0 flex-col">
-                            <span class="truncate">{{ label }}</span>
-                            <span v-if="label !== option" class="truncate text-[11px] text-muted-foreground">{{ option }}</span>
+                          <span class="flex min-w-0 flex-col leading-tight">
+                            <span class="truncate">{{ aiModelOptionPresentation(option, label).primary }}</span>
+                            <span v-if="aiModelOptionSecondary(option, label)" class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ aiModelOptionSecondary(option, label) }}</span>
                           </span>
                         </template>
                       </SearchableSelect>

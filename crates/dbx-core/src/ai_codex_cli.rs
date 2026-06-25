@@ -6,17 +6,225 @@ use crate::ai_cli_agent::{
     CliAgentJsonlDialect, CliAgentProcessSpec, CliAgentRunOptions,
 };
 use serde_json::Value;
+use std::collections::BTreeSet;
+use std::env;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Instant;
 use tokio::process::Command;
 use tokio::sync::Notify;
 
 const DEFAULT_CODEX_MODELS: &[&str] = &["default", "gpt-5.5", "gpt-5.4-mini"];
+const CODEX_PATH_MARKER: &str = "__DBX_CODEX_PATH__";
 
 pub type CodexRunOptions = CliAgentRunOptions;
 pub type CodexCommandSpec = CliAgentCommandSpec;
 
 fn codex_program(config: &AiConfig) -> String {
     config.codex_cli_path.as_deref().map(str::trim).filter(|path| !path.is_empty()).unwrap_or("codex").to_string()
+}
+
+async fn resolve_codex_command(config: &AiConfig) -> CodexCommandSpec {
+    let configured = codex_program(config);
+    if is_path_like_program(&configured) {
+        return CodexCommandSpec { program: expand_tilde(&configured), args: Vec::new() };
+    }
+    if let Some(path) = resolve_program_path(&configured).await {
+        CodexCommandSpec { program: path, args: Vec::new() }
+    } else {
+        CodexCommandSpec { program: configured, args: Vec::new() }
+    }
+}
+
+fn command_env(command: &CodexCommandSpec) -> Vec<(String, String)> {
+    command.parent_dir().map(|dir| ("PATH".to_string(), merged_path_with_dir(&dir))).into_iter().collect()
+}
+
+trait CommandParentDir {
+    fn parent_dir(&self) -> Option<String>;
+}
+
+impl CommandParentDir for CodexCommandSpec {
+    fn parent_dir(&self) -> Option<String> {
+        Path::new(&self.program)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(|parent| parent.to_string_lossy().to_string())
+    }
+}
+
+async fn resolve_program_path(program: &str) -> Option<String> {
+    if let Some(path) = direct_program_path(program) {
+        return Some(path);
+    }
+    if let Some(path) = common_program_path(program) {
+        return Some(path);
+    }
+    shell_program_path(program).await
+}
+
+fn direct_program_path(program: &str) -> Option<String> {
+    let path = Path::new(program);
+    if path.is_absolute() && path.is_file() {
+        Some(path.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
+fn common_program_path(program: &str) -> Option<String> {
+    common_executable_dirs()
+        .into_iter()
+        .flat_map(|dir| program_path_candidates(&dir, program))
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+#[cfg(not(windows))]
+fn program_path_candidates(dir: &Path, program: &str) -> Vec<PathBuf> {
+    vec![dir.join(program)]
+}
+
+#[cfg(windows)]
+fn program_path_candidates(dir: &Path, program: &str) -> Vec<PathBuf> {
+    let path = Path::new(program);
+    if path.extension().is_some() {
+        return vec![dir.join(program)];
+    }
+    ["", ".cmd", ".exe", ".bat", ".ps1"].iter().map(|extension| dir.join(format!("{program}{extension}"))).collect()
+}
+
+#[cfg(not(windows))]
+async fn shell_program_path(program: &str) -> Option<String> {
+    let script = shell_resolve_script(program);
+    let mut command = Command::new(user_shell());
+    command.args(user_shell_args(&script));
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let output = command.output().await.ok()?;
+    output.status.success().then_some(())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .find(CODEX_PATH_MARKER)
+        .and_then(|index| {
+            stdout[index + CODEX_PATH_MARKER.len()..].lines().map(str::trim).find(|line| !line.is_empty())
+        })
+        .filter(|path| Path::new(path).is_file())
+        .map(ToString::to_string)
+}
+
+#[cfg(windows)]
+async fn shell_program_path(program: &str) -> Option<String> {
+    let script = format!("(Get-Command {} -ErrorAction SilentlyContinue).Source", windows_shell_quote(program));
+    let mut command = Command::new("powershell.exe");
+    command.args(["-NoProfile", "-Command", &script]);
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let output = command.output().await.ok()?;
+    output.status.success().then_some(())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .filter(|path| Path::new(path).is_file())
+        .map(ToString::to_string)
+}
+
+#[cfg(windows)]
+fn windows_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn is_path_like_program(program: &str) -> bool {
+    program.contains('/') || program.contains('\\') || program.starts_with('~')
+}
+
+fn expand_tilde(path: &str) -> String {
+    crate::path_utils::expand_tilde(path)
+}
+
+fn common_executable_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(path) = env::var("PATH") {
+        dirs.extend(env::split_paths(&path));
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(app_data) = env::var("APPDATA") {
+            dirs.push(PathBuf::from(app_data).join("npm"));
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        dirs.extend([
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+            PathBuf::from("/usr/sbin"),
+            PathBuf::from("/sbin"),
+        ]);
+    }
+    dirs
+}
+
+fn merged_path_with_dir(dir: &str) -> String {
+    let mut seen = BTreeSet::new();
+    let mut dirs = vec![PathBuf::from(dir)];
+    dirs.extend(common_executable_dirs());
+    let paths = dirs.into_iter().filter(|path| seen.insert(path.clone())).collect::<Vec<_>>();
+    env::join_paths(paths).unwrap_or_default().to_string_lossy().to_string()
+}
+
+#[cfg(not(windows))]
+fn user_shell() -> String {
+    env::var("SHELL").ok().filter(|value| !value.trim().is_empty()).unwrap_or_else(|| {
+        if Path::new("/bin/zsh").exists() {
+            "/bin/zsh".to_string()
+        } else {
+            "/bin/sh".to_string()
+        }
+    })
+}
+
+#[cfg(not(windows))]
+fn user_shell_args(script: &str) -> Vec<String> {
+    let shell = user_shell();
+    let shell_name = Path::new(&shell).file_name().and_then(|value| value.to_str()).unwrap_or_default();
+    match shell_name {
+        "fish" => vec!["-l".to_string(), "-i".to_string(), "-c".to_string(), script.to_string()],
+        "bash" => vec![
+            "--noprofile".to_string(),
+            "--norc".to_string(),
+            "-i".to_string(),
+            "-c".to_string(),
+            bash_login_script(script),
+        ],
+        "sh" | "dash" => vec!["-ic".to_string(), script.to_string()],
+        "zsh" => vec!["-ilc".to_string(), script.to_string()],
+        _ => vec!["-lc".to_string(), script.to_string()],
+    }
+}
+
+#[cfg(not(windows))]
+fn bash_login_script(script: &str) -> String {
+    format!(
+        "for dbx_profile in ~/.bash_profile ~/.bash_login ~/.profile ~/.bashrc; do \
+         [ -r \"$dbx_profile\" ] && . \"$dbx_profile\"; \
+         done; unset dbx_profile; {script}"
+    )
+}
+
+#[cfg(not(windows))]
+fn shell_resolve_script(program: &str) -> String {
+    format!("printf '%s\\n' {}; command -v {}", shell_quote(CODEX_PATH_MARKER), shell_quote(program))
+}
+
+#[cfg(not(windows))]
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 pub fn codex_enabled_tools(agent_mode: bool) -> Vec<&'static str> {
@@ -76,7 +284,12 @@ pub fn build_codex_prompt(system_prompt: &str, messages: &[crate::ai::AiMessage]
 }
 
 pub async fn list_codex_models(config: &AiConfig) -> Result<Vec<AiModelInfo>, String> {
-    let output = Command::new(codex_program(config)).args(["debug", "models"]).output().await;
+    let command = resolve_codex_command(config).await;
+    let output = Command::new(&command.program)
+        .args(["debug", "models"])
+        .envs(command_env(&command).iter().map(|(key, value)| (key.as_str(), value.as_str())))
+        .output()
+        .await;
 
     let Ok(output) = output else {
         return Ok(model_infos(DEFAULT_CODEX_MODELS));
@@ -122,8 +335,10 @@ fn parse_codex_models(stdout: &str) -> Option<Vec<AiModelInfo>> {
 
 pub async fn test_codex_connection(config: &AiConfig) -> Result<AiTestConnectionResult, String> {
     let start = Instant::now();
-    let mut command = Command::new(codex_program(config));
+    let codex_command = resolve_codex_command(config).await;
+    let mut command = Command::new(&codex_command.program);
     command.args(["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"]);
+    command.envs(command_env(&codex_command).iter().map(|(key, value)| (key.as_str(), value.as_str())));
 
     let model = config.model.trim();
     if !model.is_empty() && !model.eq_ignore_ascii_case("default") {
@@ -190,10 +405,14 @@ pub async fn run_codex_agent(
     cancelled: &Notify,
     on_event: impl Fn(AgentEvent) + Send + Sync + 'static,
 ) -> Result<String, String> {
-    let command = build_codex_exec_command(config, prompt, &options);
+    let mut command = build_codex_exec_command(config, prompt, &options);
+    let resolved_command = resolve_codex_command(config).await;
+    command.program = resolved_command.program;
+    let env = command_env(&command);
     run_cli_jsonl_agent(
         CliAgentProcessSpec {
             command,
+            env,
             dialect: CliAgentJsonlDialect::CodexExec,
             classify_spawn_error: classify_codex_spawn_error,
             classify_run_error: classify_codex_run_error,
@@ -206,9 +425,11 @@ pub async fn run_codex_agent(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(windows))]
+    use super::shell_quote;
     use super::{
-        build_codex_exec_command, codex_enabled_tools, parse_codex_jsonl_event, parse_codex_models, CodexRunOptions,
-        DEFAULT_CODEX_MODELS,
+        build_codex_exec_command, codex_enabled_tools, command_env, common_executable_dirs, is_path_like_program,
+        merged_path_with_dir, parse_codex_jsonl_event, parse_codex_models, CodexRunOptions, DEFAULT_CODEX_MODELS,
     };
     use crate::agent_events::AgentEvent;
     use crate::ai::{AiApiStyle, AiAuthMethod, AiConfig, AiProvider, AiReasoningLevel};
@@ -289,6 +510,53 @@ mod tests {
 
         assert!(!spec.args.contains(&"--reasoning-effort".to_string()));
         assert!(spec.args.contains(&"model_reasoning_effort=\"high\"".to_string()));
+    }
+
+    #[test]
+    fn path_like_codex_programs_are_detected() {
+        assert!(is_path_like_program("/opt/homebrew/bin/codex"));
+        assert!(is_path_like_program("~/bin/codex"));
+        assert!(is_path_like_program(r"C:\Tools\codex.exe"));
+        assert!(!is_path_like_program("codex"));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn common_codex_lookup_dirs_include_homebrew_and_system_paths() {
+        let dirs = common_executable_dirs();
+
+        assert!(dirs.iter().any(|dir| dir == std::path::Path::new("/opt/homebrew/bin")));
+        assert!(dirs.iter().any(|dir| dir == std::path::Path::new("/usr/local/bin")));
+        assert!(dirs.iter().any(|dir| dir == std::path::Path::new("/usr/bin")));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn codex_command_env_prepends_resolved_program_dir_and_keeps_node_dirs() {
+        let command = CliAgentCommandSpec { program: "/opt/homebrew/bin/codex".to_string(), args: Vec::new() };
+        let env = command_env(&command);
+        let path = env.iter().find(|(key, _)| key == "PATH").map(|(_, value)| value).unwrap();
+        let dirs = std::env::split_paths(path).collect::<Vec<_>>();
+
+        assert_eq!(dirs.first().unwrap(), std::path::Path::new("/opt/homebrew/bin"));
+        assert!(dirs.iter().any(|dir| dir == std::path::Path::new("/usr/bin")));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn merged_path_deduplicates_codex_dir() {
+        let path = merged_path_with_dir("/opt/homebrew/bin");
+        let dirs = std::env::split_paths(&path).collect::<Vec<_>>();
+        let count = dirs.iter().filter(|dir| *dir == std::path::Path::new("/opt/homebrew/bin")).count();
+
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn shell_quote_handles_codex_program_names() {
+        assert_eq!(shell_quote("codex"), "'codex'");
+        assert_eq!(shell_quote("can't"), "'can'\"'\"'t'");
     }
 
     #[test]

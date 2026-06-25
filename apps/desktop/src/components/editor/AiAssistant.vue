@@ -18,6 +18,7 @@ import DatabaseIcon from "@/components/icons/DatabaseIcon.vue";
 import { useQueryStore } from "@/stores/queryStore";
 import { useToast } from "@/composables/useToast";
 import { buildAiContext, runAgentStream, type AiAction } from "@/lib/ai";
+import { formatAiModelOption } from "@/lib/aiModelPresentation";
 import type { AgentEvent } from "@/lib/tauri";
 import { buildAiAgentPlan } from "@/lib/aiAgentPlan";
 import { buildAiAgentStepItems, type AiAgentStepItem, type AiAgentStepTone } from "@/lib/aiAgentStepPresentation";
@@ -134,6 +135,14 @@ const modelOptionIds = computed(() => {
 
 function displayModelName(modelId: string) {
   return modelOptions.value.find((model) => model.id === modelId)?.displayName || modelId;
+}
+
+function modelOptionPresentation(modelId: string, label = displayModelName(modelId)) {
+  return formatAiModelOption(label, modelId);
+}
+
+function modelOptionSecondary(modelId: string, label = displayModelName(modelId)) {
+  return modelOptionPresentation(modelId, label).secondary;
 }
 
 /** Deferred context compaction info; applied after stream ends to avoid shifting assistantIdx. */
@@ -1300,7 +1309,7 @@ const messageRenderer = computed(() => {
               :display-name="displayModelName"
               trigger-class="min-w-0 w-auto max-w-[220px] shrink justify-end rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
               content-class="w-72"
-              item-class="text-xs px-2"
+              item-class="h-auto min-h-8 px-2 py-1.5 text-xs"
               @update:model-value="handleModelSelect"
               @update:open="(open: boolean) => open && fetchModelOptions()"
             >
@@ -1308,9 +1317,9 @@ const messageRenderer = computed(() => {
                 <span class="min-w-0 truncate">{{ loading ? t("ai.loadingModels") : label }}</span>
               </template>
               <template #option-label="{ option, label }">
-                <span class="flex min-w-0 flex-col">
-                  <span class="truncate">{{ label }}</span>
-                  <span v-if="label !== option" class="truncate text-[11px] text-muted-foreground">{{ option }}</span>
+                <span class="flex min-w-0 flex-col leading-tight">
+                  <span class="truncate">{{ modelOptionPresentation(option, label).primary }}</span>
+                  <span v-if="modelOptionSecondary(option, label)" class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ modelOptionSecondary(option, label) }}</span>
                 </span>
               </template>
             </SearchableSelect>

@@ -29,6 +29,7 @@ pub enum CliAgentJsonlDialect {
 
 pub struct CliAgentProcessSpec {
     pub command: CliAgentCommandSpec,
+    pub env: Vec<(String, String)>,
     pub dialect: CliAgentJsonlDialect,
     pub classify_spawn_error: fn(&str) -> String,
     pub classify_run_error: fn(&str) -> String,
@@ -327,6 +328,7 @@ pub async fn run_cli_jsonl_agent(
 ) -> Result<String, String> {
     let mut child = Command::new(&spec.command.program)
         .args(&spec.command.args)
+        .envs(spec.env.iter().map(|(key, value)| (key.as_str(), value.as_str())))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -439,6 +441,7 @@ mod tests {
 
         let spec = CliAgentProcessSpec {
             command: CliAgentCommandSpec { program: "sh".to_string(), args: vec!["-c".to_string(), script] },
+            env: Vec::new(),
             dialect: CliAgentJsonlDialect::CodexExec,
             classify_spawn_error,
             classify_run_error,
