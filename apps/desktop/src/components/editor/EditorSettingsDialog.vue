@@ -77,6 +77,12 @@ import { useConnectionStore } from "@/stores/connectionStore";
 import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { currentLocale, setLocale, type Locale } from "@/i18n";
 import { LOCALE_OPTIONS } from "@/lib/localeOptions";
+import {
+  DEFAULT_WEB_DAV_AUTO_UPLOAD_INTERVAL_MINUTES,
+  DEFAULT_WEB_DAV_REMOTE_PATH,
+  normalizedWebDavAutoUploadInterval,
+  writeWebDavAutoUploadFields,
+} from "@/lib/webdavAutoUploadConfig";
 
 const { t } = useI18n();
 const settingsStore = useSettingsStore();
@@ -1196,15 +1202,14 @@ const webdavUsername = ref(localStorage.getItem("dbx-webdav-username") || "");
 const webdavPassword = ref("");
 const webdavRememberPassword = ref(localStorage.getItem("dbx-webdav-remember-password") === "true");
 const webdavHasSavedPassword = ref(false);
-const webdavRemotePath = ref(localStorage.getItem("dbx-webdav-remote-path") || "DBX/sync/snapshot.json");
+const webdavRemotePath = ref(localStorage.getItem("dbx-webdav-remote-path") || DEFAULT_WEB_DAV_REMOTE_PATH);
 const webdavSyncSecrets = ref(false);
 const webdavSecretsPassphrase = ref("");
 const webdavAutoUploadEnabled = ref(localStorage.getItem("dbx-webdav-auto-upload-enabled") === "true");
-const webdavAutoUploadIntervalMinutes = ref(Number(localStorage.getItem("dbx-webdav-auto-upload-interval-minutes") || "30"));
+const webdavAutoUploadIntervalMinutes = ref(Number(localStorage.getItem("dbx-webdav-auto-upload-interval-minutes") || String(DEFAULT_WEB_DAV_AUTO_UPLOAD_INTERVAL_MINUTES)));
 const webdavBusy = ref<"" | "test" | "upload" | "download">("");
 const webdavMessage = ref("");
 const webdavError = ref(false);
-let webdavAutoUploadTimer: ReturnType<typeof window.setInterval> | undefined;
 
 const webdavReady = computed(() => !!webdavEndpoint.value.trim() && !webdavBusy.value && (!webdavSyncSecrets.value || !!webdavSecretsPassphrase.value.trim()));
 
@@ -1213,7 +1218,7 @@ function currentWebDavConfig(): WebDavConfig {
     endpoint: webdavEndpoint.value.trim(),
     username: webdavUsername.value.trim() || undefined,
     password: webdavPassword.value || undefined,
-    remotePath: webdavRemotePath.value.trim() || "DBX/sync/snapshot.json",
+    remotePath: webdavRemotePath.value.trim() || DEFAULT_WEB_DAV_REMOTE_PATH,
   };
 }
 
@@ -1223,11 +1228,11 @@ function currentWebDavAccountConfig(): WebDavConfig {
 }
 
 function rememberWebDavFields() {
-  localStorage.setItem("dbx-webdav-endpoint", webdavEndpoint.value.trim());
-  localStorage.setItem("dbx-webdav-username", webdavUsername.value.trim());
-  localStorage.setItem("dbx-webdav-remote-path", webdavRemotePath.value.trim() || "DBX/sync/snapshot.json");
-  localStorage.setItem("dbx-webdav-auto-upload-enabled", String(webdavAutoUploadEnabled.value));
-  localStorage.setItem("dbx-webdav-auto-upload-interval-minutes", String(normalizedWebDavAutoUploadInterval()));
+  writeWebDavAutoUploadFields(currentWebDavConfig(), {
+    enabled: webdavAutoUploadEnabled.value,
+    intervalMinutes: webdavAutoUploadIntervalMinutes.value,
+  });
+  window.dispatchEvent(new Event("dbx:webdav-auto-upload-config-changed"));
 }
 
 function setWebDavResult(message: string, error = false) {
@@ -1290,43 +1295,6 @@ async function uploadWebDavSnapshot() {
     const summary = await webdavSyncUpload(currentWebDavConfig(), settingsStore.editorSettings, webdavSyncSecrets.value ? webdavSecretsPassphrase.value : undefined);
     return t("settings.syncUploadSuccess", { bytes: summary.bytes, path: summary.remotePath });
   });
-}
-
-function normalizedWebDavAutoUploadInterval() {
-  const value = Number(webdavAutoUploadIntervalMinutes.value);
-  if (!Number.isFinite(value)) return 30;
-  return Math.max(1, Math.min(1440, Math.round(value)));
-}
-
-function scheduleWebDavAutoUpload() {
-  if (webdavAutoUploadTimer) {
-    window.clearInterval(webdavAutoUploadTimer);
-    webdavAutoUploadTimer = undefined;
-  }
-  if (!webdavAutoUploadEnabled.value) return;
-
-  const intervalMinutes = normalizedWebDavAutoUploadInterval();
-  webdavAutoUploadIntervalMinutes.value = intervalMinutes;
-  webdavAutoUploadTimer = window.setInterval(() => {
-    void runWebDavAutoUpload();
-  }, intervalMinutes * 60_000);
-}
-
-async function runWebDavAutoUpload() {
-  if (!webdavEndpoint.value.trim() || webdavBusy.value) return;
-  webdavBusy.value = "upload";
-  webdavMessage.value = "";
-  webdavError.value = false;
-  try {
-    rememberWebDavFields();
-    await applyWebDavPasswordPreference();
-    const summary = await webdavSyncUpload(currentWebDavConfig(), settingsStore.editorSettings, webdavSyncSecrets.value ? webdavSecretsPassphrase.value : undefined);
-    setWebDavResult(t("settings.syncAutoUploadSuccess", { bytes: summary.bytes, path: summary.remotePath }));
-  } catch (e: any) {
-    setWebDavResult(e?.message || String(e), true);
-  } finally {
-    webdavBusy.value = "";
-  }
 }
 
 async function downloadWebDavSnapshot() {
@@ -1408,8 +1376,8 @@ watch(webdavRememberPassword, (val) => {
   localStorage.setItem("dbx-webdav-remember-password", String(val));
 });
 watch([webdavAutoUploadEnabled, webdavAutoUploadIntervalMinutes], () => {
+  webdavAutoUploadIntervalMinutes.value = normalizedWebDavAutoUploadInterval(webdavAutoUploadIntervalMinutes.value);
   rememberWebDavFields();
-  scheduleWebDavAutoUpload();
 });
 
 watch(activeSettingsTab, (tab) => {
@@ -1423,17 +1391,12 @@ watch(activeSettingsTab, (tab) => {
 
 onMounted(() => {
   void refreshWebDavPasswordStatus();
-  scheduleWebDavAutoUpload();
   checkLayoutDescTruncation();
   checkIconThemeDescTruncation();
   initTruncationObservers();
 });
 
 onUnmounted(() => {
-  if (webdavAutoUploadTimer) {
-    window.clearInterval(webdavAutoUploadTimer);
-    webdavAutoUploadTimer = undefined;
-  }
   cleanupTableColumnTemplatePointerDrag();
   cleanupTruncationObservers();
 });

@@ -29,6 +29,7 @@ import { useDataGridActions } from "@/composables/useDataGridActions";
 import { useTauriEvents } from "@/composables/useTauriEvents";
 import { useCloseActionPrompt } from "@/composables/useCloseActionPrompt";
 import { useVisibilityChange } from "@/composables/useVisibilityChange";
+import { useWebDavAutoUpload } from "@/composables/useWebDavAutoUpload";
 import "@/i18n";
 import { translateBackendError } from "@/i18n/backend-errors";
 import * as api from "@/lib/api";
@@ -243,6 +244,7 @@ const { setupTauriListeners, cleanupTauriListeners } = useTauriEvents({
 });
 const { showCloseActionPrompt, chooseQuit, chooseMinimize, setupCloseActionPromptListener, cleanupCloseActionPromptListener } = useCloseActionPrompt();
 useVisibilityChange();
+useWebDavAutoUpload();
 
 const appVersion = ref("");
 const isClassicLayout = computed(() => settingsStore.editorSettings.appLayout === "classic");
