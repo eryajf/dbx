@@ -279,6 +279,8 @@ make dev-backend   # 后端
 make docs
 ```
 
+DBX 官网文档位于 `docs/` 目录。如果你想贡献官网内容或文档页面，请修改 `docs/` 下的文件，并运行 `make docs` 在本地预览文档站。
+
 JDBC Agent 驱动开发工程位于 `agents/` 目录：
 
 ```bash

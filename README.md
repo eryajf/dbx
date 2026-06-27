@@ -280,6 +280,8 @@ Documentation site:
 make docs
 ```
 
+The official DBX documentation site lives in `docs/`. If you want to improve the website content or documentation pages, edit the files under `docs/` and run `make docs` to preview the site locally.
+
 JDBC agent driver development projects live in `agents/`:
 
 ```bash
