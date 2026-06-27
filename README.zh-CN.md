@@ -257,11 +257,11 @@ make
 >
 > ```bash
 > # 快速检查（跳过 DuckDB）
-> cargo check --no-default-features
-> cargo test  --no-default-features
+> make cargo-check-fast
+> make cargo-test-fast
 >
 > # Tauri 开发模式跳过 DuckDB
-> pnpm tauri dev -- --no-default-features
+> make dev-fast
 > ```
 >
 > `--no-default-features` 仅影响本地开发，发布构建（`pnpm tauri build`）始终包含 DuckDB。

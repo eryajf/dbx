@@ -257,11 +257,11 @@ make
 >
 > ```bash
 > # Fast checks (skip DuckDB)
-> cargo check --no-default-features
-> cargo test  --no-default-features
+> make cargo-check-fast
+> make cargo-test-fast
 >
 > # Tauri dev without DuckDB
-> pnpm tauri dev -- --no-default-features
+> make dev-fast
 > ```
 >
 > The `--no-default-features` flag only affects local development.

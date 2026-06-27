@@ -63,9 +63,9 @@ cargo check --workspace --locked
 > development when you're not touching DuckDB features:
 >
 > ```bash
-> cargo check --workspace --no-default-features
-> cargo test  --workspace --no-default-features
-> pnpm tauri dev -- --no-default-features
+> make cargo-check-fast
+> make cargo-test-fast
+> make dev-fast
 > ```
 >
 > Release builds and CI should always include DuckDB (omit the flag).

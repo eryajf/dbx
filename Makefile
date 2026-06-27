@@ -3,7 +3,7 @@
 PNPM ?= pnpm
 TAURI_DEV_PORT ?= 1420
 
-.PHONY: help install docs-install check-tauri-dev-port dev dev-web dev-backend build package docs docs-build check test
+.PHONY: help install docs-install check-tauri-dev-port dev dev-fast dev-web dev-backend build package docs docs-build check test cargo-check-fast cargo-test-fast
 
 node_modules/.modules.yaml: package.json pnpm-lock.yaml
 	$(PNPM) install --frozen-lockfile
@@ -14,18 +14,28 @@ docs/node_modules/.modules.yaml: docs/package.json docs/pnpm-lock.yaml
 help:
 	@printf '%s\n' 'DBX development targets:'
 	@printf '%s\n' ''
-	@printf '%-18s %s\n' 'make' 'Start the local desktop development environment'
-	@printf '%-18s %s\n' 'make dev' 'Start the local desktop development environment'
-	@printf '%-18s %s\n' 'make dev-web' 'Start the web frontend development server'
-	@printf '%-18s %s\n' 'make dev-backend' 'Start the web backend development server'
-	@printf '%-18s %s\n' 'make build' 'Run type checks and build the desktop frontend'
-	@printf '%-18s %s\n' 'make package' 'Build the desktop app package'
-	@printf '%-18s %s\n' 'make docs' 'Start the documentation site development server'
-	@printf '%-18s %s\n' 'make docs-build' 'Build the documentation site'
-	@printf '%-18s %s\n' 'make check' 'Run project checks'
-	@printf '%-18s %s\n' 'make test' 'Run project tests'
-	@printf '%-18s %s\n' 'make install' 'Install root project dependencies'
-	@printf '%-18s %s\n' 'make docs-install' 'Install documentation site dependencies'
+	@printf '%s\n' 'App:'
+	@printf '  %-23s %s\n' 'make' 'Start the local desktop development environment'
+	@printf '  %-23s %s\n' 'make dev' 'Start the local desktop development environment'
+	@printf '  %-23s %s\n' 'make dev-fast' 'Start Tauri dev without default Rust features'
+	@printf '  %-23s %s\n' 'make dev-web' 'Start the web frontend development server'
+	@printf '  %-23s %s\n' 'make dev-backend' 'Start the web backend development server'
+	@printf '  %-23s %s\n' 'make build' 'Run type checks and build the desktop frontend'
+	@printf '  %-23s %s\n' 'make package' 'Build the desktop app package'
+	@printf '%s\n' ''
+	@printf '%s\n' 'Docs:'
+	@printf '  %-23s %s\n' 'make docs' 'Start the documentation site development server'
+	@printf '  %-23s %s\n' 'make docs-build' 'Build the documentation site'
+	@printf '  %-23s %s\n' 'make docs-install' 'Install documentation site dependencies'
+	@printf '%s\n' ''
+	@printf '%s\n' 'Checks:'
+	@printf '  %-23s %s\n' 'make check' 'Run project checks'
+	@printf '  %-23s %s\n' 'make test' 'Run project tests'
+	@printf '  %-23s %s\n' 'make cargo-check-fast' 'Run Rust check without default features'
+	@printf '  %-23s %s\n' 'make cargo-test-fast' 'Run Rust tests without default features'
+	@printf '%s\n' ''
+	@printf '%s\n' 'Setup:'
+	@printf '  %-23s %s\n' 'make install' 'Install root project dependencies'
 
 install:
 	$(PNPM) install --frozen-lockfile
@@ -45,6 +55,9 @@ check-tauri-dev-port:
 
 dev: node_modules/.modules.yaml check-tauri-dev-port
 	$(PNPM) dev:tauri
+
+dev-fast: node_modules/.modules.yaml check-tauri-dev-port
+	$(PNPM) tauri dev -- --no-default-features
 
 dev-web: node_modules/.modules.yaml
 	$(PNPM) dev:web
@@ -69,3 +82,9 @@ check: node_modules/.modules.yaml
 
 test: node_modules/.modules.yaml
 	$(PNPM) test
+
+cargo-check-fast:
+	cargo check --no-default-features
+
+cargo-test-fast:
+	cargo test --no-default-features
