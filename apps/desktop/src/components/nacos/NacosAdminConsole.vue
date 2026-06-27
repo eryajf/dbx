@@ -17,6 +17,7 @@ import { useI18n } from "vue-i18n";
 import * as api from "@/lib/api";
 import { buildNacosConfigDeleteConfirm, buildNacosConfigExportFileName, buildNacosConfigHistoryRollbackConfirm, buildNacosInstanceConfirm, createNacosSaveAsCopy, resolveNacosConfigCopyText } from "@/lib/nacosAdmin";
 import { copyToClipboard, readTextFromClipboard } from "@/lib/clipboard";
+import { trimmedSelectionLayer } from "@/lib/codemirrorTrimmedSelectionLayer";
 import { safeLocalStorageGet, safeLocalStorageSet } from "@/lib/safeStorage";
 import { editorFontTheme, loadEditorTheme } from "@/lib/editorThemes";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
@@ -178,7 +179,7 @@ async function configLanguageExtension(format: string): Promise<Extension[]> {
 async function mountConfigEditor() {
   await nextTick();
   if (!configEditorHost.value || configEditorView.value || !selectedConfig.value) return;
-  const [{ EditorState, Prec }, { EditorView, keymap }, { basicSetup }, { defaultKeymap, historyKeymap }, { search: cmSearch }, language] = await Promise.all([
+  const [{ EditorState, Prec }, { EditorView, keymap }, { basicSetup }, { defaultKeymap, historyKeymap, indentWithTab }, { search: cmSearch }, language] = await Promise.all([
     import("@codemirror/state"),
     import("@codemirror/view"),
     import("codemirror"),
@@ -202,17 +203,14 @@ async function mountConfigEditor() {
           },
         }),
         basicSetup,
-        Prec.highest(
-          keymap.of([
-            { key: "Mod-f", run: () => configSearchPanelRef.value?.openSearch() ?? false, preventDefault: true },
-            { key: "Mod-h", run: () => configSearchPanelRef.value?.openReplace() ?? false, preventDefault: true },
-          ]),
-        ),
+        trimmedSelectionLayer(),
+        Prec.highest(keymap.of([{ key: "Mod-f", run: () => configSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }, { key: "Mod-h", run: () => configSearchPanelRef.value?.openReplace() ?? false, preventDefault: true }, indentWithTab])),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         configEditorLanguage.of(language),
         configEditorTheme.of(theme),
         configEditorFontTheme.of(editorFontTheme(EditorView, editorSettings.fontSize, editorSettings.fontFamily, { fixedHeight: true, scrollable: true })),
         EditorView.lineWrapping,
+        EditorState.readOnly.of(!!props.readOnly),
         EditorView.editable.of(!props.readOnly),
         EditorView.updateListener.of((update) => {
           if (!update.docChanged) return;
@@ -228,6 +226,8 @@ async function mountConfigEditor() {
           },
           ".cm-content": {
             minHeight: "100%",
+            userSelect: "text",
+            WebkitUserSelect: "text",
           },
           ".cm-lineNumbers .cm-gutterElement": {
             padding: "0 10px 0 8px",
