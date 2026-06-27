@@ -247,9 +247,10 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev 
 ### 开发
 
 ```bash
-pnpm install
-pnpm dev:tauri
+make
 ```
+
+`make` 会在需要时安装根目录依赖，并启动本地 Tauri 桌面端开发环境。
 
 > [!TIP]
 > DuckDB 从源码编译较慢。如果不涉及 DuckDB 功能，可以跳过以加速本地构建：
@@ -268,8 +269,14 @@ pnpm dev:tauri
 Web 版本：
 
 ```bash
-pnpm dev:web       # 前端
-pnpm dev:backend   # 后端
+make dev-web       # 前端
+make dev-backend   # 后端
+```
+
+文档站：
+
+```bash
+make docs
 ```
 
 JDBC Agent 驱动开发工程位于 `agents/` 目录：
@@ -284,7 +291,7 @@ cd agents
 ### 构建
 
 ```bash
-pnpm tauri build
+make package
 ```
 
 安装包输出在 `src-tauri/target/release/bundle/` 目录。

@@ -246,9 +246,10 @@ No additional dependencies required.
 ### Development
 
 ```bash
-pnpm install
-pnpm dev:tauri
+make
 ```
+
+`make` installs root dependencies when needed and starts the local Tauri desktop development environment.
 
 > [!TIP]
 > DuckDB compilation takes a while. If you're not working on DuckDB features,
@@ -269,8 +270,14 @@ pnpm dev:tauri
 Web version:
 
 ```bash
-pnpm dev:web       # frontend
-pnpm dev:backend   # backend
+make dev-web       # frontend
+make dev-backend   # backend
+```
+
+Documentation site:
+
+```bash
+make docs
 ```
 
 JDBC agent driver development projects live in `agents/`:
@@ -285,7 +292,7 @@ Build artifacts from `agents/drivers/<db-type>/build/libs/` are picked up by loc
 ### Build
 
 ```bash
-pnpm tauri build
+make package
 ```
 
 The installer will be in `src-tauri/target/release/bundle/`.

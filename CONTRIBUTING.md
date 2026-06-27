@@ -19,25 +19,33 @@ Required tools:
 
 - Node.js `>=22.13.0`
 - pnpm `10.27.0`
+- Make
 - Rust stable
 - Java 17, when working on JDBC plugin packaging
 
 Install dependencies:
 
 ```bash
-pnpm install
+make install
 ```
 
 Run the desktop app during development:
 
 ```bash
-pnpm dev:tauri
+make
 ```
 
-Run the web backend:
+Run the web app during development:
 
 ```bash
-pnpm dev:backend
+make dev-web       # frontend
+make dev-backend   # backend
+```
+
+Preview the documentation site:
+
+```bash
+make docs
 ```
 
 ## Checks
@@ -45,7 +53,7 @@ pnpm dev:backend
 Before opening a pull request, run:
 
 ```bash
-pnpm check
+make check
 cargo fmt --check
 cargo check --workspace --locked
 ```
