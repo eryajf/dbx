@@ -73,6 +73,7 @@ import { rankSavedSqlHistory } from "@/lib/savedSqlHistory";
 import { isSchemaAware, isSingleDatabase, usesTreeSchemaMode } from "@/lib/databaseFeatureSupport";
 import { codeMirrorSqlDialect, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection } from "@/lib/jdbcDialect";
 import { detectDatabaseFileType } from "@/lib/databaseFileDetection";
+import { isMacOS } from "@/lib/platform";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1381,7 +1382,7 @@ onMounted(async () => {
   document.addEventListener(
     "click",
     (e) => {
-      if (e.ctrlKey) e.stopPropagation();
+      if (isMacOS() && e.ctrlKey) e.stopPropagation();
     },
     true,
   );

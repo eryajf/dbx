@@ -10,6 +10,11 @@ describe("normalizeEditorSettings", () => {
     expect(normalizeEditorSettings({ autoAliasTables: false }).autoAliasTables).toBe(false);
   });
 
+  it("reuses data tabs by default and preserves explicit opt-out", () => {
+    expect(normalizeEditorSettings({}).reuseDataTab).toBe(true);
+    expect(normalizeEditorSettings({ reuseDataTab: false }).reuseDataTab).toBe(false);
+  });
+
   it("defaults update downloads to the official source", () => {
     expect(normalizeEditorSettings({}).updateDownloadSource).toBe("official");
   });

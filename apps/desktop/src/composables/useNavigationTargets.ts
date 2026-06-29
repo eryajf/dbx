@@ -2,6 +2,7 @@ import * as api from "@/lib/api";
 import { connectionObjectTreeQuerySchema, effectiveDatabaseTypeForConnection } from "@/lib/jdbcDialect";
 import { buildTableSelectSql } from "@/lib/tableSelectSql";
 import { editableRowIdentifierColumns, usesSyntheticRowIdKey } from "@/lib/tableEditing";
+import { findReusableDataTab, shouldReuseDataTab, type DataTabOpenMode } from "@/lib/dataTabOpenPolicy";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -16,11 +17,14 @@ export type NavigationTarget = {
   whereInput?: string;
 };
 
-async function openTableTarget(target: NavigationTarget, options: { tableInfoTab?: TableInfoTab } = {}) {
+type OpenTableTargetOptions = { tableInfoTab?: TableInfoTab; openMode?: DataTabOpenMode };
+
+async function openTableTarget(target: NavigationTarget, options: OpenTableTargetOptions = {}) {
   const connectionStore = useConnectionStore();
   const queryStore = useQueryStore();
   const settingsStore = useSettingsStore();
   const pageLimit = settingsStore.editorSettings.pageSize;
+  const openMode = options.openMode ?? "reuse";
 
   connectionStore.activeConnectionId = target.connectionId;
   const config = connectionStore.getConfig(target.connectionId);
@@ -32,8 +36,8 @@ async function openTableTarget(target: NavigationTarget, options: { tableInfoTab
     return;
   }
   const tabId = (() => {
-    if (settingsStore.editorSettings.reuseDataTab) {
-      const existing = queryStore.tabs.find((tab) => tab.mode === "data" && tab.connectionId === target.connectionId && tab.database === target.database);
+    if (shouldReuseDataTab(openMode, settingsStore.editorSettings.reuseDataTab)) {
+      const existing = findReusableDataTab(queryStore.tabs, target, queryStore.activeTabId);
       if (existing) {
         existing.title = tabTitle;
         existing.schema = target.schema;

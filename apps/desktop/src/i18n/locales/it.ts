@@ -2584,7 +2584,7 @@ export default withEnglishFallback({
     disconnectTabHandlingModeKeepTabsKeepResults: "Non chiudere le schede correlate",
     disconnectTabHandlingModeKeepTabsKeepResultsDescription: "Mantieni le schede correlate, il testo SQL e i risultati correnti senza ulteriore pulizia.",
     reuseDataTab: "Riusa scheda dati",
-    reuseDataTabDescription: "Quando fai clic su una tabella nella barra laterale, riutilizza la scheda dati esistente invece di crearne una nuova ogni volta.",
+    reuseDataTabDescription: "Facendo clic su una tabella nella barra laterale si riutilizza la scheda dati corrente. Usa Cmd/Ctrl+clic per aprire una nuova scheda.",
     sidebarHiddenTablePrefixes: "Prefissi dei nomi delle tabelle nascosti",
     sidebarHiddenTablePrefixesDescription: "Un prefisso per riga. Solo le etichette di tabelle, viste e collezioni della barra laterale vengono abbreviate; i suggerimenti e le azioni utilizzano ancora il nome completo.",
     sidebarHiddenTablePrefixesPlaceholder: "Esempio:\nODS_\nT8Y2_LONG_",

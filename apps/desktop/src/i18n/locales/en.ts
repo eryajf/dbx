@@ -2587,7 +2587,7 @@ export default {
     disconnectTabHandlingModeKeepTabsKeepResults: "Do not close related tabs",
     disconnectTabHandlingModeKeepTabsKeepResultsDescription: "Keep related tabs, SQL text, and current results without extra cleanup.",
     reuseDataTab: "Reuse data tab",
-    reuseDataTabDescription: "When clicking a table in the sidebar, reuse the existing data tab instead of creating a new one each time.",
+    reuseDataTabDescription: "Clicking a table in the sidebar reuses the current data tab. Use Cmd/Ctrl+click to open a new tab.",
     sidebarHiddenTablePrefixes: "Hidden table name prefixes",
     sidebarHiddenTablePrefixesDescription: "One prefix per line. Only sidebar table, view, and collection labels are shortened; tooltips and actions still use the full name.",
     sidebarHiddenTablePrefixesPlaceholder: "Example:\nODS_\nT8Y2_LONG_",

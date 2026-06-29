@@ -2481,7 +2481,7 @@ export default withEnglishFallback({
     disconnectTabHandlingModeKeepTabsKeepResults: "不關閉相關分頁",
     disconnectTabHandlingModeKeepTabsKeepResultsDescription: "保留相關分頁、SQL 文字與目前結果，不另外做清理。",
     reuseDataTab: "重複使用資料分頁",
-    reuseDataTabDescription: "點擊側邊欄資料表名稱時，重複使用現有的資料分頁而不是建立新分頁，避免開啟過多分頁。",
+    reuseDataTabDescription: "點擊側邊欄資料表名稱時重複使用目前資料分頁，按住 Cmd/Ctrl 點擊可建立新分頁。",
     sidebarHiddenTablePrefixes: "隱藏資料表名稱字首",
     sidebarHiddenTablePrefixesDescription: "每行一個字首。只縮短側邊欄中的資料表、檢視和集合標籤；工具提示和實際操作仍使用完整名稱。",
     sidebarHiddenTablePrefixesPlaceholder: "範例：\nODS_\nT8Y2_LONG_",

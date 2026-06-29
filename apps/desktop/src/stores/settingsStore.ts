@@ -452,7 +452,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   sidebarObjectDisplay: "grouped",
   autoSelectActiveSidebarNode: false,
   disconnectTabHandlingMode: "close-tabs",
-  reuseDataTab: false,
+  reuseDataTab: true,
   updateNotificationsEnabled: true,
   sidebarHiddenTablePrefixes: [],
   sidebarHideTableComments: false,

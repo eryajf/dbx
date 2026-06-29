@@ -76,6 +76,7 @@ import { clearActiveTableReferencePayload, createTableReferencePayload, createTa
 import { editableRowIdentifierColumns, usesSyntheticRowIdKey } from "@/lib/tableEditing";
 import { supportsDatabaseCreation, supportsDatabaseSearch, supportsFieldLineage, supportsObjectBrowserTreeNode, supportsSchemaDiagram, supportsSqlFileExecution, supportsTableImport, supportsTableTruncate, supportsTableStructureEditing, usesTreeSchemaMode } from "@/lib/databaseCapabilities";
 import { copyNameForTreeNode, objectSourceKindForTreeNode, sidebarSelectionCopyAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/treeNodeClick";
+import { dataTabOpenModeFromTreeClick, findReusableDataTab, findSameDataTableTab, shouldReuseDataTab, type DataTabOpenMode } from "@/lib/dataTabOpenPolicy";
 import { formatSqlInsert } from "@/lib/exportFormats";
 import { fetchTableDataForExport } from "@/lib/tableDataExport";
 import { buildCreateDatabaseSql, buildDuckDbAttachDatabaseSql, duckDbAttachedDatabaseNameFromPath, supportsCreateDatabaseCharset, uniqueDuckDbAttachedDatabaseName } from "@/lib/createDatabaseSql";
@@ -573,7 +574,7 @@ async function toggle() {
   }
 }
 
-function runRowClickAction() {
+function runRowClickAction(openMode: DataTabOpenMode = "reuse") {
   const node = props.node;
   if (node.type === "load-more") {
     void loadMoreObjectGroupChildren();
@@ -585,7 +586,7 @@ function runRowClickAction() {
   }
   const action = treeNodeRowAction(node.type, canExpand.value, settingsStore.editorSettings.sidebarActivation);
   if (action === "open-data") {
-    openData();
+    openData(openMode);
   } else if (node.type === "mongo-collection") {
     openMongoCollectionData(node);
   } else if (node.type === "procedure" || node.type === "function" || node.type === "sequence" || node.type === "package" || node.type === "package-body") {
@@ -673,6 +674,14 @@ function onClick(event: MouseEvent) {
   // Row clicks must not bubble to the tree container, whose click handler
   // clears the selection when the blank area is clicked (issue #681).
   event.stopPropagation();
+  const shortcutOpenMode = dataTabOpenModeFromTreeClick(props.node.type, event);
+  if (shortcutOpenMode === "new-tab") {
+    event.preventDefault();
+    selectSingleTreeNode(props.node);
+    rowRef.value?.focus({ preventScroll: true });
+    runRowClickAction(shortcutOpenMode);
+    return;
+  }
   if (event.shiftKey) {
     selectTreeNodeRange(props.node);
     rowRef.value?.focus({ preventScroll: true });
@@ -895,7 +904,7 @@ async function openUserAdmin() {
   }
 }
 
-async function openData() {
+async function openData(openMode: DataTabOpenMode = "reuse") {
   const node = props.node;
   if (!(node.type === "table" || node.type === "view" || node.type === "materialized_view") || !hasNodeDatabaseContext(node)) return;
   const config = connectionStore.getConfig(node.connectionId);
@@ -925,9 +934,15 @@ async function openData() {
   });
   const tableSchema = connectionObjectTreeNodeSchema(config, node.database, node.schema);
   const tableType = node.type === "view" ? "VIEW" : node.type === "materialized_view" ? "MATERIALIZED_VIEW" : (node.tableType ?? "TABLE");
-  const isSameDataTableTab = (tab: (typeof queryStore.tabs)[number]) => tab.mode === "data" && tab.connectionId === node.connectionId && tab.database === node.database && (tab.schema || "") === (tableSchema || "") && (tab.tableMeta?.tableName || tab.title) === node.label;
+  const dataTabTarget = {
+    connectionId: node.connectionId,
+    database: node.database,
+    schema: tableSchema,
+    tableName: node.label,
+    title: node.label,
+  };
   const activateExistingSameTableTab = () => {
-    const existing = queryStore.tabs.find(isSameDataTableTab);
+    const existing = findSameDataTableTab(queryStore.tabs, dataTabTarget);
     if (!existing) return false;
     queryStore.activeTabId = existing.id;
     return true;
@@ -960,8 +975,8 @@ async function openData() {
   }
 
   const tabId = (() => {
-    if (settingsStore.editorSettings.reuseDataTab) {
-      const existing = queryStore.tabs.find((tab) => tab.mode === "data" && tab.connectionId === node.connectionId && tab.database === node.database);
+    if (shouldReuseDataTab(openMode, settingsStore.editorSettings.reuseDataTab)) {
+      const existing = findReusableDataTab(queryStore.tabs, dataTabTarget, queryStore.activeTabId);
       if (existing) {
         queryStore.activeTabId = existing.id;
         resetReusedDataTabState(existing);
