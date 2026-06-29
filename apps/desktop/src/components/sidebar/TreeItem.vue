@@ -3672,6 +3672,10 @@ function treeItemMenuItems(): ContextMenuItem[] {
 
   // 4. Database / Schema
   if (node.type === "database" || node.type === "schema") {
+    if (canCloseDatabaseConnection.value) {
+      items.push({ label: t("contextMenu.closeDatabaseConnection"), action: closeDatabaseConnection, icon: Unplug });
+      items.push({ label: "", separator: true });
+    }
     items.push({ label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
     items.push({ label: "", separator: true });
     if (canOpenObjectBrowser.value) {
@@ -3723,10 +3727,6 @@ function treeItemMenuItems(): ContextMenuItem[] {
     items.push({ label: t("diff.title"), action: openSchemaDiff, icon: ArrowRightLeft });
     items.push({ label: t("dataCompare.title"), action: openDataCompare, icon: ArrowRightLeft });
     items.push({ label: t("contextMenu.exportDatabase"), action: openDatabaseExport, icon: Upload });
-    if (canCloseDatabaseConnection.value) {
-      items.push({ label: "", separator: true });
-      items.push({ label: t("contextMenu.closeDatabaseConnection"), action: closeDatabaseConnection, icon: Unplug });
-    }
     if (canDropDatabase.value || canDropSchema.value) {
       items.push({ label: "", separator: true });
     }
