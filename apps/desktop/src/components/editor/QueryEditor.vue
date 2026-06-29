@@ -62,6 +62,7 @@ const props = defineProps<{
   executionErrorSql?: string;
   readOnly?: boolean;
   forceWordWrap?: boolean;
+  autoFocus?: boolean;
   initialViewport?: { scrollTop: number; scrollLeft: number };
   initialSelection?: { anchor: number; head: number };
 }>();
@@ -2383,6 +2384,13 @@ watch(
   },
 );
 
+watch(
+  () => props.autoFocus,
+  (autoFocus) => {
+    if (autoFocus) restoreEditorFocus();
+  },
+);
+
 // Derive current custom theme colors from settingsStore
 function getCurrentCustomThemeColors() {
   const settings = settingsStore.editorSettings;
@@ -2515,7 +2523,9 @@ function restoreEditorSelection() {
 }
 
 function restoreEditorFocus() {
+  if (props.autoFocus === false) return;
   const focusEditorAcrossFrames = () => {
+    if (props.autoFocus === false) return;
     if (!view.value || view.value.hasFocus) return;
     view.value.focus();
   };

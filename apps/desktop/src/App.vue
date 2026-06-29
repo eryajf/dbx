@@ -58,6 +58,8 @@ import {
   isResetZoomShortcut,
   isRefreshDataShortcut,
   isSaveShortcut,
+  isSplitQueryHorizontallyShortcut,
+  isSplitQueryVerticallyShortcut,
   isToggleSidebarShortcut,
   isZoomInShortcut,
   isZoomOutShortcut,
@@ -128,14 +130,19 @@ const aiPanelReady = ref(false);
 const { sidebarWidth, aiPanelWidth, historyWidth, sqlLibraryWidth, startSidebarResize, startAiPanelResize, startHistoryResize, startSqlLibraryResize } = usePanelResize();
 const aiAssistantRef = ref<AiAssistantHandle | null>(null);
 const appSidebarRef = ref<InstanceType<typeof AppSidebar> | null>(null);
-const contentAreaRef = ref<InstanceType<typeof ContentArea> | null>(null);
+type ContentAreaHandle = Pick<InstanceType<typeof ContentArea>, "focusSearch" | "refreshData" | "handleModRTarget" | "requestQueryEditorExecute">;
+const contentAreaRef = ref<ContentAreaHandle | null>(null);
 
 const selectedSql = ref("");
 const cursorPos = ref(0);
+const selectedSqlByTabId = ref<Record<string, string>>({});
+const cursorPosByTabId = ref<Record<string, number>>({});
+const outputViewByTabId = ref<Record<string, "result" | "summary" | "explain" | "chart">>({});
 const formatSqlRequest = ref<{ id: number; tabId: string } | null>(null);
 const activeOutputView = ref<"result" | "summary" | "explain" | "chart">("result");
 const newQueryContextSource = ref<"tab" | "sidebar">("tab");
 const queryEditorDdlTarget = ref<{ connectionId: string; database: string; schema?: string; tableName: string } | null>(null);
+const draggedTabId = ref<string | null>(null);
 const showSaveSqlDialog = ref(false);
 const saveSqlName = ref("");
 const saveSqlFolderId = ref("");
@@ -149,6 +156,19 @@ const activeConnection = computed(() => {
   const tab = activeTab.value;
   return tab ? connectionStore.getConfig(tab.connectionId) : undefined;
 });
+
+function setOutputView(tabId: string, value: "result" | "summary" | "explain" | "chart") {
+  outputViewByTabId.value = { ...outputViewByTabId.value, [tabId]: value };
+  if (tabId === queryStore.activeTabId) activeOutputView.value = value;
+}
+
+function activateQueryTab(tabId: string) {
+  if (queryStore.activeTabId === tabId) return;
+  queryStore.activeTabId = tabId;
+  selectedSql.value = selectedSqlByTabId.value[tabId] ?? "";
+  cursorPos.value = cursorPosByTabId.value[tabId] ?? queryStore.tabs.find((tab) => tab.id === tabId)?.sql.length ?? 0;
+  activeOutputView.value = outputViewByTabId.value[tabId] ?? "result";
+}
 
 function updateAgentDriverUpdateCount(count: number) {
   if (!settingsStore.editorSettings.updateNotificationsEnabled) {
@@ -196,13 +216,16 @@ const executableSql = computed(() => {
 
 async function resolveActiveExecutableSql(snapshot?: SqlExecutionSnapshot) {
   const tab = activeTab.value;
-  return tab
-    ? await resolveExecutableSqlWithBackend(snapshot?.fullSql ?? tab.sql, snapshot?.selectedSql ?? selectedSql.value, {
-        mode: settingsStore.editorSettings.executeMode,
-        cursorPos: snapshot?.cursorPos ?? cursorPos.value,
-        databaseType: activeConnection.value?.db_type,
-      })
-    : "";
+  return tab ? await resolveExecutableSqlForTab(tab, snapshot) : "";
+}
+
+async function resolveExecutableSqlForTab(tab: QueryTab, snapshot?: SqlExecutionSnapshot) {
+  const connection = connectionStore.getConfig(tab.connectionId);
+  return await resolveExecutableSqlWithBackend(snapshot?.fullSql ?? tab.sql, snapshot?.selectedSql ?? selectedSqlByTabId.value[tab.id] ?? selectedSql.value, {
+    mode: settingsStore.editorSettings.executeMode,
+    cursorPos: snapshot?.cursorPos ?? cursorPosByTabId.value[tab.id] ?? cursorPos.value,
+    databaseType: connection?.db_type,
+  });
 }
 
 const blockDangerousRedisCommands = ref(true);
@@ -217,12 +240,13 @@ function promptActiveDatabaseSelection() {
   toast(t("editor.selectDatabaseRequired"), 2500);
 }
 
-const { dangerSql, pendingDangerSql, showDangerDialog, suppressDangerConfirm, tryExecute, doExecute, cancelActiveExecution, tryExplain, onDangerConfirm, showSqlParameterDialog, sqlParameterSourceSql, sqlParameterNames, onSqlParametersConfirm, explainMode } = useSqlExecution({
+const { dangerSql, pendingDangerSql, showDangerDialog, suppressDangerConfirm, tryExecute, tryExecuteForTab, doExecute, cancelActiveExecution, tryExplain, onDangerConfirm, showSqlParameterDialog, sqlParameterSourceSql, sqlParameterNames, onSqlParametersConfirm, explainMode } = useSqlExecution({
   activeTab,
   activeConnection,
   executableSql,
   resolveExecutableSql: resolveActiveExecutableSql,
   activeOutputView,
+  setOutputView,
   blockDangerousRedisCommands,
   onMissingDatabase: promptActiveDatabaseSelection,
 });
@@ -230,6 +254,67 @@ const { dangerSql, pendingDangerSql, showDangerDialog, suppressDangerConfirm, tr
 function requestActiveEditorExecute() {
   if (contentAreaRef.value?.requestQueryEditorExecute?.()) return;
   void tryExecute();
+}
+
+function duplicateQueryTabForSplit(source: QueryTab, position: "right" | "bottom") {
+  const id = queryStore.createTab(source.connectionId, source.database, undefined, "query", source.schema);
+  queryStore.updateSql(id, source.sql);
+  queryStore.splitQueryPane(source.id, id, position);
+  activateQueryTab(id);
+  return id;
+}
+
+function splitActiveQueryPane(position: "right" | "bottom") {
+  const tab = activeTab.value;
+  if (!tab || tab.mode !== "query") return false;
+  duplicateQueryTabForSplit(tab, position);
+  return true;
+}
+
+function onQueryPaneExecute(tab: QueryTab, sqlOverride?: SqlExecutionSnapshot | string) {
+  activateQueryTab(tab.id);
+  void tryExecuteForTab(tab, sqlOverride);
+}
+
+function onQueryPaneSelectionChange(tabId: string, value: string) {
+  selectedSqlByTabId.value = { ...selectedSqlByTabId.value, [tabId]: value };
+  if (tabId === queryStore.activeTabId) selectedSql.value = value;
+}
+
+function onQueryPaneCursorChange(tabId: string, pos: number) {
+  cursorPosByTabId.value = { ...cursorPosByTabId.value, [tabId]: pos };
+  if (tabId === queryStore.activeTabId) cursorPos.value = pos;
+}
+
+function onTabDragState(state: { active: boolean; draggedId: string | null }) {
+  draggedTabId.value = state.active ? state.draggedId : null;
+}
+
+function queryDropPosition(event: DragEvent | MouseEvent): "top" | "right" | "bottom" | "left" {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const distances = [
+    { position: "left" as const, value: x },
+    { position: "right" as const, value: rect.width - x },
+    { position: "top" as const, value: y },
+    { position: "bottom" as const, value: rect.height - y },
+  ];
+  distances.sort((a, b) => a.value - b.value);
+  return distances[0].position;
+}
+
+function onQueryLayoutDrop(event: MouseEvent) {
+  const tabId = draggedTabId.value;
+  const target = activeTab.value;
+  if (!tabId || !target || target.mode !== "query" || tabId === target.id) return;
+  const tab = queryStore.tabs.find((item) => item.id === tabId);
+  if (tab?.mode !== "query") return;
+  event.preventDefault();
+  event.stopPropagation();
+  queryStore.splitQueryPane(target.id, tabId, queryDropPosition(event));
+  activateQueryTab(tabId);
+  draggedTabId.value = null;
 }
 
 const dialogs = useDialogSources();
@@ -1197,6 +1282,16 @@ function handleKeydown(e: KeyboardEvent) {
     void newQuery();
     return;
   }
+  if (isSplitQueryVerticallyShortcut(e, shortcuts) && splitActiveQueryPane("right")) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (isSplitQueryHorizontallyShortcut(e, shortcuts) && splitActiveQueryPane("bottom")) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   if (isToggleSidebarShortcut(e, shortcuts)) {
     e.preventDefault();
     e.stopPropagation();
@@ -1490,6 +1585,7 @@ onUnmounted(() => {
                 :driver-store-open="driverStoreTabOpen"
                 :driver-store-active="driverStoreActive"
                 :agent-driver-update-count="toolbarAgentDriverUpdateCount"
+                @tab-drag-state="onTabDragState"
                 @activate-driver-store="
                   driverStoreTabOpen = true;
                   driverStoreActive = true;
@@ -1502,7 +1598,7 @@ onUnmounted(() => {
                 @save-tab="handleSaveTab"
               />
               <DriverStorePage v-if="driverStoreTabOpen" v-show="driverStoreActive" class="flex-1 min-h-0" :update-notifications-enabled="updateNotificationsEnabled" @update-count-change="updateAgentDriverUpdateCount" />
-              <div v-if="activeTab" v-show="!driverStoreActive" class="flex flex-col flex-1 min-h-0">
+              <div v-if="activeTab" v-show="!driverStoreActive" class="flex flex-col flex-1 min-h-0" @mouseup.capture="onQueryLayoutDrop">
                 <EditorToolbar
                   v-if="activeTab.mode === 'query' && !isPreviewTab(activeTab)"
                   :active-tab="activeTab"
@@ -1522,6 +1618,8 @@ onUnmounted(() => {
                   @save-sql="void openSaveSqlDialog()"
                   @open-sql="openSqlFile"
                   @import-result-archive="importResultArchive"
+                  @split-query-vertically="splitActiveQueryPane('right')"
+                  @split-query-horizontally="splitActiveQueryPane('bottom')"
                   @change-connection="changeActiveConnection"
                   @change-database="changeActiveDatabase"
                   @change-schema="changeActiveSchema"
@@ -1541,12 +1639,12 @@ onUnmounted(() => {
                     :cursor-pos="cursorPos"
                     @update:active-output-view="activeOutputView = $event"
                     @fix-with-ai="fixWithAi"
-                    @execute="tryExecute($event)"
+                    @execute="(sqlOverride, tab) => (tab ? onQueryPaneExecute(tab, sqlOverride) : tryExecute(sqlOverride))"
                     @cancel="cancelActiveExecution()"
                     @explain="tryExplain()"
                     @editor-update="(tabId: string, v: string) => queryStore.updateSql(tabId, v)"
-                    @editor-selection-change="(v: string) => (selectedSql = v)"
-                    @editor-cursor-change="(p: number) => (cursorPos = p)"
+                    @editor-selection-change="(v: string, tabId?: string) => (tabId ? onQueryPaneSelectionChange(tabId, v) : (selectedSql = v))"
+                    @editor-cursor-change="(p: number, tabId?: string) => (tabId ? onQueryPaneCursorChange(tabId, p) : (cursorPos = p))"
                     @editor-viewport-change="(tabId: string, viewport: { scrollTop: number; scrollLeft: number }) => queryStore.updateEditorViewport(tabId, viewport)"
                     @editor-selection-state-change="(tabId: string, selection: { anchor: number; head: number }) => queryStore.updateEditorSelection(tabId, selection)"
                     @format-error="toast(t('toolbar.formatSqlFailed'))"
@@ -1586,6 +1684,7 @@ onUnmounted(() => {
                     "
                     @structure-editor-close="activeTab && queryStore.closeTab(activeTab.id)"
                     @open-settings="openSettings"
+                    @activate-tab="activateQueryTab"
                   />
                 </KeepAlive>
               </div>

@@ -75,6 +75,14 @@ export function isNewQueryShortcut(event: ShortcutLikeEvent, shortcuts?: Partial
   return matchesShortcut(event, actionShortcut("newQuery", shortcuts));
 }
 
+export function isSplitQueryVerticallyShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
+  return matchesShortcut(event, actionShortcut("splitQueryVertically", shortcuts));
+}
+
+export function isSplitQueryHorizontallyShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
+  return matchesShortcut(event, actionShortcut("splitQueryHorizontally", shortcuts));
+}
+
 export function isOpenSettingsShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
   return matchesShortcut(event, actionShortcut("openSettings", shortcuts));
 }

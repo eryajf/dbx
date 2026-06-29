@@ -37,3 +37,15 @@ describe("shortcutRegistry editor actions", () => {
     expect(findShortcutConflict("duplicateLine", shortcuts.duplicateLine, shortcuts)).toBe("find");
   });
 });
+
+describe("shortcutRegistry query split actions", () => {
+  it("registers iTerm-style query split shortcuts as global actions", () => {
+    const vertical = SHORTCUT_DEFINITIONS.find((item) => item.id === "splitQueryVertically");
+    const horizontal = SHORTCUT_DEFINITIONS.find((item) => item.id === "splitQueryHorizontally");
+
+    expect(vertical).toMatchObject({ scope: "global", defaultShortcut: "Mod+D" });
+    expect(horizontal).toMatchObject({ scope: "global", defaultShortcut: "Shift+Mod+D" });
+    expect(DEFAULT_SHORTCUT_SETTINGS.splitQueryVertically).toBe("Mod+D");
+    expect(DEFAULT_SHORTCUT_SETTINGS.splitQueryHorizontally).toBe("Shift+Mod+D");
+  });
+});

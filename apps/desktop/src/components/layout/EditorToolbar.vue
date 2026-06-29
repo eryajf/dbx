@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
-import { Play, Loader2, Square, Database, Check, Table2, AlignLeft, GitBranch, Save, FolderOpen, Layers, X, Shield, Upload } from "@lucide/vue";
+import { Play, Loader2, Square, Database, Check, Table2, AlignLeft, GitBranch, Save, FolderOpen, Layers, X, Shield, Upload, PanelRight, PanelBottom } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -38,6 +38,8 @@ const emit = defineEmits<{
   saveSql: [];
   openSql: [];
   importResultArchive: [];
+  splitQueryVertically: [];
+  splitQueryHorizontally: [];
   changeConnection: [connectionId: string];
   changeDatabase: [database: string];
   changeSchema: [schema: string | undefined];
@@ -236,6 +238,23 @@ function connectionById(connectionId: string): ConnectionConfig | undefined {
           </Button>
         </TooltipTrigger>
         <TooltipContent>{{ t("tabs.importResultArchive") }}</TooltipContent>
+      </Tooltip>
+      <span class="mx-0.5 h-4 w-px bg-border" />
+      <Tooltip>
+        <TooltipTrigger as-child>
+          <Button variant="ghost" size="icon" class="h-6 w-6 text-muted-foreground hover:bg-muted hover:text-foreground" :aria-label="t('toolbar.splitQueryVertically')" @click="emit('splitQueryVertically')">
+            <PanelRight class="h-3.5 w-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{{ t("toolbar.splitQueryVertically") }}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger as-child>
+          <Button variant="ghost" size="icon" class="h-6 w-6 text-muted-foreground hover:bg-muted hover:text-foreground" :aria-label="t('toolbar.splitQueryHorizontally')" @click="emit('splitQueryHorizontally')">
+            <PanelBottom class="h-3.5 w-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{{ t("toolbar.splitQueryHorizontally") }}</TooltipContent>
       </Tooltip>
     </div>
     <span class="flex-1 min-w-0" />

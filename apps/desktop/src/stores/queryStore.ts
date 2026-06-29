@@ -9,6 +9,7 @@ import { closeAllTabsState, closeOtherTabsState } from "@/lib/tabCloseActions";
 import { buildExplainSql, parseExplainResult, parseDamengExplainText } from "@/lib/explainPlan";
 import { allEditableColumnsWriteable, allPrimaryKeysPresent, analyzeEditableQuery, sourceColumnsForResult, type EditableQueryInfo } from "@/lib/sqlAnalysis";
 import { restoreOpenTabsState, serializeOpenTabs } from "@/lib/openTabsPersistence";
+import { normalizeQueryPaneLayout, queryPaneLayoutHasTab, queryPaneLayoutTabIds, removeTabFromQueryPaneLayout, resizeQueryPaneSplit, splitQueryPaneLayout, type QueryPaneDropPosition, type QueryPaneLayoutNode } from "@/lib/queryPaneLayout";
 import {
   evaluateMongoAggregateSafety,
   mongoCountToQueryResult,
@@ -48,6 +49,7 @@ import type { SavedSqlFile } from "@/types/database";
 
 const STORAGE_KEY = "dbx-open-tabs";
 const ACTIVE_TAB_KEY = "dbx-active-tab";
+const QUERY_PANE_LAYOUT_KEY = "dbx-query-pane-layout";
 const ORACLE_LIKE_METADATA_TYPES = new Set<string>(["oracle", "dameng", "oceanbase-oracle"]);
 const BACKGROUND_CLIENT_SESSION_SUFFIXES = ["count", "explain", "export"] as const;
 const CANCEL_QUERY_TIMEOUT_MS = 10_000;
@@ -153,16 +155,19 @@ function normalizeOracleLikeQueryAnalysis(dbType: string, analysis: EditableQuer
   };
 }
 
-function saveTabs(tabs: QueryTab[], activeTabId: string | null) {
+function saveTabs(tabs: QueryTab[], activeTabId: string | null, queryPaneLayout?: QueryPaneLayoutNode | null) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeOpenTabs(tabs)));
     localStorage.setItem(ACTIVE_TAB_KEY, activeTabId || "");
+    localStorage.setItem(QUERY_PANE_LAYOUT_KEY, JSON.stringify(queryPaneLayout ?? null));
   } catch {}
 }
 
-function loadSavedTabs(): { tabs: QueryTab[]; activeTabId: string | null } {
+function loadSavedTabs(): { tabs: QueryTab[]; activeTabId: string | null; queryPaneLayout?: QueryPaneLayoutNode | null } {
   try {
-    return restoreOpenTabsState(localStorage.getItem(STORAGE_KEY), localStorage.getItem(ACTIVE_TAB_KEY));
+    return restoreOpenTabsState(localStorage.getItem(STORAGE_KEY), localStorage.getItem(ACTIVE_TAB_KEY), {
+      rawQueryPaneLayout: localStorage.getItem(QUERY_PANE_LAYOUT_KEY),
+    });
   } catch {
     return { tabs: [], activeTabId: null };
   }
@@ -181,6 +186,13 @@ export const useQueryStore = defineStore("query", () => {
   const restored = loadSavedTabs();
   const tabs = ref<QueryTab[]>(restored.tabs);
   const activeTabId = ref<string | null>(restored.activeTabId);
+  const queryPaneLayout = ref<QueryPaneLayoutNode | null>(
+    normalizeQueryPaneLayout(
+      restored.queryPaneLayout,
+      restored.tabs.filter((tab) => tab.mode === "query").map((tab) => tab.id),
+      restored.activeTabId,
+    ),
+  );
   const showCloseConfirm = ref(false);
   const pendingCloseTabId = ref<string | null>(null);
   for (const tab of restored.tabs) {
@@ -532,37 +544,40 @@ export const useQueryStore = defineStore("query", () => {
   }
 
   const _persistSnapshot = computed(() =>
-    tabs.value.map((t) => ({
-      id: t.id,
-      title: t.title,
-      connectionId: t.connectionId,
-      database: t.database,
-      schema: t.schema,
-      sql: t.sql,
-      savedSqlId: t.savedSqlId,
-      externalSqlPath: t.externalSqlPath,
-      lastExecutedSql: t.lastExecutedSql,
-      resultBaseSql: t.resultBaseSql,
-      resultSortedSql: t.resultSortedSql,
-      resultSortColumn: t.resultSortColumn,
-      resultSortColumnIndex: t.resultSortColumnIndex,
-      resultSortDirection: t.resultSortDirection,
-      resultSortMode: t.resultSortMode,
-      orderByInput: t.orderByInput,
-      resultPageLimit: t.resultPageLimit,
-      resultPageOffset: t.resultPageOffset,
-      whereInput: t.whereInput,
-      pinned: t.pinned,
-      mode: t.mode,
-      resultAutoSave: t.resultAutoSave,
-      structureTableName: t.structureTableName,
-      objectBrowser: t.objectBrowser,
-      objectSource: t.objectSource,
-      tableMeta: t.tableMeta,
-      mongoEditTarget: t.mongoEditTarget,
-      resultEvicted: t.resultEvicted,
-      resultCacheKey: t.resultCacheKey,
-    })),
+    JSON.stringify({
+      tabs: tabs.value.map((t) => ({
+        id: t.id,
+        title: t.title,
+        connectionId: t.connectionId,
+        database: t.database,
+        schema: t.schema,
+        sql: t.sql,
+        savedSqlId: t.savedSqlId,
+        externalSqlPath: t.externalSqlPath,
+        lastExecutedSql: t.lastExecutedSql,
+        resultBaseSql: t.resultBaseSql,
+        resultSortedSql: t.resultSortedSql,
+        resultSortColumn: t.resultSortColumn,
+        resultSortColumnIndex: t.resultSortColumnIndex,
+        resultSortDirection: t.resultSortDirection,
+        resultSortMode: t.resultSortMode,
+        orderByInput: t.orderByInput,
+        resultPageLimit: t.resultPageLimit,
+        resultPageOffset: t.resultPageOffset,
+        whereInput: t.whereInput,
+        pinned: t.pinned,
+        mode: t.mode,
+        resultAutoSave: t.resultAutoSave,
+        structureTableName: t.structureTableName,
+        objectBrowser: t.objectBrowser,
+        objectSource: t.objectSource,
+        tableMeta: t.tableMeta,
+        mongoEditTarget: t.mongoEditTarget,
+        resultEvicted: t.resultEvicted,
+        resultCacheKey: t.resultCacheKey,
+      })),
+      queryPaneLayout: queryPaneLayout.value,
+    }),
   );
 
   let _persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -571,7 +586,7 @@ export const useQueryStore = defineStore("query", () => {
     () => {
       if (_persistTimer) clearTimeout(_persistTimer);
       _persistTimer = setTimeout(() => {
-        saveTabs(tabs.value, activeTabId.value);
+        saveTabs(tabs.value, activeTabId.value, queryPaneLayout.value);
         _persistTimer = null;
       }, 300);
     },
@@ -587,7 +602,7 @@ export const useQueryStore = defineStore("query", () => {
       clearTimeout(_persistTimer);
       _persistTimer = null;
     }
-    saveTabs(tabs.value, activeTabId.value);
+    saveTabs(tabs.value, activeTabId.value, queryPaneLayout.value);
   }
 
   function findTabByIdentity(connectionId: string, database: string, title: string, mode: QueryTab["mode"], schema?: string) {
@@ -778,6 +793,54 @@ export const useQueryStore = defineStore("query", () => {
     if (tab) tab.originalSql = tab.sql;
   }
 
+  function normalizeCurrentQueryPaneLayout() {
+    queryPaneLayout.value = normalizeQueryPaneLayout(
+      queryPaneLayout.value,
+      tabs.value.filter((tab) => tab.mode === "query").map((tab) => tab.id),
+      activeTabId.value,
+    );
+  }
+
+  function removeQueryPaneTab(id: string) {
+    queryPaneLayout.value = normalizeQueryPaneLayout(
+      removeTabFromQueryPaneLayout(queryPaneLayout.value, id),
+      tabs.value.filter((tab) => tab.mode === "query" && tab.id !== id).map((tab) => tab.id),
+      activeTabId.value === id ? undefined : activeTabId.value,
+    );
+  }
+
+  function splitQueryPane(targetTabId: string, newTabId: string, position: QueryPaneDropPosition) {
+    const target = tabs.value.find((tab) => tab.id === targetTabId);
+    const next = tabs.value.find((tab) => tab.id === newTabId);
+    if (target?.mode !== "query" || next?.mode !== "query" || targetTabId === newTabId) return;
+    const baseLayout = queryPaneLayoutHasTab(queryPaneLayout.value, targetTabId) ? queryPaneLayout.value : null;
+    queryPaneLayout.value = normalizeQueryPaneLayout(
+      splitQueryPaneLayout(baseLayout, targetTabId, newTabId, position),
+      tabs.value.filter((tab) => tab.mode === "query").map((tab) => tab.id),
+      activeTabId.value,
+    );
+    activeTabId.value = newTabId;
+  }
+
+  function resizeQueryPane(splitId: string, sizes: number[]) {
+    queryPaneLayout.value = resizeQueryPaneSplit(queryPaneLayout.value, splitId, sizes);
+  }
+
+  function closeQueryPane(tabId: string) {
+    if (!queryPaneLayoutHasTab(queryPaneLayout.value, tabId)) return;
+    const remainingTabIds = queryPaneLayoutTabIds(queryPaneLayout.value).filter((id) => id !== tabId);
+    if (remainingTabIds.length === 0) {
+      queryPaneLayout.value = normalizeQueryPaneLayout(
+        null,
+        tabs.value.filter((tab) => tab.mode === "query").map((tab) => tab.id),
+        activeTabId.value,
+      );
+      return;
+    }
+    if (activeTabId.value === tabId) activeTabId.value = remainingTabIds[0] ?? null;
+    queryPaneLayout.value = normalizeQueryPaneLayout(removeTabFromQueryPaneLayout(queryPaneLayout.value, tabId), remainingTabIds, activeTabId.value);
+  }
+
   function closeTab(id: string, { force = false }: { force?: boolean } = {}) {
     const tab = tabs.value.find((t) => t.id === id);
     if (!tab) return;
@@ -796,8 +859,10 @@ export const useQueryStore = defineStore("query", () => {
     clearResultRunSnapshots(tabs.value[idx]);
     clearResultPayload(tabs.value[idx]);
     tabs.value.splice(idx, 1);
+    removeQueryPaneTab(id);
     if (activeTabId.value === id) {
       activeTabId.value = tabs.value[Math.min(idx, tabs.value.length - 1)]?.id ?? null;
+      normalizeCurrentQueryPaneLayout();
     }
   }
 
@@ -836,6 +901,7 @@ export const useQueryStore = defineStore("query", () => {
     const next = closeOtherTabsState(tabs.value, activeTabId.value, id);
     tabs.value = next.tabs;
     activeTabId.value = next.activeTabId;
+    normalizeCurrentQueryPaneLayout();
   }
 
   function closeAllTabs() {
@@ -851,6 +917,7 @@ export const useQueryStore = defineStore("query", () => {
     const next = closeAllTabsState(tabs.value, activeTabId.value);
     tabs.value = next.tabs;
     activeTabId.value = next.activeTabId;
+    queryPaneLayout.value = null;
   }
 
   function duplicateTab(id: string) {
@@ -942,6 +1009,7 @@ export const useQueryStore = defineStore("query", () => {
     if (activeClosingIndex >= 0) {
       activeTabId.value = tabs.value[Math.min(activeClosingIndex, tabs.value.length - 1)]?.id ?? null;
     }
+    normalizeCurrentQueryPaneLayout();
   }
 
   function closeConnectionTabs(connectionId: string) {
@@ -1219,6 +1287,10 @@ export const useQueryStore = defineStore("query", () => {
   async function executeCurrentSql(sql: string, options?: { skipRedisSafetyCheck?: boolean }) {
     if (!activeTabId.value) return;
     await executeTabSql(activeTabId.value, sql, { resultBaseSql: sql, resultSortedSql: undefined, ...options });
+  }
+
+  async function executeTabSqlFromEditor(tabId: string, sql: string, options?: { skipRedisSafetyCheck?: boolean }) {
+    await executeTabSql(tabId, sql, { resultBaseSql: sql, resultSortedSql: undefined, ...options });
   }
 
   type QueryMetadataPatch = Pick<QueryTab, "queryAnalysis" | "querySourceColumns" | "queryEditabilityReason" | "tableMeta">;
@@ -2405,6 +2477,7 @@ export const useQueryStore = defineStore("query", () => {
   return {
     tabs,
     activeTabId,
+    queryPaneLayout,
     showCloseConfirm,
     pendingCloseTabId,
     createTab,
@@ -2437,6 +2510,10 @@ export const useQueryStore = defineStore("query", () => {
     hydrateSavedSqlTabs,
     togglePinnedTab,
     reorderTab,
+    splitQueryPane,
+    resizeQueryPane,
+    closeQueryPane,
+    normalizeCurrentQueryPaneLayout,
     updateDatabase,
     updateSchema,
     updateConnection,
@@ -2453,6 +2530,7 @@ export const useQueryStore = defineStore("query", () => {
     setActiveResultIndex,
     executeCurrentTab,
     executeCurrentSql,
+    executeTabSqlFromEditor,
     executeTabSql,
     sortTabResultLocally,
     explainTabSql,

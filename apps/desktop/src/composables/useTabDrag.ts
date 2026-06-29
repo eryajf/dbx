@@ -166,10 +166,18 @@ export function useTabDrag(onDrop: (draggedId: string, targetId: string, positio
     }
   }
 
+  function dropOnTarget(targetId: string, position: TabDropPosition) {
+    if (!state.active || !state.draggedId || state.draggedId === targetId) return false;
+    onDropCallback?.(state.draggedId, targetId, position);
+    reset();
+    return true;
+  }
+
   return {
     state: readonly(state),
     startDrag,
     updateTarget,
     clearTarget,
+    dropOnTarget,
   };
 }

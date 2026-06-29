@@ -17,6 +17,8 @@ export type ShortcutActionId =
   | "copyCurrentRow"
   | "deleteCurrentRow"
   | "newQuery"
+  | "splitQueryVertically"
+  | "splitQueryHorizontally"
   | "openSettings"
   | "closeTab"
   | "focusSearch"
@@ -150,6 +152,18 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     labelKey: "settings.shortcutNewQuery",
     scope: "global",
     defaultShortcut: "Mod+T",
+  },
+  {
+    id: "splitQueryVertically",
+    labelKey: "settings.shortcutSplitQueryVertically",
+    scope: "global",
+    defaultShortcut: "Mod+D",
+  },
+  {
+    id: "splitQueryHorizontally",
+    labelKey: "settings.shortcutSplitQueryHorizontally",
+    scope: "global",
+    defaultShortcut: "Shift+Mod+D",
   },
   {
     id: "openSettings",

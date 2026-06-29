@@ -1,4 +1,5 @@
 import type { QueryTab } from "@/types/database";
+import type { QueryPaneLayoutNode } from "@/lib/queryPaneLayout";
 
 export interface SavedQueryResultRun {
   id: string;
@@ -52,6 +53,7 @@ export interface SavedOpenTab {
 export interface RestoredOpenTabs {
   tabs: QueryTab[];
   activeTabId: string | null;
+  queryPaneLayout?: QueryPaneLayoutNode | null;
 }
 
 function shouldPersistTabSql(tab: QueryTab) {
@@ -118,7 +120,7 @@ function isSavedOpenTab(value: unknown): value is SavedOpenTab {
   return typeof tab.id === "string" && typeof tab.title === "string" && typeof tab.connectionId === "string" && typeof tab.database === "string" && (typeof tab.sql === "string" || typeof tab.savedSqlId === "string");
 }
 
-export function restoreOpenTabsState(rawTabs: string | null, rawActiveTabId: string | null, options: { queryOnly?: boolean } = {}): RestoredOpenTabs {
+export function restoreOpenTabsState(rawTabs: string | null, rawActiveTabId: string | null, options: { queryOnly?: boolean; rawQueryPaneLayout?: string | null } = {}): RestoredOpenTabs {
   if (!rawTabs) return { tabs: [], activeTabId: null };
 
   try {
@@ -162,8 +164,31 @@ export function restoreOpenTabsState(rawTabs: string | null, rawActiveTabId: str
     return {
       tabs,
       activeTabId: tabs.some((tab) => tab.id === activeTabId) ? activeTabId : tabs[0]?.id || null,
+      queryPaneLayout: parseQueryPaneLayout(options.rawQueryPaneLayout),
     };
   } catch {
     return { tabs: [], activeTabId: null };
   }
+}
+
+function parseQueryPaneLayout(raw: string | null | undefined): QueryPaneLayoutNode | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return isQueryPaneLayoutNode(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isQueryPaneLayoutNode(value: unknown): value is QueryPaneLayoutNode {
+  if (!value || typeof value !== "object") return false;
+  const node = value as Record<string, unknown>;
+  if (typeof node.id !== "string") return false;
+  if (node.type === "leaf") return typeof node.tabId === "string";
+  if (node.type !== "split") return false;
+  if (node.direction !== "horizontal" && node.direction !== "vertical") return false;
+  if (!Array.isArray(node.children) || node.children.length < 2) return false;
+  if (node.sizes !== undefined && (!Array.isArray(node.sizes) || node.sizes.some((size) => typeof size !== "number"))) return false;
+  return node.children.every(isQueryPaneLayoutNode);
 }

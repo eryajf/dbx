@@ -42,6 +42,7 @@ export function useSqlExecution(deps: {
   executableSql: ComputedRef<string>;
   resolveExecutableSql?: (snapshot?: SqlExecutionSnapshot) => Promise<string>;
   activeOutputView: Ref<"result" | "summary" | "explain" | "chart">;
+  setOutputView?: (tabId: string, value: "result" | "summary" | "explain" | "chart") => void;
   blockDangerousRedisCommands?: Ref<boolean>;
   onMissingDatabase?: () => void;
 }) {
@@ -60,16 +61,26 @@ export function useSqlExecution(deps: {
   const showSqlParameterDialog = ref(false);
   const sqlParameterSourceSql = ref("");
   const sqlParameterNames = ref<string[]>([]);
+  const executionTabOverride = ref<QueryTab | undefined>(undefined);
+
+  function currentTab() {
+    return executionTabOverride.value ?? deps.activeTab.value;
+  }
+
+  function setOutputViewForTab(tabId: string, value: "result" | "summary" | "explain" | "chart") {
+    if (deps.setOutputView) deps.setOutputView(tabId, value);
+    else deps.activeOutputView.value = value;
+  }
 
   async function resolvedExecutableSql(source?: SqlExecutionOverride): Promise<string> {
     if (typeof source === "string") return source;
-    if (deps.resolveExecutableSql) return await deps.resolveExecutableSql(source);
     if (isSqlExecutionSnapshot(source)) return resolveExecutableSql(source.fullSql, source.selectedSql, { cursorPos: source.cursorPos });
+    if (deps.resolveExecutableSql) return await deps.resolveExecutableSql(source);
     return deps.executableSql.value;
   }
 
   async function tryExecute(sqlOverride?: SqlExecutionOverride) {
-    const tab = deps.activeTab.value;
+    const tab = currentTab();
     const sql = await resolvedExecutableSql(sqlOverride);
     if (!tab || !sql.trim()) return;
     if (requiresDatabaseSelection(tab, deps.activeConnection.value)) {
@@ -116,19 +127,19 @@ export function useSqlExecution(deps: {
 
   async function doExecute(sql?: string) {
     sql ??= await resolvedExecutableSql();
-    const tab = deps.activeTab.value;
+    const tab = currentTab();
     if (!tab || !sql.trim()) return;
     if (requiresDatabaseSelection(tab, deps.activeConnection.value)) {
       deps.onMissingDatabase?.();
       return;
     }
-    deps.activeOutputView.value = "result";
+    setOutputViewForTab(tab.id, "result");
     const connName = connectionStore.getConfig(tab.connectionId)?.name || "";
     const start = Date.now();
     const isRedis = deps.activeConnection.value?.db_type === "redis";
-    await queryStore.executeCurrentSql(sql, isRedis ? { skipRedisSafetyCheck: deps.blockDangerousRedisCommands?.value === false } : undefined);
+    await queryStore.executeTabSqlFromEditor(tab.id, sql, isRedis ? { skipRedisSafetyCheck: deps.blockDangerousRedisCommands?.value === false } : undefined);
     if (tab.result && !tab.result.columns.length && !tab.results?.some((result) => result.columns.length > 0)) {
-      deps.activeOutputView.value = "summary";
+      setOutputViewForTab(tab.id, "summary");
     }
     const elapsed = Date.now() - start;
     const success = !tab.result?.columns.includes("Error");
@@ -168,22 +179,40 @@ export function useSqlExecution(deps: {
   }
 
   async function tryExplain(sqlOverride?: SqlExecutionOverride) {
-    const tab = deps.activeTab.value;
+    const tab = currentTab();
     const sql = await resolvedExecutableSql(sqlOverride);
     if (!tab || !sql.trim()) {
       toast(t("explain.emptySql"));
       return;
     }
 
-    deps.activeOutputView.value = "explain";
+    setOutputViewForTab(tab.id, "explain");
     const result = await queryStore.explainTabSql(tab.id, sql, deps.activeConnection.value?.db_type, explainMode.value);
     if (!result.ok) {
       toast(explainReasonMessage(result.reason), 5000);
       return;
     }
 
-    const current = deps.activeTab.value;
+    const current = currentTab();
     if (current?.explainError) toast(current.explainError, 5000);
+  }
+
+  async function tryExecuteForTab(tab: QueryTab, sqlOverride?: SqlExecutionOverride) {
+    executionTabOverride.value = tab;
+    try {
+      await tryExecute(sqlOverride);
+    } finally {
+      executionTabOverride.value = undefined;
+    }
+  }
+
+  async function tryExplainForTab(tab: QueryTab, sqlOverride?: SqlExecutionOverride) {
+    executionTabOverride.value = tab;
+    try {
+      await tryExplain(sqlOverride);
+    } finally {
+      executionTabOverride.value = undefined;
+    }
   }
 
   async function onDangerConfirm() {
@@ -209,9 +238,11 @@ export function useSqlExecution(deps: {
     showDangerDialog,
     suppressDangerConfirm,
     tryExecute,
+    tryExecuteForTab,
     doExecute,
     cancelActiveExecution,
     tryExplain,
+    tryExplainForTab,
     onDangerConfirm,
     showSqlParameterDialog,
     sqlParameterSourceSql,

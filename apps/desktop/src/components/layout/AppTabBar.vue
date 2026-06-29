@@ -29,6 +29,7 @@ const emit = defineEmits<{
   "activate-driver-store": [];
   "close-driver-store": [];
   "save-tab": [tabId: string];
+  "tab-drag-state": [state: { active: boolean; draggedId: string | null }];
 }>();
 
 const { t } = useI18n();
@@ -171,6 +172,11 @@ watch(
       tabScrollBehavior.value = "smooth";
     });
   },
+);
+
+watch(
+  () => [tabDrag.state.active, tabDrag.state.draggedId] as const,
+  ([active, draggedId]) => emit("tab-drag-state", { active, draggedId }),
 );
 
 watch(

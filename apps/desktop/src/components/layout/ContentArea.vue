@@ -12,6 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Switch } from "@/components/ui/switch";
 import LightTooltip from "@/components/ui/LightTooltip.vue";
 import QueryEditor from "@/components/editor/QueryEditor.vue";
+import QueryPaneLayout from "@/components/layout/QueryPaneLayout.vue";
 import ColumnInfoPanel from "@/components/editor/ColumnInfoPanel.vue";
 import QueryLoadingState from "@/components/common/QueryLoadingState.vue";
 import type { ColumnInfo } from "@/components/editor/ColumnInfoPanel.vue";
@@ -68,6 +69,7 @@ import { useTabScroll } from "@/composables/useTabScroll";
 import type { CustomSaveHandler } from "@/composables/useDataGridEditor";
 import type { QueryTab, ConnectionConfig, TableInfoTab, TreeNode, VectorCollectionMeta } from "@/types/database";
 import { sqlFormatDialectForDbType, type SqlFormatDialect } from "@/lib/sqlFormatter";
+import { queryPaneLayoutHasTab } from "@/lib/queryPaneLayout";
 
 type DataGridHandle = {
   onToolbarRefresh: () => Promise<void> | void;
@@ -115,13 +117,13 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:activeOutputView": [value: "result" | "summary" | "explain" | "chart"];
   fixWithAi: [errorMessage: string];
-  execute: [sqlOverride?: SqlExecutionOverride];
+  execute: [sqlOverride?: SqlExecutionOverride, tab?: QueryTab];
   saveSql: [];
   cancel: [];
   explain: [];
   editorUpdate: [tabId: string, value: string];
-  editorSelectionChange: [value: string];
-  editorCursorChange: [pos: number];
+  editorSelectionChange: [value: string, tabId?: string];
+  editorCursorChange: [pos: number, tabId?: string];
   editorViewportChange: [tabId: string, viewport: { scrollTop: number; scrollLeft: number }];
   editorSelectionStateChange: [tabId: string, selection: { anchor: number; head: number }];
   formatError: [];
@@ -137,6 +139,7 @@ const emit = defineEmits<{
   structureEditorSaved: [commentChanged: boolean];
   structureEditorClose: [];
   openSettings: [initialTab?: string, initialSection?: string];
+  activateTab: [tabId: string];
 }>();
 
 const { t } = useI18n();
@@ -171,6 +174,7 @@ const columnInfoLoading = ref(false);
 const columnInfoError = ref<string | undefined>(undefined);
 const dataGridRef = ref<DataGridHandle>();
 const queryEditorRef = ref<InstanceType<typeof QueryEditor>>();
+const queryPaneLayoutRef = ref<InstanceType<typeof QueryPaneLayout>>();
 const resultTabsScrollerRef = ref<HTMLElement | null>(null);
 const columnVisibilitySearch = ref("");
 const columnVisibilityOptions = computed(() => dataGridRef.value?.filteredColumnVisibilityOptions(columnVisibilitySearch.value) ?? []);
@@ -207,6 +211,10 @@ const activeTabDimension = computed(() => {
 });
 
 const activeSqlFormatDialect = computed<SqlFormatDialect>(() => sqlFormatDialectForDbType(activeEffectiveDatabaseType.value));
+const activeQueryPaneLayout = computed(() => {
+  if (props.activeTab.mode !== "query") return null;
+  return queryPaneLayoutHasTab(queryStore.queryPaneLayout, props.activeTab.id) ? queryStore.queryPaneLayout : null;
+});
 
 const editorDialect = computed<"mysql" | "postgres" | "sqlserver">(() => {
   if (activeEffectiveDatabaseType.value === "postgres" || activeEffectiveDatabaseType.value === "kwdb") return "postgres";
@@ -552,7 +560,7 @@ function focusSearch(): boolean {
   if (props.activeTab.mode === "etcd") return etcdKeyBrowserRef.value?.focusSearch() ?? false;
   if (props.activeTab.mode === "zookeeper") return zookeeperKeyBrowserRef.value?.focusSearch() ?? false;
   if (props.activeTab.mode === "objects") return objectBrowserRef.value?.focusSearch() ?? false;
-  if (props.activeTab.mode === "query") return queryEditorRef.value?.openSearch() ?? false;
+  if (props.activeTab.mode === "query") return queryPaneLayoutRef.value?.openSearch() ?? queryEditorRef.value?.openSearch() ?? false;
   return dataGridRef.value?.focusSearch() ?? false;
 }
 
@@ -612,7 +620,7 @@ function toggleResultAutoSave() {
 }
 
 function handleModRTarget(target: Element): boolean {
-  if (target.closest("[data-query-editor-root]")) return queryEditorRef.value?.openReplace() ?? false;
+  if (target.closest("[data-query-editor-root]")) return queryPaneLayoutRef.value?.openReplace() ?? queryEditorRef.value?.openReplace() ?? false;
   if (target.closest("[data-cell-detail-editor-root]")) return dataGridRef.value?.openCellDetailSearch() ?? false;
   if (target.closest("[data-grid-root]")) return refreshData();
   if (props.activeTab.mode === "data" && !props.activeTab.result && !props.activeTab.isExecuting) {
@@ -623,7 +631,7 @@ function handleModRTarget(target: Element): boolean {
 }
 
 function requestQueryEditorExecute() {
-  return queryEditorRef.value?.requestExecute();
+  return queryPaneLayoutRef.value?.requestExecute() ?? queryEditorRef.value?.requestExecute();
 }
 
 defineExpose({ focusSearch, refreshData, handleModRTarget, requestQueryEditorExecute });
@@ -636,7 +644,31 @@ defineExpose({ focusSearch, refreshData, handleModRTarget, requestQueryEditorExe
       <Splitpanes horizontal class="query-output-splitpanes flex-1 min-h-0 overflow-hidden" @resized="onResultsResized">
         <Pane class="min-h-0" :size="editorPaneSize" :min-size="resultsPaneOpen ? 15 : 100">
           <div class="h-full flex flex-col relative">
+            <QueryPaneLayout
+              v-if="activeQueryPaneLayout"
+              ref="queryPaneLayoutRef"
+              :node="activeQueryPaneLayout"
+              :active-pane-tab-id="activeTab.id"
+              :can-close-panes="activeQueryPaneLayout.type === 'split'"
+              :format-sql-request="formatSqlRequest"
+              :execution-errors-by-tab-id="{ [activeTab.id]: activeQueryError }"
+              @execute="(tab, sqlOverride) => emit('execute', sqlOverride, tab)"
+              @save-sql="emit('saveSql')"
+              @editor-update="(tabId, value) => emit('editorUpdate', tabId, value)"
+              @editor-selection-change="(tabId, value) => emit('editorSelectionChange', value, tabId)"
+              @editor-cursor-change="(tabId, pos) => emit('editorCursorChange', pos, tabId)"
+              @editor-viewport-change="(tabId, viewport) => emit('editorViewportChange', tabId, viewport)"
+              @editor-selection-state-change="(tabId, selection) => emit('editorSelectionStateChange', tabId, selection)"
+              @format-error="emit('formatError')"
+              @click-table="onHandleClickTable"
+              @view-table-data="onHandleViewTableData"
+              @view-table-ddl="onHandleViewTableDdl"
+              @click-column="(_tabId, columns, error) => onHandleClickColumn(columns, error)"
+              @close-column-panel="onHandleCloseColumnPanel"
+              @activate-tab="emit('activateTab', $event)"
+            />
             <QueryEditor
+              v-else
               ref="queryEditorRef"
               class="flex-1"
               :model-value="activeTab.sql"
@@ -652,6 +684,7 @@ defineExpose({ focusSearch, refreshData, handleModRTarget, requestQueryEditorExe
               :initial-viewport="activeTab.editorViewport"
               :initial-selection="activeTab.editorSelection"
               @update:model-value="emit('editorUpdate', activeTab.id, $event)"
+              @focusin="emit('activateTab', activeTab.id)"
               @selection-change="emit('editorSelectionChange', $event)"
               @cursor-change="emit('editorCursorChange', $event)"
               @viewport-change="emit('editorViewportChange', activeTab.id, $event)"
