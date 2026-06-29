@@ -36,7 +36,7 @@ import * as api from "@/lib/api";
 import { connectionRedactedNameLabel } from "@/lib/connectionPresentation";
 import { quickConnectionOpenTarget } from "@/lib/connectionOpenTarget";
 import { resolveDefaultDatabase } from "@/lib/defaultDatabase";
-import { findTreeNodeById, resolveNewQueryTarget } from "@/lib/newQueryContext";
+import { buildNewQueryTableSelectSql, findTreeNodeById, resolveNewQueryTarget } from "@/lib/newQueryContext";
 import { buildExecutableObjectSourceStatements, objectSourceSaveExecutionMode } from "@/lib/objectSourceEditor";
 import { resolveExecutableSql, resolveExecutableSqlWithBackend, type SqlExecutionSnapshot } from "@/lib/sqlExecutionTarget";
 import { uuid } from "@/lib/utils";
@@ -813,6 +813,15 @@ async function newQuery() {
   const tabId = queryStore.createTab(conn.id, target.database, undefined, "query", target.schema);
   try {
     await connectionStore.ensureConnected(target.connectionId);
+    if (target.kind === "table-select") {
+      const sql = await buildNewQueryTableSelectSql({
+        databaseType: effectiveDatabaseTypeForConnection(conn),
+        schema: target.schema,
+        tableName: target.tableName,
+      });
+      queryStore.updateSql(tabId, sql);
+      return;
+    }
     if (target.shouldRefreshDefaultDatabase) {
       const options = await getDatabaseOptions(target.connectionId);
       queryStore.updateDatabase(tabId, resolveDefaultDatabase(conn, options));

@@ -50,7 +50,7 @@ import { sortTablesByFkDependency, type TableWithFk } from "@/lib/tableDependenc
 import { isSchemaAware } from "@/lib/databaseCapabilities";
 import { supportsSchemaDiagram, supportsTableImport, supportsTableStructureEditing, supportsTableTruncate } from "@/lib/databaseFeatureSupport";
 import { codeMirrorSqlDialect, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection, tableStructureDatabaseTypeForConnection } from "@/lib/jdbcDialect";
-import { buildTableSelectSql } from "@/lib/tableSelectSql";
+import { buildNewQueryTableSelectSql } from "@/lib/newQueryContext";
 import { buildDropObjectSql, buildDuplicateTableStructureSql, buildEmptyTableSql, buildTruncateTableSql, type TableAdminSqlOptions } from "@/lib/dbAdminSql";
 import { useToast } from "@/composables/useToast";
 import { buildExecutableObjectSourceStatements, buildRoutineRenameObjectSourceStatements, objectSourceSaveExecutionMode, supportsSourceBackedRoutineRename } from "@/lib/objectSourceEditor";
@@ -458,14 +458,13 @@ async function openViewDdl(row: ObjectBrowserRow) {
 }
 
 async function openNewQuery(row: ObjectBrowserRow) {
-  const tabId = queryStore.createTab(props.connection.id, props.database, row.name);
+  const tabId = queryStore.createTab(props.connection.id, props.database, undefined, "query", row.schema || selectedSchema.value);
   queryStore.updateSql(
     tabId,
-    await buildTableSelectSql({
+    await buildNewQueryTableSelectSql({
       databaseType: effectiveDatabaseType.value,
       schema: row.schema || selectedSchema.value,
       tableName: row.name,
-      limit: 100,
     }),
   );
 }

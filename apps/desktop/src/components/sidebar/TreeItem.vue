@@ -67,6 +67,7 @@ import type { ColumnInfo, ConnectionConfig, DatabaseType, ObjectSourceKind, Tree
 import * as api from "@/lib/api";
 import { uuid } from "@/lib/utils";
 import { resolveDefaultDatabase } from "@/lib/defaultDatabase";
+import { buildNewQueryTableSelectSql } from "@/lib/newQueryContext";
 import { canTreeNodePin, canTreeNodeShowExpander, treeItemPaddingLeft, usesFullWidthTreeLabel } from "@/lib/sidebarTreeItemLayout";
 import { buildTableSelectSql } from "@/lib/tableSelectSql";
 import { buildTableDeleteTemplate, buildTableInsertTemplate, buildTableSelectTemplate, buildTableUpdateTemplate } from "@/lib/tableSqlTemplates";
@@ -1136,7 +1137,7 @@ async function newQuery() {
     connectionStore.activeConnectionId = node.connectionId;
     if (hasTreeNodeDatabaseContext(node)) {
       if (node.type === "table" || node.type === "view" || node.type === "materialized_view") {
-        await newSelectTemplate();
+        await openTableSelectNewQuery();
         return;
       }
       queryStore.createTab(node.connectionId, node.database, undefined, "query", node.schema);
@@ -1216,6 +1217,21 @@ async function newSelectTemplate() {
       columns: context.columns,
     });
     openSqlTemplateTab(context.node.connectionId!, context.node.database!, context.node.schema, sql);
+  } catch (e: any) {
+    toast(t("connection.connectFailed", { message: translateBackendError(t, e?.message || String(e)) }), 5000);
+  }
+}
+
+async function openTableSelectNewQuery() {
+  const node = props.node;
+  if (!node.connectionId || !node.database) return;
+  try {
+    const sql = await buildNewQueryTableSelectSql({
+      databaseType: currentDatabaseType(),
+      schema: node.schema,
+      tableName: node.tableName || node.label,
+    });
+    openSqlTemplateTab(node.connectionId, node.database, node.schema, sql);
   } catch (e: any) {
     toast(t("connection.connectFailed", { message: translateBackendError(t, e?.message || String(e)) }), 5000);
   }
@@ -3821,6 +3837,7 @@ function treeItemMenuItems(): ContextMenuItem[] {
     items.push({ label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
     items.push({ label: "", separator: true });
     items.push({ label: t("contextMenu.viewData"), action: openData, icon: TableProperties });
+    items.push({ label: t("contextMenu.newQuery"), action: newQuery, icon: TerminalSquare });
     if (node.type === "table") {
       items.push({
         label: t("contextMenu.viewDdl"),
