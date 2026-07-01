@@ -474,7 +474,8 @@ fn is_openai_api_endpoint(endpoint: &str) -> bool {
 }
 
 fn is_openai_api_config(config: &AiConfig) -> bool {
-    is_openai_api_endpoint(&config.endpoint)
+    // OpenAI provider can be routed through a custom proxy while still requiring OpenAI request semantics.
+    matches!(config.provider, AiProvider::Openai) || is_openai_api_endpoint(&config.endpoint)
 }
 
 fn is_openai_reasoning_model(model: &str) -> bool {
@@ -3110,6 +3111,10 @@ mod tests {
         config.model = "gpt-4o".to_string();
         assert!(supports_temperature(&config));
 
+        config.endpoint = "http://localhost:11434/v1".to_string();
+        config.model = "gpt-5-proxy".to_string();
+        assert!(!supports_temperature(&config));
+
         config.provider = AiProvider::OpenaiCompatible;
         config.endpoint = "http://localhost:11434/v1".to_string();
         config.model = "gpt-5-local".to_string();
@@ -3191,7 +3196,7 @@ mod tests {
         assert!(body.get("max_completion_tokens").is_none());
 
         config.endpoint = "http://localhost:11434/v1".to_string();
-        config.model = "gpt-5-local".to_string();
+        config.model = "gpt-5-proxy".to_string();
         let mut body = serde_json::json!({
             "model": &config.model,
             "messages": [{ "role": "user", "content": TEST_PROMPT }],
@@ -3199,8 +3204,8 @@ mod tests {
         });
         set_chat_completion_token_limit(&mut body, &config, 1024);
 
-        assert_eq!(body.get("max_tokens"), Some(&serde_json::json!(1024)));
-        assert!(body.get("max_completion_tokens").is_none());
+        assert_eq!(body.get("max_completion_tokens"), Some(&serde_json::json!(1024)));
+        assert!(body.get("max_tokens").is_none());
 
         config.provider = AiProvider::OpenaiCompatible;
         config.endpoint = "http://localhost:11434/v1".to_string();
