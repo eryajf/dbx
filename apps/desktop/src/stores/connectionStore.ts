@@ -9,6 +9,7 @@ import {
   emptyLayout,
   appendConnectionToLayout,
   removeConnectionFromSidebarLayout,
+  findConnectionLocation,
   createGroup as createGroupOp,
   renameGroup as renameGroupOp,
   deleteGroup as deleteGroupOp,
@@ -994,7 +995,7 @@ export const useConnectionStore = defineStore("connection", () => {
     if (scope === "root") rebuildTreeNodes();
   }
 
-  async function addConnection(config: ConnectionConfig) {
+  async function addConnection(config: ConnectionConfig, targetGroupId?: string | null) {
     const normalized = normalizeConnection(config);
     const existing = connections.value.findIndex((c) => c.id === normalized.id);
     const nextConnections = [...connections.value];
@@ -1002,7 +1003,8 @@ export const useConnectionStore = defineStore("connection", () => {
       nextConnections[existing] = normalized;
     } else {
       nextConnections.push(normalized);
-      sidebarLayout.value = appendConnectionToLayout(sidebarLayout.value, normalized.id, newConnectionGroupId.value);
+      const groupId = targetGroupId !== undefined ? targetGroupId : newConnectionGroupId.value;
+      sidebarLayout.value = appendConnectionToLayout(sidebarLayout.value, normalized.id, groupId);
     }
     await persistConnections(nextConnections);
     connections.value = nextConnections;
@@ -4056,6 +4058,9 @@ export const useConnectionStore = defineStore("connection", () => {
     },
     moveConnectionToGroup(connectionId: string, groupId: string | null) {
       updateLayoutAndRebuild(moveConnectionToGroupOp(sidebarLayout.value, connectionId, groupId));
+    },
+    groupIdForConnection(connectionId: string): string | null {
+      return findConnectionLocation(sidebarLayout.value, connectionId)?.groupId ?? null;
     },
     reorderSidebarEntry(draggedId: string, targetId: string, position: DropPosition) {
       updateLayoutAndRebuild(reorderEntryOp(sidebarLayout.value, draggedId, targetId, position));

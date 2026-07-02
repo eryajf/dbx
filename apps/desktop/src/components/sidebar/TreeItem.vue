@@ -1458,7 +1458,7 @@ async function duplicateConnection() {
   const config = connectionStore.getConfig(connId);
   if (!config) return;
   const newConfig = { ...config, id: uuid(), name: `${config.name} (Copy)` };
-  await connectionStore.addConnection(newConfig);
+  await connectionStore.addConnection(newConfig, connectionStore.groupIdForConnection(connId));
   toast(t("connection.duplicated"), 2000);
 }
 
