@@ -13,6 +13,7 @@ import {
   removeConnectionFromSidebarLayout,
   emptyLayout,
   remapSidebarLayoutConnectionIds,
+  collapseAllGroups,
 } from "../../apps/desktop/src/lib/sidebarLayout.ts";
 import type { ConnectionConfig, SidebarLayout } from "../../apps/desktop/src/types/database.ts";
 
@@ -211,6 +212,37 @@ test("toggleGroupCollapsed flips collapsed state", () => {
   assert.equal(layout.groups[0].collapsed, false);
   const toggled = toggleGroupCollapsed(layout, groupId);
   assert.equal(toggled.groups[0].collapsed, true);
+});
+
+test("collapseAllGroups keeps other groups collapsed after one group is reopened", async () => {
+  const layout: SidebarLayout = {
+    groups: [
+      { id: "g1", name: "G1", collapsed: false },
+      { id: "g2", name: "G2", collapsed: false },
+    ],
+    order: [
+      { type: "group", id: "g1", children: [{ type: "connection", id: "a" }] },
+      { type: "group", id: "g2", children: [{ type: "connection", id: "b" }] },
+    ],
+  };
+
+  const collapsed = collapseAllGroups(layout);
+  assert.deepEqual(
+    collapsed.groups.map((group) => [group.id, group.collapsed]),
+    [
+      ["g1", true],
+      ["g2", true],
+    ],
+  );
+
+  const reopenedFirst = toggleGroupCollapsed(collapsed, "g1");
+  assert.deepEqual(
+    reopenedFirst.groups.map((group) => [group.id, group.collapsed]),
+    [
+      ["g1", false],
+      ["g2", true],
+    ],
+  );
 });
 
 // --- moveConnectionToGroup ---

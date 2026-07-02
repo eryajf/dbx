@@ -85,6 +85,7 @@ export default {
     importDbeaver: "Import DBeaver",
     importDatagrip: "Import DataGrip",
     export: "Export Connections",
+    collapseAll: "Collapse all",
     collapse: "Collapse sidebar",
     expand: "Expand sidebar",
     showMore: "Show {count} more...",

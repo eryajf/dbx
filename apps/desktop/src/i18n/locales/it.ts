@@ -86,6 +86,7 @@ export default withEnglishFallback({
     importDbeaver: "Importa DBeaver",
     importDatagrip: "Importa DataGrip",
     export: "Esporta Connessioni",
+    collapseAll: "Riduci tutto",
     collapse: "Riduci barra laterale",
     expand: "Espandi barra laterale",
     showMore: "Mostra altri {count}...",

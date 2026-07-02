@@ -87,6 +87,7 @@ export default withEnglishFallback({
     importDbeaver: "导入 DBeaver",
     importDatagrip: "导入 DataGrip",
     export: "导出连接",
+    collapseAll: "一键折叠",
     collapse: "收起侧边栏",
     expand: "展开侧边栏",
     showMore: "加载更多 ({count})...",

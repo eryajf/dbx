@@ -76,7 +76,7 @@ import { clearActiveTableReferencePayload, createTableReferencePayload, createTa
 import { editableRowIdentifierColumns, usesSyntheticRowIdKey } from "@/lib/tableEditing";
 import { tableOpenPageLimit } from "@/lib/tableOpenPageLimit";
 import { supportsDatabaseCreation, supportsDatabaseSearch, supportsFieldLineage, supportsObjectBrowserTreeNode, supportsSchemaDiagram, supportsSqlFileExecution, supportsTableImport, supportsTableTruncate, supportsTableStructureEditing, usesTreeSchemaMode } from "@/lib/databaseCapabilities";
-import { copyNameForTreeNode, objectSourceKindForTreeNode, sidebarSelectionCopyAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/treeNodeClick";
+import { copyNameForTreeNode, objectSourceKindForTreeNode, shouldRunTreeNodeRowAction, sidebarSelectionCopyAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/treeNodeClick";
 import { formatSqlInsert } from "@/lib/exportFormats";
 import { joinExportedDdls } from "@/lib/ddlExport";
 import { fetchTableDataForExport } from "@/lib/tableDataExport";
@@ -636,17 +636,20 @@ async function toggle() {
   }
 }
 
-function runRowClickAction() {
+function runRowClickAction(clickDetail: number) {
   const node = props.node;
   if (node.type === "load-more") {
+    if (clickDetail > 1) return;
     void loadMoreObjectGroupChildren();
     return;
   }
   if (node.type === "object-browser") {
+    if (clickDetail > 1) return;
     void openObjectBrowser();
     return;
   }
   const action = treeNodeRowAction(node.type, canExpand.value, settingsStore.editorSettings.sidebarActivation);
+  if (!shouldRunTreeNodeRowAction(action, clickDetail)) return;
   if (action === "open-data") {
     openData();
   } else if (node.type === "mongo-collection") {
@@ -678,6 +681,18 @@ async function loadAllObjectGroupChildren() {
   } catch (e: any) {
     toast(t("connection.connectFailed", { message: translateBackendError(t, e?.message || String(e)) }), 5000);
   }
+}
+
+function onToggleClick() {
+  selectSingleTreeNode(props.node);
+  rowRef.value?.focus({ preventScroll: true });
+  void toggle();
+}
+
+function onToggleMouseDown(event: MouseEvent) {
+  if (event.button !== 0) return;
+  selectSingleTreeNode(props.node);
+  rowRef.value?.focus({ preventScroll: true });
 }
 
 function visibleTreeNodes(): TreeNode[] {
@@ -749,8 +764,7 @@ function onClick(event: MouseEvent) {
   selectSingleTreeNode(props.node);
   rowRef.value?.focus({ preventScroll: true });
   if (settingsStore.editorSettings.sidebarActivation === "double") return;
-  if (event.detail > 1) return;
-  runRowClickAction();
+  runRowClickAction(event.detail);
 }
 
 function onTreeItemContextMenu(event: MouseEvent, openContextMenu: (event: MouseEvent) => void) {
@@ -4487,7 +4501,7 @@ function treeItemMenuItems(): ContextMenuItem[] {
           <div v-if="showDropBefore" class="absolute right-2 top-0 h-0.5 bg-primary rounded-full pointer-events-none" :style="{ left: paddingLeft }" />
           <div v-if="showDropAfter" class="absolute right-2 bottom-0 h-0.5 bg-primary rounded-full pointer-events-none" :style="{ left: paddingLeft }" />
           <template v-if="canExpand">
-            <button type="button" class="-m-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground" @click.stop="toggle">
+            <button type="button" class="-m-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground" @mousedown.stop="onToggleMouseDown" @click.stop="onToggleClick">
               <Loader2 v-if="node.isLoading" class="w-3.5 h-3.5 animate-spin" />
               <ChevronDown v-else-if="node.isExpanded" class="w-3.5 h-3.5" />
               <ChevronRight v-else class="w-3.5 h-3.5" />

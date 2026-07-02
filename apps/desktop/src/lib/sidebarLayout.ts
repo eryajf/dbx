@@ -309,6 +309,13 @@ export function toggleGroupCollapsed(layout: SidebarLayout, groupId: string): Si
   };
 }
 
+export function collapseAllGroups(layout: SidebarLayout): SidebarLayout {
+  return {
+    ...layout,
+    groups: layout.groups.map((group) => (group.collapsed ? group : { ...group, collapsed: true })),
+  };
+}
+
 export function removeConnectionFromSidebarLayout(layout: SidebarLayout, connectionId: string): SidebarLayout {
   return { ...layout, order: removeConnectionFromEntries(layout.order, connectionId) };
 }

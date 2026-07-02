@@ -87,6 +87,7 @@ export default withEnglishFallback({
     importDbeaver: "DBeaverをインポート",
     importDatagrip: "DataGripをインポート",
     export: "接続をエクスポート",
+    collapseAll: "すべて折りたたむ",
     collapse: "サイドバーを折りたたむ",
     expand: "サイドバーを展開",
     showMore: "さらに{count}件表示...",
