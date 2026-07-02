@@ -702,6 +702,13 @@ function onSearchToggle(node: TreeNode) {
   searchCollapsedIds.value = next;
 }
 
+function collapseAllTreeNodes() {
+  store.collapseAllTreeNodes();
+  if (isSearching.value) {
+    searchCollapsedIds.value = new Set(flatNodes.value.filter((item) => item.node.children?.length).map((item) => item.id));
+  }
+}
+
 function currentTreeScroller(): HTMLElement | null {
   return ((useVirtualTree.value ? treeScrollerRef.value?.$el : plainTreeScrollerRef.value) as HTMLElement | undefined) ?? null;
 }
@@ -859,7 +866,7 @@ onUnmounted(() => {
   window.clearTimeout(sidebarScrollingTimer);
 });
 
-defineExpose({ focusSearch, createNewGroup });
+defineExpose({ focusSearch, createNewGroup, collapseAllTreeNodes });
 </script>
 
 <template>
@@ -920,7 +927,7 @@ defineExpose({ focusSearch, createNewGroup });
         :prerender="SIDEBAR_TREE_PRERENDER_COUNT"
         :skip-hover="true"
         key-field="id"
-        type-field="type"
+        type-field="poolType"
         flow-mode
       >
         <template #default="{ item }">

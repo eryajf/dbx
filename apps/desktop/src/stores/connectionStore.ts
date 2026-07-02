@@ -14,6 +14,7 @@ import {
   renameGroup as renameGroupOp,
   deleteGroup as deleteGroupOp,
   toggleGroupCollapsed as toggleGroupCollapsedOp,
+  collapseAllGroups as collapseAllGroupsOp,
   moveConnectionToGroup as moveConnectionToGroupOp,
   remapSidebarLayoutConnectionIds,
   reorderEntry as reorderEntryOp,
@@ -26,6 +27,7 @@ import { isSchemaAware, normalizeSidebarObjectKind, sidebarObjectKindsForDatabas
 import { connectionObjectTreeNodeSchema, connectionObjectTreeQuerySchema, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection } from "@/lib/jdbcDialect";
 import { buildDatabaseTreeNodes, buildDuckDbConnectionTreeNodes, sortSidebarNames, shouldIncludeDefaultDatabaseNode } from "@/lib/databaseTree";
 import { buildSqlServerDatabaseTreeNodes } from "@/lib/sqlServerTree";
+import { collapseExpandedTreeNodes } from "@/lib/sidebarTreeCollapse";
 import { findDatabaseTreeNode } from "@/lib/treeRefreshTarget";
 import { shouldMarkDisconnected } from "@/lib/connectionHealth";
 import { connectionAttemptOriginalErrorMessage, connectionAttemptTimeoutMessage, connectionAttemptTimeoutMs } from "@/lib/connectionAttemptTimeout";
@@ -255,6 +257,7 @@ export const useConnectionStore = defineStore("connection", () => {
     schema?: string;
     tableName?: string;
     tableNames?: string[];
+    allDatabases?: boolean;
   } | null>(null);
   const sidebarLayout = ref<SidebarLayout>(emptyLayout());
   let layoutPersistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3505,6 +3508,11 @@ export const useConnectionStore = defineStore("connection", () => {
     persistSidebarLayoutDebounced();
   }
 
+  function collapseAllTreeNodes() {
+    updateLayoutAndRebuild(collapseAllGroupsOp(sidebarLayout.value));
+    collapseExpandedTreeNodes(treeNodes.value);
+  }
+
   async function refreshAllTree() {
     const expandedIds = collectExpandedNodeIds(treeNodes.value);
     const refreshExpandedNodes = async (nodes: TreeNode[]) => {
@@ -3936,6 +3944,7 @@ export const useConnectionStore = defineStore("connection", () => {
     treeNodes,
     removeTreeNode,
     refreshAllTree,
+    collapseAllTreeNodes,
     refreshSidebarObjectPagination,
     refreshTreeNode,
     refreshDatabaseTreeNode,

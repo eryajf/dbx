@@ -275,7 +275,6 @@ export interface AiCompletionRequest {
   messages: AiMessage[];
   taskContract?: AiTaskContract;
   maxTokens?: number;
-  temperature?: number;
 }
 
 export interface AiModelInfo {
@@ -339,6 +338,14 @@ export async function saveAiConfig(config: AiConfig): Promise<void> {
   return invoke("save_ai_config", { config });
 }
 
+export async function saveAiProviderConfig(provider: string, config: AiConfig): Promise<void> {
+  return invoke("save_ai_provider_config", { provider, config });
+}
+
+export async function loadAiProviderConfigs(): Promise<Record<string, AiConfig>> {
+  return invoke("load_ai_provider_configs");
+}
+
 export async function aiTestConnection(config: AiConfig): Promise<AiTestConnectionResult> {
   return invoke("ai_test_connection", { config });
 }
@@ -361,6 +368,14 @@ export async function loadDesktopSettings(): Promise<DesktopSettings> {
 
 export async function saveDesktopSettings(settings: DesktopSettings): Promise<void> {
   return invoke("save_desktop_settings", { settings });
+}
+
+export async function completeAppClose(action: "quit" | "hide"): Promise<void> {
+  return invoke("complete_app_close", { action });
+}
+
+export async function requestAppClose(): Promise<void> {
+  return invoke("request_app_close_from_window_controls");
 }
 
 export interface DriverStoreMigrationResult {
@@ -1349,6 +1364,11 @@ export async function redisPubSubPublish(connectionId: string, db: number, chann
   return invoke("redis_pubsub_publish", { connectionId, db, channel, message });
 }
 
+export async function redisPubSubConnect(connectionId: string): Promise<WebSocket> {
+  const port = await invoke<number>("redis_pubsub_server_port");
+  return new WebSocket(`ws://127.0.0.1:${port}/api/redis/pubsub/ws?connectionId=${encodeURIComponent(connectionId)}`);
+}
+
 export async function redisSlowlogGet(connectionId: string, count: number, nodeHost?: string, nodePort?: number): Promise<RedisSlowlogEntry[]> {
   return invoke("redis_slowlog_get", { connectionId, count, nodeHost, nodePort });
 }
@@ -1478,6 +1498,10 @@ export async function documentListCollections(connectionId: string, database: st
 
 export async function mongoListCollections(connectionId: string, database: string): Promise<CollectionInfo[]> {
   return documentListCollections(connectionId, database);
+}
+
+export async function vectorGetCollectionDetail(connectionId: string, database: string, collection: string): Promise<CollectionInfo> {
+  return invoke("vector_collection_detail", { connectionId, database, collection });
 }
 
 export async function mongoCreateDatabase(connectionId: string, database: string): Promise<void> {
@@ -1637,6 +1661,7 @@ export interface SqlFilePreview {
   filePath: string;
   sizeBytes: number;
   preview: string;
+  canExecuteWithoutSelectedDatabase: boolean;
 }
 
 export interface SqlFileProgress {

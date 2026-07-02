@@ -111,7 +111,7 @@ import type { CreateDatabaseSqlOptions } from "@/lib/createDatabaseSql";
 import type { DatabaseNameSqlOptions, DropTableChildObjectSqlOptions, DropObjectSqlOptions, DuplicateTableStructureSqlOptions, CopyTableDataSqlOptions, SchemaNameSqlOptions, TableAdminSqlOptions } from "@/lib/dbAdminSql";
 import type { BuildDatabaseSqlExportOptions, BuildExportInsertStatementsOptions } from "@/lib/databaseExport";
 import type { DataCompareFromTablesOptions, DataCompareFromTablesPreparation, DataCompareSyncPlan, DataCompareSyncPlanOptions, DataComparePreparation, DataComparePreparationOptions } from "@/lib/dataCompare";
-import { apiUrl } from "@/lib/webPath";
+import { apiUrl, apiWebSocketUrl } from "@/lib/webPath";
 import type { DataGridSavePreparation } from "./tauri";
 import type {
   NacosConfigHistoryKey,
@@ -997,6 +997,14 @@ export async function saveAiConfig(config: AiConfig): Promise<void> {
   return post("/api/ai/config", { config });
 }
 
+export async function saveAiProviderConfig(provider: string, config: AiConfig): Promise<void> {
+  return post("/api/ai/provider-config", { provider, config });
+}
+
+export async function loadAiProviderConfigs(): Promise<Record<string, AiConfig>> {
+  return get("/api/ai/provider-configs");
+}
+
 export async function loadAiConfig(): Promise<AiConfig | null> {
   return get("/api/ai/config");
 }
@@ -1012,6 +1020,14 @@ export async function loadDesktopSettings(): Promise<DesktopSettings> {
 
 export async function saveDesktopSettings(settings: DesktopSettings): Promise<void> {
   safeLocalStorageSet(DESKTOP_SETTINGS_STORAGE_KEY, JSON.stringify({ ...DEFAULT_DESKTOP_SETTINGS, ...settings }));
+}
+
+export async function completeAppClose(_action: "quit" | "hide"): Promise<void> {
+  return undefined;
+}
+
+export async function requestAppClose(): Promise<void> {
+  return undefined;
 }
 
 export interface DriverStoreMigrationResult {
@@ -1615,6 +1631,10 @@ export async function redisPubSubPublish(connectionId: string, db: number, chann
   return post("/api/redis/pubsub/publish", { connectionId, db, channel, message });
 }
 
+export async function redisPubSubConnect(connectionId: string): Promise<WebSocket> {
+  return new WebSocket(apiWebSocketUrl(`/api/redis/pubsub/ws?connectionId=${encodeURIComponent(connectionId)}`));
+}
+
 export async function redisSlowlogGet(connectionId: string, count: number, nodeHost?: string, nodePort?: number): Promise<RedisSlowlogEntry[]> {
   return post("/api/redis/slowlog-get", { connectionId, count, nodeHost, nodePort });
 }
@@ -1766,6 +1786,10 @@ export async function elasticsearchListIndices(connectionId: string): Promise<st
 
 export async function vectorListCollections(connectionId: string, database?: string): Promise<CollectionInfo[]> {
   return documentListCollections(connectionId, database || "default");
+}
+
+export async function vectorGetCollectionDetail(connectionId: string, database: string, collection: string): Promise<CollectionInfo> {
+  return post("/api/mongo/vector-collection-detail", { connectionId, database, collection });
 }
 
 export async function mongoFindDocuments(connectionId: string, database: string, collection: string, skip: number, limit: number, filter?: string, projection?: string, sort?: string, executionId?: string): Promise<MongoDocumentResult> {

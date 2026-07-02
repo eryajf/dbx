@@ -1,7 +1,6 @@
 import { isTauriRuntime } from "./tauriRuntime";
 import type * as TauriModule from "./tauri";
 import { appendDebugLog } from "./debugLog";
-import { apiWebSocketUrl } from "./webPath";
 
 // ---------------------------------------------------------------------------
 // Lazy backend resolution (avoids top-level await)
@@ -208,8 +207,12 @@ export const aiTestConnection = forward("aiTestConnection");
 export const aiListModels = forward("aiListModels");
 export const saveAiConfig = forward("saveAiConfig");
 export const loadAiConfig = forward("loadAiConfig");
+export const saveAiProviderConfig = forward("saveAiProviderConfig");
+export const loadAiProviderConfigs = forward("loadAiProviderConfigs");
 export const loadDesktopSettings = forward("loadDesktopSettings");
 export const saveDesktopSettings = forward("saveDesktopSettings");
+export const completeAppClose = forward("completeAppClose");
+export const requestAppClose = forward("requestAppClose");
 export const setDriverStoreDir = forward("setDriverStoreDir");
 export const setPluginStoreDir = forward("setPluginStoreDir");
 export const setAgentStoreDir = forward("setAgentStoreDir");
@@ -307,12 +310,9 @@ export const redisFlushDb = forward("redisFlushDb");
 export const redisExecuteCommand = forward("redisExecuteCommand");
 export const redisLoadMore = forward("redisLoadMore");
 export const redisPubSubPublish = forward("redisPubSubPublish");
+export const redisPubSubConnect = forward("redisPubSubConnect");
 export const redisSlowlogGet = forward("redisSlowlogGet");
 export const redisClusterMasterNodes = forward("redisClusterMasterNodes");
-
-export function redisPubSubConnect(connectionId: string): WebSocket {
-  return new WebSocket(apiWebSocketUrl(`/api/redis/pubsub/ws?connectionId=${encodeURIComponent(connectionId)}`));
-}
 
 // etcd
 export const etcdListPrefix = forward("etcdListPrefix");
@@ -375,6 +375,7 @@ export const documentListDatabases = forward("documentListDatabases");
 export const mongoListDatabases = forward("mongoListDatabases");
 export const documentListCollections = forward("documentListCollections");
 export const mongoListCollections = forward("mongoListCollections");
+export const vectorGetCollectionDetail = forward("vectorGetCollectionDetail");
 export const mongoCreateDatabase = forward("mongoCreateDatabase");
 export const mongoDropDatabase = forward("mongoDropDatabase");
 export const mongoDropCollection = forward("mongoDropCollection");

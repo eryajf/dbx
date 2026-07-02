@@ -11,6 +11,7 @@ import type { SqlSnippet } from "@/types/database";
 import { DEFAULT_SQL_SNIPPETS } from "@/lib/sqlCompletion";
 import { setDebugLoggingEnabled } from "@/lib/debugLog";
 import { DEFAULT_TABLE_COLUMN_TEMPLATE_FIELDS, normalizeTableColumnTemplateFields } from "@/lib/tableColumnTemplates";
+import { DEFAULT_UI_FONT_FAMILY } from "@/lib/appFonts";
 
 export type AiProvider = "claude" | "openai" | "gemini" | "deepseek" | "qwen" | "ollama" | "openai-compatible" | "codex-cli" | "custom";
 export type AiApiStyle = "completions" | "responses" | "anthropic-messages";
@@ -62,6 +63,7 @@ export type UpdateDownloadSource = "official" | "cnb";
 export type SqlSemanticDiagnosticsMode = "auto" | "enabled" | "disabled";
 export type DefaultDataGridSortMode = "database" | "local";
 export type DefaultDataGridSortDirection = "asc" | "desc";
+export type OpenTabsRestoreMode = "all" | "pinned" | "none";
 
 export const DEFAULT_SIDEBAR_TABLE_PAGE_SIZE = 1000;
 const SQL_SEMANTIC_DIAGNOSTICS_AUTO_ENABLED = false;
@@ -325,6 +327,7 @@ export const DEFAULT_CUSTOM_THEMES: CustomTheme[] = [{ id: "default", name: "Cus
 export interface EditorSettings {
   fontFamily: string;
   fontSize: number;
+  uiFontFamily: string;
   uiScale: number;
   theme: EditorTheme;
   customThemeColors: CustomThemeColors;
@@ -337,6 +340,7 @@ export interface EditorSettings {
   sqlSemanticDiagnosticsMode: SqlSemanticDiagnosticsMode;
   sqlSemanticDiagnosticsEnabled: boolean;
   confirmDangerousSqlExecution: boolean;
+  confirmUnsavedSqlClose: boolean;
   compactTabTitle: boolean;
   appLayout: "separated" | "classic";
   pageSize: number;
@@ -361,6 +365,7 @@ export interface EditorSettings {
   sidebarActivation: SidebarActivation;
   sidebarObjectDisplay: "grouped" | "simple";
   autoSelectActiveSidebarNode: boolean;
+  openTabsRestoreMode: OpenTabsRestoreMode;
   disconnectTabHandlingMode: DisconnectTabHandlingMode;
   reuseDataTab: boolean;
   updateNotificationsEnabled: boolean;
@@ -436,6 +441,7 @@ export const FONT_FAMILIES: { value: string; label: string }[] = [
 export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
   fontSize: 13,
+  uiFontFamily: DEFAULT_UI_FONT_FAMILY,
   uiScale: 1,
   theme: "app",
   customThemeColors: { ...DEFAULT_CUSTOM_THEME_COLORS },
@@ -448,6 +454,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   sqlSemanticDiagnosticsMode: "auto",
   sqlSemanticDiagnosticsEnabled: SQL_SEMANTIC_DIAGNOSTICS_AUTO_ENABLED,
   confirmDangerousSqlExecution: true,
+  confirmUnsavedSqlClose: true,
   compactTabTitle: false,
   appLayout: "classic",
   pageSize: 100,
@@ -472,6 +479,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   sidebarActivation: "single",
   sidebarObjectDisplay: "grouped",
   autoSelectActiveSidebarNode: false,
+  openTabsRestoreMode: "all",
   disconnectTabHandlingMode: "close-tabs",
   reuseDataTab: false,
   updateNotificationsEnabled: true,
@@ -500,6 +508,12 @@ const MAX_UI_SCALE = 2;
 function normalizeUiScale(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_EDITOR_SETTINGS.uiScale;
   return Math.min(MAX_UI_SCALE, Math.max(MIN_UI_SCALE, Math.round(value * 100) / 100));
+}
+
+function normalizeFontFamily(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
 }
 
 function normalizeDrawerWidth(value: unknown, min: number, fallback: number): number {
@@ -558,6 +572,12 @@ function normalizeDisconnectTabHandlingMode(value: unknown, legacyCloseTabsOnDis
     return legacyCloseTabsOnDisconnect ? "close-tabs" : "keep-tabs-clear-results";
   }
   return DEFAULT_EDITOR_SETTINGS.disconnectTabHandlingMode;
+}
+
+function normalizeOpenTabsRestoreMode(value: unknown, legacyRestoreOpenTabsOnLaunch?: unknown): OpenTabsRestoreMode {
+  if (value === "all" || value === "pinned" || value === "none") return value;
+  if (typeof legacyRestoreOpenTabsOnLaunch === "boolean") return legacyRestoreOpenTabsOnLaunch ? "all" : "none";
+  return DEFAULT_EDITOR_SETTINGS.openTabsRestoreMode;
 }
 
 function normalizeColumnFormatters(value: unknown): Record<string, ColumnFormatterConfig> {
@@ -619,8 +639,9 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
   const legacyDefaultSortEnabled = (settings as Partial<EditorSettings> & { defaultDataGridSortEnabled?: boolean }).defaultDataGridSortEnabled;
   const sqlSemanticDiagnosticsMode = normalizeSqlSemanticDiagnosticsMode(settings.sqlSemanticDiagnosticsMode, settings.sqlSemanticDiagnosticsEnabled);
   return {
-    fontFamily: settings.fontFamily ?? DEFAULT_EDITOR_SETTINGS.fontFamily,
+    fontFamily: normalizeFontFamily(settings.fontFamily, DEFAULT_EDITOR_SETTINGS.fontFamily),
     fontSize: settings.fontSize ?? DEFAULT_EDITOR_SETTINGS.fontSize,
+    uiFontFamily: normalizeFontFamily(settings.uiFontFamily, DEFAULT_EDITOR_SETTINGS.uiFontFamily),
     uiScale: normalizeUiScale(settings.uiScale),
     theme: settings.theme && EDITOR_THEME_VALUES.has(settings.theme) ? settings.theme : DEFAULT_EDITOR_SETTINGS.theme,
     customThemeColors: {
@@ -657,6 +678,7 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
     sqlSemanticDiagnosticsMode,
     sqlSemanticDiagnosticsEnabled: sqlSemanticDiagnosticsEnabledForMode(sqlSemanticDiagnosticsMode),
     confirmDangerousSqlExecution: settings.confirmDangerousSqlExecution ?? DEFAULT_EDITOR_SETTINGS.confirmDangerousSqlExecution,
+    confirmUnsavedSqlClose: settings.confirmUnsavedSqlClose ?? DEFAULT_EDITOR_SETTINGS.confirmUnsavedSqlClose,
     compactTabTitle: settings.compactTabTitle ?? DEFAULT_EDITOR_SETTINGS.compactTabTitle,
     appLayout: settings.appLayout ?? DEFAULT_EDITOR_SETTINGS.appLayout,
     pageSize: normalizeResultPageSize(settings.pageSize),
@@ -681,6 +703,7 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
     sidebarActivation: settings.sidebarActivation === "single" || settings.sidebarActivation === "double" ? settings.sidebarActivation : DEFAULT_EDITOR_SETTINGS.sidebarActivation,
     sidebarObjectDisplay: settings.sidebarObjectDisplay === "simple" || settings.sidebarObjectDisplay === "grouped" ? settings.sidebarObjectDisplay : DEFAULT_EDITOR_SETTINGS.sidebarObjectDisplay,
     autoSelectActiveSidebarNode: settings.autoSelectActiveSidebarNode ?? DEFAULT_EDITOR_SETTINGS.autoSelectActiveSidebarNode,
+    openTabsRestoreMode: normalizeOpenTabsRestoreMode((settings as Partial<EditorSettings>).openTabsRestoreMode, (settings as Partial<EditorSettings> & { restoreOpenTabsOnLaunch?: boolean }).restoreOpenTabsOnLaunch),
     disconnectTabHandlingMode: normalizeDisconnectTabHandlingMode((settings as Partial<EditorSettings>).disconnectTabHandlingMode, (settings as Partial<EditorSettings> & { closeQueryTabsOnDisconnect?: boolean }).closeQueryTabsOnDisconnect),
     reuseDataTab: settings.reuseDataTab ?? DEFAULT_EDITOR_SETTINGS.reuseDataTab,
     updateNotificationsEnabled: settings.updateNotificationsEnabled ?? DEFAULT_EDITOR_SETTINGS.updateNotificationsEnabled,
@@ -745,6 +768,7 @@ function saveEditorSettings(settings: EditorSettings) {
 export const useSettingsStore = defineStore("settings", () => {
   const aiConfig = ref<AiConfig>(normalizeAiConfig({ provider: "claude" }));
   const isAiConfigLoaded = ref(false);
+  const aiProviderConfigs = ref<Partial<Record<AiProvider, AiConfig>>>({});
   const desktopSettings = ref<DesktopSettings>({ ...DEFAULT_DESKTOP_SETTINGS });
   const isDesktopSettingsLoaded = ref(false);
 
@@ -777,24 +801,53 @@ export const useSettingsStore = defineStore("settings", () => {
   async function initAiConfig() {
     if (isAiConfigLoaded.value) return;
     const legacy = localStorage.getItem("dbx-ai-config");
-    const saved = await api.loadAiConfig().catch(() => null);
-    if (saved) {
-      aiConfig.value = normalizeAiConfig(saved);
+    const [savedActive, savedProviderConfigs] = await Promise.all([api.loadAiConfig().catch(() => null), api.loadAiProviderConfigs().catch(() => null) as Promise<Partial<Record<AiProvider, AiConfig>> | null>]);
+
+    if (savedActive) {
+      aiConfig.value = normalizeAiConfig(savedActive);
     } else if (legacy) {
       aiConfig.value = normalizeAiConfig(JSON.parse(legacy));
       await api.saveAiConfig(aiConfig.value).catch(() => {});
       localStorage.removeItem("dbx-ai-config");
     }
+
+    if (savedProviderConfigs) {
+      aiProviderConfigs.value = savedProviderConfigs;
+    }
+
+    // Ensure active config is reflected in provider map (overwrite if exists, to guarantee consistency)
+    const activeProvider = aiConfig.value.provider;
+    aiProviderConfigs.value[activeProvider] = { ...aiConfig.value };
+
     isAiConfigLoaded.value = true;
   }
 
   function updateAiConfig(config: Partial<AiConfig>) {
     const previousProvider = aiConfig.value.provider;
-    if (config.provider && config.provider !== previousProvider) {
-      Object.assign(aiConfig.value, defaultConfigs[config.provider]);
+    const targetProvider = config.provider;
+    const switchingProvider = !!targetProvider && targetProvider !== previousProvider;
+
+    if (switchingProvider) {
+      // Save current provider's config before switching
+      aiProviderConfigs.value[previousProvider] = { ...aiConfig.value };
+      api.saveAiProviderConfig(previousProvider, aiConfig.value).catch(() => {});
+
+      // Restore saved config for target provider, or use preset defaults
+      const savedConfig = aiProviderConfigs.value[targetProvider];
+      if (savedConfig) {
+        aiConfig.value = normalizeAiConfig({ ...savedConfig, provider: targetProvider });
+      } else {
+        aiConfig.value = normalizeAiConfig({ provider: targetProvider });
+      }
+      // Don't merge caller fields when switching — caller passes only { provider }
+    } else {
+      // Not switching provider — apply partial update
+      Object.assign(aiConfig.value, config);
     }
-    Object.assign(aiConfig.value, config);
+
+    aiProviderConfigs.value[aiConfig.value.provider] = { ...aiConfig.value };
     api.saveAiConfig(aiConfig.value).catch(() => {});
+    api.saveAiProviderConfig(aiConfig.value.provider, aiConfig.value).catch(() => {});
   }
 
   function isConfigured(): boolean {
@@ -803,9 +856,18 @@ export const useSettingsStore = defineStore("settings", () => {
     return !!aiConfig.value.endpoint && !!aiConfig.value.model && (!preset.requiresApiKey || !!aiConfig.value.apiKey);
   }
 
+  function isAiProviderConfigured(provider: AiProvider): boolean {
+    const config = aiProviderConfigs.value[provider];
+    if (!config) return false;
+    if (provider === "codex-cli") return true;
+    const preset = AI_PROVIDER_PRESETS[provider];
+    return !!config.endpoint?.trim() && !!config.model?.trim() && (!preset.requiresApiKey || !!config.apiKey?.trim());
+  }
+
   function updateEditorSettings(partial: Partial<EditorSettings>) {
-    if (partial.fontFamily !== undefined) editorSettings.value.fontFamily = partial.fontFamily;
+    if (partial.fontFamily !== undefined) editorSettings.value.fontFamily = normalizeFontFamily(partial.fontFamily, DEFAULT_EDITOR_SETTINGS.fontFamily);
     if (partial.fontSize !== undefined) editorSettings.value.fontSize = partial.fontSize;
+    if (partial.uiFontFamily !== undefined) editorSettings.value.uiFontFamily = normalizeFontFamily(partial.uiFontFamily, DEFAULT_EDITOR_SETTINGS.uiFontFamily);
     if (partial.uiScale !== undefined) editorSettings.value.uiScale = normalizeUiScale(partial.uiScale);
     if (partial.theme !== undefined) editorSettings.value.theme = partial.theme;
     if (partial.customThemeColors !== undefined) {
@@ -838,6 +900,7 @@ export const useSettingsStore = defineStore("settings", () => {
       editorSettings.value.sqlSemanticDiagnosticsEnabled = sqlSemanticDiagnosticsEnabledForMode(nextMode);
     }
     if (partial.confirmDangerousSqlExecution !== undefined) editorSettings.value.confirmDangerousSqlExecution = partial.confirmDangerousSqlExecution;
+    if (partial.confirmUnsavedSqlClose !== undefined) editorSettings.value.confirmUnsavedSqlClose = partial.confirmUnsavedSqlClose;
     if (partial.compactTabTitle !== undefined) editorSettings.value.compactTabTitle = partial.compactTabTitle;
     if (partial.appLayout !== undefined) editorSettings.value.appLayout = partial.appLayout;
     if (partial.pageSize !== undefined) editorSettings.value.pageSize = normalizeResultPageSize(partial.pageSize);
@@ -863,6 +926,7 @@ export const useSettingsStore = defineStore("settings", () => {
     if (partial.sidebarActivation !== undefined) editorSettings.value.sidebarActivation = partial.sidebarActivation;
     if (partial.sidebarObjectDisplay !== undefined) editorSettings.value.sidebarObjectDisplay = partial.sidebarObjectDisplay;
     if (partial.autoSelectActiveSidebarNode !== undefined) editorSettings.value.autoSelectActiveSidebarNode = partial.autoSelectActiveSidebarNode;
+    if (partial.openTabsRestoreMode !== undefined) editorSettings.value.openTabsRestoreMode = normalizeOpenTabsRestoreMode(partial.openTabsRestoreMode);
     if (partial.disconnectTabHandlingMode !== undefined) editorSettings.value.disconnectTabHandlingMode = normalizeDisconnectTabHandlingMode(partial.disconnectTabHandlingMode);
     if (partial.reuseDataTab !== undefined) editorSettings.value.reuseDataTab = partial.reuseDataTab;
     if (partial.updateNotificationsEnabled !== undefined) editorSettings.value.updateNotificationsEnabled = partial.updateNotificationsEnabled;
@@ -919,9 +983,11 @@ export const useSettingsStore = defineStore("settings", () => {
   return {
     aiConfig,
     isAiConfigLoaded,
+    aiProviderConfigs,
     initAiConfig,
     updateAiConfig,
     isConfigured,
+    isAiProviderConfigured,
     editorSettings,
     desktopSettings,
     updateEditorSettings,

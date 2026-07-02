@@ -1,11 +1,11 @@
 ﻿<script setup lang="ts">
-import { computed, ref, watch, nextTick } from "vue";
+import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import type { CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { X, Pin, ChevronDown, Table2, Code2, TableProperties, PencilRuler, KeyRound, Pencil, Package, Lock, Copy, AlertTriangle, Network, Minimize2, Maximize2, Settings } from "@lucide/vue";
 import CustomContextMenu, { type ContextMenuItem } from "@/components/ui/CustomContextMenu.vue";
-import LightDropdown from "@/components/ui/LightDropdown.vue";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useQueryStore } from "@/stores/queryStore";
@@ -33,6 +33,10 @@ const emit = defineEmits<{
   "activate-settings-page": [];
   "close-settings-page": [];
   "save-tab": [tabId: string];
+  "discard-tab-close": [];
+  "save-all-tab-close": [];
+  "discard-all-tab-close": [];
+  "cancel-tab-close": [];
 }>();
 
 const { t } = useI18n();
@@ -48,12 +52,63 @@ const isClassicLayout = computed(() => settingsStore.editorSettings.appLayout ==
 const fixedTabs = computed(() => queryStore.tabs.filter((tab) => tab.pinned));
 const regularTabs = computed(() => queryStore.tabs.filter((tab) => !tab.pinned));
 const hasFixedTabs = computed(() => fixedTabs.value.length > 0);
+const closeConfirmDirtyCount = computed(() => queryStore.closeConfirmDirtyTabIds.length);
+const showCloseConfirmBulkActions = computed(() => closeConfirmDirtyCount.value > 1);
+const closeConfirmDirtyTabs = computed(() => queryStore.closeConfirmDirtyTabIds.map((id) => queryStore.tabs.find((tab) => tab.id === id)).filter((tab): tab is QueryTab => !!tab));
+const closeConfirmCurrentTitle = computed(() => {
+  const focusedTab = closeConfirmDirtyTabs.value.find((tab) => tab.id === queryStore.pendingCloseTabId) ?? closeConfirmDirtyTabs.value[0];
+  return focusedTab ? tabDisplayTitle(focusedTab, t) : "";
+});
+const closeConfirmMessage = computed(() => {
+  const params = {
+    count: closeConfirmDirtyCount.value,
+    title: closeConfirmCurrentTitle.value,
+  };
+  if (closeConfirmDirtyCount.value > 1) {
+    if (queryStore.closeConfirmContext === "app") return t("editor.unsavedChangesAppCloseMultipleMessage", params);
+    return t("editor.unsavedChangesBatchCloseMultipleMessage", params);
+  }
+  if (queryStore.closeConfirmContext === "app") return t("editor.unsavedChangesAppCloseMessage", params);
+  return t("editor.unsavedChangesMessage", params);
+});
+const closeConfirmListOpen = ref(false);
+let closeConfirmListCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const compactTabTitle = computed({
   get: () => settingsStore.editorSettings.compactTabTitle,
   set: (checked: boolean | "indeterminate") => {
     settingsStore.updateEditorSettings({ compactTabTitle: checked === true });
   },
 });
+
+function openCloseConfirmList() {
+  if (closeConfirmListCloseTimer) {
+    clearTimeout(closeConfirmListCloseTimer);
+    closeConfirmListCloseTimer = null;
+  }
+  closeConfirmListOpen.value = true;
+}
+
+function scheduleCloseConfirmListClose() {
+  if (closeConfirmListCloseTimer) clearTimeout(closeConfirmListCloseTimer);
+  closeConfirmListCloseTimer = setTimeout(() => {
+    closeConfirmListOpen.value = false;
+    closeConfirmListCloseTimer = null;
+  }, 120);
+}
+
+onUnmounted(() => {
+  if (closeConfirmListCloseTimer) {
+    clearTimeout(closeConfirmListCloseTimer);
+    closeConfirmListCloseTimer = null;
+  }
+});
+
+watch(
+  () => queryStore.showCloseConfirm,
+  (open) => {
+    if (!open) closeConfirmListOpen.value = false;
+  },
+);
 
 function toggleCompactTabTitle() {
   compactTabTitle.value = !compactTabTitle.value;
@@ -86,6 +141,13 @@ function cancelRenameTab() {
 }
 
 function getTabMenuItems(tab: QueryTab): ContextMenuItem[] {
+  const closeCurrentLabel = tab.pinned ? t("contextMenu.closeFixedTab") : t("contextMenu.closeTab");
+  const closeOtherLabel = tab.pinned ? t("contextMenu.closeOtherFixedTabs") : hasFixedTabs.value ? t("contextMenu.closeOtherRegularTabs") : t("contextMenu.closeOtherTabs");
+  const closeAllLabel = tab.pinned ? t("contextMenu.closeAllFixedTabs") : hasFixedTabs.value ? t("contextMenu.closeAllRegularTabs") : t("contextMenu.closeAllTabs");
+  const closeOtherDisabled = tab.pinned ? fixedTabs.value.length <= 1 : regularTabs.value.length <= 1;
+  const closeOtherAction = tab.pinned ? () => queryStore.closeOtherFixedTabs(tab.id) : () => queryStore.closeOtherRegularTabs(tab.id);
+  const closeAllAction = tab.pinned ? () => queryStore.closeFixedTabs() : () => queryStore.closeRegularTabs();
+
   return [
     {
       label: compactTabTitle.value ? t("contextMenu.fullTabTitle") : t("contextMenu.compactTabTitle"),
@@ -124,16 +186,16 @@ function getTabMenuItems(tab: QueryTab): ContextMenuItem[] {
       iconClass: tab.pinned ? "fill-current" : "",
     },
     { label: "", separator: true },
-    { label: t("contextMenu.closeTab"), action: () => queryStore.closeTab(tab.id), icon: X },
+    { label: closeCurrentLabel, action: () => queryStore.closeTab(tab.id), icon: X },
     {
-      label: t("contextMenu.closeOtherTabs"),
-      action: () => queryStore.closeOtherTabs(tab.id),
-      disabled: queryStore.tabs.length <= 1,
+      label: closeOtherLabel,
+      action: closeOtherAction,
+      disabled: closeOtherDisabled,
       icon: X,
     },
     {
-      label: t("contextMenu.closeAllTabs"),
-      action: () => queryStore.closeAllTabs(),
+      label: closeAllLabel,
+      action: closeAllAction,
       variant: "destructive" as const,
       icon: X,
     },
@@ -147,10 +209,21 @@ function handleSaveAndClose() {
 
 function handleDiscardAndClose() {
   queryStore.forceClosePendingTab();
+  emit("discard-tab-close");
+}
+
+function handleSaveAllAndClose() {
+  emit("save-all-tab-close");
+}
+
+function handleDiscardAllAndClose() {
+  queryStore.forceCloseAllPendingTabs();
+  emit("discard-all-tab-close");
 }
 
 function handleCancelClose() {
   queryStore.cancelClosePendingTab();
+  emit("cancel-tab-close");
 }
 
 const tabsContainerRef = ref<HTMLElement | null>(null);
@@ -274,26 +347,8 @@ function tabIconClass(tab: QueryTab) {
 const showRegularTabScrollbar = computed(() => hasTabOverflow.value);
 const showFixedTabScrollbar = computed(() => hasFixedTabOverflow.value);
 const showRegularTabOverflowControls = computed(() => regularTabs.value.length > 0 && hasTabOverflow.value);
-
-const openTabMenuItems = computed(() =>
-  queryStore.tabs.map((tab) => ({
-    value: tab.id,
-    label: tabDisplayTitle(tab, t),
-    title: tabDisplayTitle(tab, t),
-    icon: tabMenuIcon(tab),
-    iconClass: tabIconClass(tab),
-  })),
-);
-
-const fixedTabMenuItems = computed(() =>
-  fixedTabs.value.map((tab) => ({
-    value: tab.id,
-    label: tabDisplayTitle(tab, t),
-    title: tabDisplayTitle(tab, t),
-    icon: tabMenuIcon(tab),
-    iconClass: tabIconClass(tab),
-  })),
-);
+const regularTabOverflowOpen = ref(false);
+const fixedTabOverflowOpen = ref(false);
 
 function tabMenuIcon(tab: QueryTab) {
   if (tab.mode === "data" || tab.mode === "mongo" || tab.mode === "redis") return Table2;
@@ -373,6 +428,24 @@ function activateTab(tabId: string) {
   tabScrollBehavior.value = "auto";
   queryStore.activeTabId = tabId;
   emit("activate-tab");
+}
+
+function activateTabFromOverflow(tabId: string, kind: "regular" | "fixed") {
+  activateTab(tabId);
+  if (kind === "regular") regularTabOverflowOpen.value = false;
+  else fixedTabOverflowOpen.value = false;
+}
+
+function closeTabFromOverflow(tabId: string, event: MouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+  queryStore.closeTab(tabId);
+}
+
+function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regular" | "fixed") {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  activateTabFromOverflow(tabId, kind);
 }
 </script>
 
@@ -502,25 +575,44 @@ function activateTab(tabId: string) {
         </div>
       </div>
       <div v-if="showRegularTabOverflowControls" class="relative z-30 flex shrink-0 items-center">
-        <LightDropdown
-          :model-value="queryStore.activeTabId || ''"
-          :items="openTabMenuItems"
-          :aria-label="t('tabs.openTabs')"
-          :trigger-title="t('tabs.openTabs')"
-          :trigger-icon="ChevronDown"
-          :trigger-class="['inline-flex shrink-0 items-center justify-center', tabOverflowControlClass].join(' ')"
-          trigger-icon-class="h-4 w-4"
-          item-icon-class="w-3.5 h-3.5 mr-2"
-          item-class="max-w-full"
-          content-class="w-auto min-w-48 max-w-72"
-          :show-trigger-label="false"
-          :show-chevron="false"
-          :highlight-selected="false"
-          :match-trigger-width="false"
-          check-position="none"
-          align="end"
-          @update:model-value="activateTab"
-        />
+        <Popover v-model:open="regularTabOverflowOpen">
+          <PopoverTrigger as-child>
+            <button type="button" :class="['inline-flex shrink-0 items-center justify-center', tabOverflowControlClass].join(' ')" :aria-label="t('tabs.openTabs')" :title="t('tabs.openTabs')">
+              <ChevronDown class="h-4 w-4" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="end" class="w-auto min-w-56 max-w-80 max-h-[min(70vh,28rem)] gap-0 overflow-y-auto rounded-[6px] p-1" @click.stop @keydown.stop>
+            <CustomContextMenu v-for="tab in queryStore.tabs" :key="tab.id" :items="getTabMenuItems(tab)" v-slot="{ onContextMenu }">
+              <div
+                class="group flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-sm outline-hidden hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
+                :class="tab.id === queryStore.activeTabId && !driverStoreActive && !settingsPageActive ? 'bg-accent/70 text-accent-foreground' : ''"
+                :title="tabDisplayTitle(tab, t)"
+                role="menuitem"
+                tabindex="0"
+                @click="activateTabFromOverflow(tab.id, 'regular')"
+                @contextmenu="onContextMenu"
+                @keydown="onOverflowItemKeydown($event, tab.id, 'regular')"
+              >
+                <component :is="tabMenuIcon(tab)" :class="['h-3.5 w-3.5 shrink-0', tabIconClass(tab)]" />
+                <span class="min-w-0 flex-1 truncate">{{ tabDisplayTitle(tab, t) }}</span>
+                <Lock v-if="isConnectionReadonly(tab.connectionId)" class="h-3 w-3 shrink-0 text-muted-foreground" />
+                <Pin v-if="tab.pinned" class="h-3 w-3 shrink-0 fill-current text-primary" />
+                <span class="w-5 shrink-0">
+                  <button
+                    type="button"
+                    class="inline-flex rounded p-1 text-muted-foreground opacity-70 hover:bg-muted-foreground/20 hover:text-foreground group-hover:opacity-100"
+                    :aria-label="t('contextMenu.closeTab')"
+                    :title="t('contextMenu.closeTab')"
+                    @click="closeTabFromOverflow(tab.id, $event)"
+                    @mousedown.stop
+                  >
+                    <X class="h-3 w-3" />
+                  </button>
+                </span>
+              </div>
+            </CustomContextMenu>
+          </PopoverContent>
+        </Popover>
       </div>
     </div>
 
@@ -604,25 +696,44 @@ function activateTab(tabId: string) {
         </div>
       </div>
       <div v-if="showFixedTabScrollbar" class="relative z-30 flex shrink-0 items-center">
-        <LightDropdown
-          :model-value="queryStore.activeTabId || ''"
-          :items="fixedTabMenuItems"
-          :aria-label="t('tabs.fixedTabs')"
-          :trigger-title="t('tabs.fixedTabs')"
-          :trigger-icon="ChevronDown"
-          :trigger-class="['inline-flex shrink-0 items-center justify-center', tabOverflowControlClass].join(' ')"
-          trigger-icon-class="h-4 w-4"
-          item-icon-class="w-3.5 h-3.5 mr-2"
-          item-class="max-w-full"
-          content-class="w-auto min-w-48 max-w-72"
-          :show-trigger-label="false"
-          :show-chevron="false"
-          :highlight-selected="false"
-          :match-trigger-width="false"
-          check-position="none"
-          align="end"
-          @update:model-value="activateTab"
-        />
+        <Popover v-model:open="fixedTabOverflowOpen">
+          <PopoverTrigger as-child>
+            <button type="button" :class="['inline-flex shrink-0 items-center justify-center', tabOverflowControlClass].join(' ')" :aria-label="t('tabs.fixedTabs')" :title="t('tabs.fixedTabs')">
+              <ChevronDown class="h-4 w-4" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="end" class="w-auto min-w-56 max-w-80 max-h-[min(70vh,28rem)] gap-0 overflow-y-auto rounded-[6px] p-1" @click.stop @keydown.stop>
+            <CustomContextMenu v-for="tab in fixedTabs" :key="tab.id" :items="getTabMenuItems(tab)" v-slot="{ onContextMenu }">
+              <div
+                class="group flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-sm outline-hidden hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
+                :class="tab.id === queryStore.activeTabId && !driverStoreActive && !settingsPageActive ? 'bg-accent/70 text-accent-foreground' : ''"
+                :title="tabDisplayTitle(tab, t)"
+                role="menuitem"
+                tabindex="0"
+                @click="activateTabFromOverflow(tab.id, 'fixed')"
+                @contextmenu="onContextMenu"
+                @keydown="onOverflowItemKeydown($event, tab.id, 'fixed')"
+              >
+                <component :is="tabMenuIcon(tab)" :class="['h-3.5 w-3.5 shrink-0', tabIconClass(tab)]" />
+                <span class="min-w-0 flex-1 truncate">{{ tabDisplayTitle(tab, t) }}</span>
+                <Lock v-if="isConnectionReadonly(tab.connectionId)" class="h-3 w-3 shrink-0 text-muted-foreground" />
+                <Pin class="h-3 w-3 shrink-0 fill-current text-primary" />
+                <span class="w-5 shrink-0">
+                  <button
+                    type="button"
+                    class="inline-flex rounded p-1 text-muted-foreground opacity-70 hover:bg-muted-foreground/20 hover:text-foreground group-hover:opacity-100"
+                    :aria-label="t('contextMenu.closeTab')"
+                    :title="t('contextMenu.closeTab')"
+                    @click="closeTabFromOverflow(tab.id, $event)"
+                    @mousedown.stop
+                  >
+                    <X class="h-3 w-3" />
+                  </button>
+                </span>
+              </div>
+            </CustomContextMenu>
+          </PopoverContent>
+        </Popover>
       </div>
     </div>
   </div>
@@ -642,9 +753,36 @@ function activateTab(tabId: string) {
           {{ t("editor.unsavedChangesTitle") }}
         </DialogTitle>
       </DialogHeader>
-      <p class="text-sm text-muted-foreground">{{ t("editor.unsavedChangesMessage") }}</p>
+      <div class="space-y-2">
+        <p class="text-sm text-muted-foreground">{{ closeConfirmMessage }}</p>
+        <Popover v-if="showCloseConfirmBulkActions" :open="closeConfirmListOpen" @update:open="closeConfirmListOpen = $event">
+          <PopoverTrigger as-child>
+            <button
+              type="button"
+              class="inline-flex items-center text-sm font-medium text-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              @mouseenter="openCloseConfirmList"
+              @mouseleave="scheduleCloseConfirmListClose"
+            >
+              {{ t("editor.unsavedChangesViewList", { count: closeConfirmDirtyCount }) }}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" side="bottom" class="w-72 max-w-[calc(100vw-2rem)] gap-1 p-2" @mouseenter="openCloseConfirmList" @mouseleave="scheduleCloseConfirmListClose" @pointerdown.stop @click.stop @keydown.stop>
+            <div class="px-2 pb-1 text-xs font-medium text-muted-foreground">
+              {{ t("editor.unsavedChangesListTitle", { count: closeConfirmDirtyCount }) }}
+            </div>
+            <div class="max-h-48 overflow-y-auto">
+              <div v-for="tab in closeConfirmDirtyTabs" :key="tab.id" class="flex min-w-0 items-center gap-2 rounded-[6px] px-2 py-1.5 text-sm" :class="tab.id === queryStore.pendingCloseTabId ? 'bg-muted text-foreground' : 'text-muted-foreground'">
+                <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="tab.id === queryStore.pendingCloseTabId ? 'bg-foreground' : 'bg-muted-foreground/50'" />
+                <span class="min-w-0 truncate">{{ tabDisplayTitle(tab, t) }}</span>
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
       <DialogFooter>
         <Button variant="outline" @click="handleCancelClose">{{ t("common.cancel") }}</Button>
+        <Button v-if="showCloseConfirmBulkActions" variant="secondary" @click="handleDiscardAllAndClose">{{ t("editor.discardAllChanges") }}</Button>
+        <Button v-if="showCloseConfirmBulkActions" @click="handleSaveAllAndClose">{{ t("editor.saveAllChanges") }}</Button>
         <Button variant="secondary" @click="handleDiscardAndClose">{{ t("editor.discardChanges") }}</Button>
         <Button @click="handleSaveAndClose">{{ t("savedSql.save") }}</Button>
       </DialogFooter>

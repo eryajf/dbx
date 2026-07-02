@@ -263,6 +263,8 @@ test("close all tabs pauses on unsaved query tabs", () => {
 
   assert.equal(store.showCloseConfirm, true);
   assert.equal(store.pendingCloseTabId, queryId);
+  assert.equal(store.closeConfirmContext, "batch");
+  assert.equal(store.activeTabId, queryId);
   assert.deepEqual(
     store.tabs.map((tab) => tab.id),
     [queryId, dataId],
@@ -273,6 +275,56 @@ test("close all tabs pauses on unsaved query tabs", () => {
   assert.equal(store.showCloseConfirm, false);
   assert.deepEqual(store.tabs, []);
   assert.equal(store.activeTabId, null);
+});
+
+test("disabled unsaved SQL close confirmation closes dirty tabs directly", () => {
+  const restoreStorage = installMemoryStorage();
+  try {
+    setActivePinia(createPinia());
+    const settingsStore = useSettingsStore();
+    settingsStore.updateEditorSettings({ confirmUnsavedSqlClose: false });
+    const store = useQueryStore();
+    const queryId = store.createTab("conn-1", "db", "draft query");
+    store.updateSql(queryId, "select 1;");
+
+    store.closeTab(queryId);
+
+    assert.equal(store.showCloseConfirm, false);
+    assert.deepEqual(
+      store.tabs.map((tab) => tab.id),
+      [],
+    );
+  } finally {
+    restoreStorage();
+  }
+});
+
+test("disabled unsaved SQL close confirmation skips batch close prompt", () => {
+  const restoreStorage = installMemoryStorage();
+  try {
+    setActivePinia(createPinia());
+    const settingsStore = useSettingsStore();
+    settingsStore.updateEditorSettings({ confirmUnsavedSqlClose: false });
+    const store = useQueryStore();
+    const queryId = store.createTab("conn-1", "db", "draft query");
+    store.updateSql(queryId, "select 1;");
+    const dataId = store.createTab("conn-1", "db", "users", "data");
+
+    store.closeAllTabs();
+
+    assert.equal(store.showCloseConfirm, false);
+    assert.deepEqual(
+      store.tabs.map((tab) => tab.id),
+      [],
+    );
+    assert.equal(store.activeTabId, null);
+    assert.equal(
+      store.tabs.some((tab) => tab.id === queryId || tab.id === dataId),
+      false,
+    );
+  } finally {
+    restoreStorage();
+  }
 });
 
 test("close other tabs pauses on unsaved query tabs before keeping target tab", () => {
@@ -286,6 +338,8 @@ test("close other tabs pauses on unsaved query tabs before keeping target tab", 
 
   assert.equal(store.showCloseConfirm, true);
   assert.equal(store.pendingCloseTabId, queryId);
+  assert.equal(store.closeConfirmContext, "batch");
+  assert.equal(store.activeTabId, queryId);
   assert.deepEqual(
     store.tabs.map((tab) => tab.id),
     [queryId, dataId],
@@ -308,6 +362,267 @@ test("close other tabs pauses on unsaved query tabs before keeping target tab", 
     [dataId],
   );
   assert.equal(store.activeTabId, dataId);
+});
+
+test("close regular tabs keeps fixed tabs open", () => {
+  setActivePinia(createPinia());
+  const store = useQueryStore();
+  const fixedId = store.createTab("conn-1", "db", "fixed query");
+  const regularA = store.createTab("conn-1", "db", "regular a");
+  const regularB = store.createTab("conn-1", "db", "regular b");
+  store.togglePinnedTab(fixedId);
+  store.activeTabId = regularB;
+
+  store.closeRegularTabs();
+
+  assert.deepEqual(
+    store.tabs.map((tab) => tab.id),
+    [fixedId],
+  );
+  assert.equal(store.activeTabId, fixedId);
+  assert.equal(
+    store.tabs.some((tab) => tab.id === regularA),
+    false,
+  );
+  assert.equal(
+    store.tabs.some((tab) => tab.id === regularB),
+    false,
+  );
+});
+
+test("close fixed tabs keeps regular tabs open", () => {
+  setActivePinia(createPinia());
+  const store = useQueryStore();
+  const fixedA = store.createTab("conn-1", "db", "fixed a");
+  const fixedB = store.createTab("conn-1", "db", "fixed b");
+  const regularId = store.createTab("conn-1", "db", "regular");
+  store.togglePinnedTab(fixedA);
+  store.togglePinnedTab(fixedB);
+  store.activeTabId = fixedB;
+
+  store.closeFixedTabs();
+
+  assert.deepEqual(
+    store.tabs.map((tab) => tab.id),
+    [regularId],
+  );
+  assert.equal(store.activeTabId, regularId);
+});
+
+test("close other regular tabs does not close fixed tabs", () => {
+  setActivePinia(createPinia());
+  const store = useQueryStore();
+  const fixedId = store.createTab("conn-1", "db", "fixed");
+  const keepId = store.createTab("conn-1", "db", "keep");
+  const closeId = store.createTab("conn-1", "db", "close");
+  store.togglePinnedTab(fixedId);
+
+  store.closeOtherRegularTabs(keepId);
+
+  assert.deepEqual(
+    store.tabs.map((tab) => tab.id),
+    [fixedId, keepId],
+  );
+  assert.equal(store.activeTabId, keepId);
+  assert.equal(
+    store.tabs.some((tab) => tab.id === closeId),
+    false,
+  );
+});
+
+test("close other fixed tabs does not close regular tabs", () => {
+  setActivePinia(createPinia());
+  const store = useQueryStore();
+  const keepFixedId = store.createTab("conn-1", "db", "keep fixed");
+  const closeFixedId = store.createTab("conn-1", "db", "close fixed");
+  const regularId = store.createTab("conn-1", "db", "regular");
+  store.togglePinnedTab(keepFixedId);
+  store.togglePinnedTab(closeFixedId);
+
+  store.closeOtherFixedTabs(keepFixedId);
+
+  assert.deepEqual(
+    store.tabs.map((tab) => tab.id),
+    [keepFixedId, regularId],
+  );
+  assert.equal(store.activeTabId, keepFixedId);
+  assert.equal(
+    store.tabs.some((tab) => tab.id === closeFixedId),
+    false,
+  );
+});
+
+test("close other tabs pauses on restored unsaved query tabs", () => {
+  const restoreStorage = installMemoryStorage();
+  try {
+    localStorage.setItem(
+      "dbx-open-tabs",
+      JSON.stringify([
+        {
+          id: "a",
+          title: "a.sql",
+          connectionId: "conn-1",
+          database: "db",
+          sql: "select 1;",
+          mode: "query",
+        },
+        {
+          id: "b",
+          title: "b.sql",
+          connectionId: "conn-1",
+          database: "db",
+          sql: "",
+          mode: "query",
+        },
+      ]),
+    );
+    localStorage.setItem("dbx-active-tab", "b");
+    setActivePinia(createPinia());
+    const store = useQueryStore();
+
+    store.closeOtherTabs("b");
+
+    assert.equal(store.showCloseConfirm, true);
+    assert.equal(store.pendingCloseTabId, "a");
+    assert.equal(store.closeConfirmContext, "batch");
+    assert.equal(store.activeTabId, "a");
+    assert.deepEqual(
+      store.tabs.map((tab) => tab.id),
+      ["a", "b"],
+    );
+  } finally {
+    restoreStorage();
+  }
+});
+
+test("close other tabs pauses on dirty saved SQL file tabs", () => {
+  setActivePinia(createPinia());
+  const store = useQueryStore();
+  const savedId = store.createTab("conn-1", "db", "a.sql");
+  const keepId = store.createTab("conn-1", "db", "b.sql");
+  const savedTab = store.tabs.find((item) => item.id === savedId);
+  assert.ok(savedTab);
+  savedTab.savedSqlId = "saved-a";
+  savedTab.sql = "select 1;";
+  savedTab.originalSql = "select 0;";
+
+  store.closeOtherTabs(keepId);
+
+  assert.equal(store.showCloseConfirm, true);
+  assert.equal(store.pendingCloseTabId, savedId);
+  assert.equal(store.closeConfirmContext, "batch");
+  assert.equal(store.activeTabId, savedId);
+  assert.deepEqual(
+    store.tabs.map((tab) => tab.id),
+    [savedId, keepId],
+  );
+});
+
+test("discard all pending close changes closes the full pending batch", () => {
+  setActivePinia(createPinia());
+  const store = useQueryStore();
+  const firstId = store.createTab("conn-1", "db", "a.sql");
+  store.updateSql(firstId, "select 1;");
+  const secondId = store.createTab("conn-1", "db", "b.sql");
+  store.updateSql(secondId, "select 2;");
+  const keepId = store.createTab("conn-1", "db", "c.sql");
+
+  store.closeOtherTabs(keepId);
+
+  assert.equal(store.showCloseConfirm, true);
+  assert.deepEqual(store.closeConfirmDirtyTabIds, [firstId, secondId]);
+
+  store.forceCloseAllPendingTabs();
+
+  assert.equal(store.showCloseConfirm, false);
+  assert.deepEqual(
+    store.tabs.map((tab) => tab.id),
+    [keepId],
+  );
+  assert.equal(store.activeTabId, keepId);
+});
+
+test("app close confirmation discards dirty SQL without closing the tab", () => {
+  setActivePinia(createPinia());
+  const store = useQueryStore();
+  const tabId = store.createTab("conn-1", "db", "a.sql");
+  const tab = store.tabs.find((item) => item.id === tabId);
+  assert.ok(tab);
+  tab.savedSqlId = "saved-a";
+  tab.sql = "select 2;";
+  tab.originalSql = "select 1;";
+
+  assert.equal(store.requestAppCloseConfirmation(), true);
+  assert.equal(store.showCloseConfirm, true);
+  assert.equal(store.pendingCloseTabId, tabId);
+  assert.equal(store.closeConfirmContext, "app");
+  assert.equal(store.activeTabId, tabId);
+
+  store.forceClosePendingTab();
+
+  assert.equal(store.showCloseConfirm, false);
+  assert.equal(store.hasDirtyTabs, false);
+  assert.deepEqual(
+    store.tabs.map((item) => item.id),
+    [tabId],
+  );
+  assert.equal(tab.sql, "select 1;");
+});
+
+test("disabled unsaved SQL close confirmation skips app close prompt", () => {
+  const restoreStorage = installMemoryStorage();
+  try {
+    setActivePinia(createPinia());
+    const settingsStore = useSettingsStore();
+    settingsStore.updateEditorSettings({ confirmUnsavedSqlClose: false });
+    const store = useQueryStore();
+    const tabId = store.createTab("conn-1", "db", "a.sql");
+    const tab = store.tabs.find((item) => item.id === tabId);
+    assert.ok(tab);
+    tab.savedSqlId = "saved-a";
+    tab.sql = "select 2;";
+    tab.originalSql = "select 1;";
+
+    assert.equal(store.requestAppCloseConfirmation(), false);
+    assert.equal(store.showCloseConfirm, false);
+    assert.equal(store.hasDirtyTabs, true);
+    assert.deepEqual(
+      store.tabs.map((item) => item.id),
+      [tabId],
+    );
+  } finally {
+    restoreStorage();
+  }
+});
+
+test("discard all app close changes keeps tabs open and clean", () => {
+  setActivePinia(createPinia());
+  const store = useQueryStore();
+  const firstId = store.createTab("conn-1", "db", "a.sql");
+  const first = store.tabs.find((item) => item.id === firstId);
+  assert.ok(first);
+  first.sql = "select 2;";
+  first.originalSql = "select 1;";
+  const secondId = store.createTab("conn-1", "db", "b.sql");
+  const second = store.tabs.find((item) => item.id === secondId);
+  assert.ok(second);
+  second.sql = "select 4;";
+  second.originalSql = "select 3;";
+
+  assert.equal(store.requestAppCloseConfirmation(), true);
+  assert.deepEqual(store.closeConfirmDirtyTabIds, [firstId, secondId]);
+  assert.equal(store.activeTabId, firstId);
+
+  store.forceCloseAllPendingTabs();
+
+  assert.equal(store.showCloseConfirm, false);
+  assert.equal(store.hasDirtyTabs, false);
+  assert.deepEqual(
+    store.tabs.map((item) => item.id),
+    [firstId, secondId],
+  );
+  assert.equal(first.sql, "select 1;");
+  assert.equal(second.sql, "select 3;");
 });
 
 test("editing query sql preserves the displayed result editability state", () => {
@@ -2114,6 +2429,189 @@ test("mongo dropIndexes execution returns dropped index names", async () => {
     });
     assert.deepEqual(tab?.result?.columns, ["name"]);
     assert.deepEqual(tab?.result?.rows, [["a_1"], ["b_1"]]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreStorage();
+  }
+});
+
+test("mongo multi-command execution runs writes sequentially and keeps grouped results", async () => {
+  const restoreStorage = installMemoryStorage();
+  setActivePinia(createPinia());
+  const connectionStore = useConnectionStore();
+  const store = useQueryStore();
+  const originalFetch = globalThis.fetch;
+  const insertBodies: any[] = [];
+
+  connectionStore.addEphemeralConnection({
+    ...conn("mongo-1"),
+    db_type: "mongodb",
+    port: 27017,
+  });
+
+  globalThis.fetch = withConnectionHealthMock(async (input, init) => {
+    const url = String(input);
+    if (url === "/api/mongo/insert-documents") {
+      insertBodies.push(JSON.parse(String(init?.body ?? "{}")));
+      return new Response(JSON.stringify({ affected_rows: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response("unexpected request", { status: 500 });
+  });
+
+  try {
+    const tabId = store.createTab("mongo-1", "accounting", "Query", "query", "");
+    await store.executeTabSql(
+      tabId,
+      `
+        db.users.insertOne({ name: "Ada" });
+        db.users.insertOne({ name: "Grace" });
+      `,
+    );
+    const tab = store.tabs.find((item) => item.id === tabId);
+
+    assert.equal(insertBodies.length, 2);
+    assert.deepEqual(
+      insertBodies.map((body) => ({ database: body.database, collection: body.collection, docsJson: body.docsJson })),
+      [
+        { database: "accounting", collection: "users", docsJson: '{ "name": "Ada" }' },
+        { database: "accounting", collection: "users", docsJson: '{ "name": "Grace" }' },
+      ],
+    );
+    assert.equal(tab?.results?.length, 2);
+    assert.equal(tab?.activeResultIndex, 0);
+    assert.equal(tab?.result?.affected_rows, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreStorage();
+  }
+});
+
+test("mongo multi-command execution reconnects before running commands", async () => {
+  const restoreStorage = installMemoryStorage();
+  setActivePinia(createPinia());
+  const connectionStore = useConnectionStore();
+  const store = useQueryStore();
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+
+  connectionStore.addEphemeralConnection({
+    ...conn("mongo-1"),
+    db_type: "mongodb",
+    port: 27017,
+  });
+  connectionStore.connectedIds.delete("mongo-1");
+
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url === "/api/connection/connect") {
+      requests.push(url);
+      return new Response(JSON.stringify("connected"), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (url === "/api/mongo/insert-documents") {
+      requests.push(url);
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      assert.equal(body.database, "accounting");
+      return new Response(JSON.stringify({ affected_rows: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response("unexpected request", { status: 500 });
+  };
+
+  try {
+    const tabId = store.createTab("mongo-1", "accounting", "Query", "query", "");
+    await store.executeTabSql(tabId, 'db.users.insertOne({ name: "Ada" })');
+
+    assert.deepEqual(requests, ["/api/connection/connect", "/api/mongo/insert-documents"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreStorage();
+  }
+});
+
+test("mongo multi-command execution applies use database before later commands", async () => {
+  const restoreStorage = installMemoryStorage();
+  setActivePinia(createPinia());
+  const connectionStore = useConnectionStore();
+  const store = useQueryStore();
+  const originalFetch = globalThis.fetch;
+  const insertBodies: any[] = [];
+
+  connectionStore.addEphemeralConnection({
+    ...conn("mongo-1"),
+    db_type: "mongodb",
+    port: 27017,
+  });
+
+  globalThis.fetch = withConnectionHealthMock(async (input, init) => {
+    const url = String(input);
+    if (url === "/api/mongo/insert-documents") {
+      insertBodies.push(JSON.parse(String(init?.body ?? "{}")));
+      return new Response(JSON.stringify({ affected_rows: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response("unexpected request", { status: 500 });
+  });
+
+  try {
+    const tabId = store.createTab("mongo-1", "accounting", "Query", "query", "");
+    await store.executeTabSql(
+      tabId,
+      `
+        use archive
+        db.users.insertOne({ name: "Ada" })
+      `,
+    );
+    const tab = store.tabs.find((item) => item.id === tabId);
+
+    assert.equal(insertBodies.length, 1);
+    assert.equal(insertBodies[0]?.database, "archive");
+    assert.equal(tab?.database, "archive");
+    assert.equal(tab?.results?.length, 2);
+    assert.deepEqual(tab?.results?.[0]?.rows, [["switched to db archive"]]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreStorage();
+  }
+});
+
+test("mongo use-only execution updates the tab without reconnecting", async () => {
+  const restoreStorage = installMemoryStorage();
+  setActivePinia(createPinia());
+  const connectionStore = useConnectionStore();
+  const store = useQueryStore();
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+
+  connectionStore.addEphemeralConnection({
+    ...conn("mongo-1"),
+    db_type: "mongodb",
+    port: 27017,
+  });
+  connectionStore.connectedIds.delete("mongo-1");
+
+  globalThis.fetch = async (input) => {
+    requests.push(String(input));
+    return new Response("unexpected request", { status: 500 });
+  };
+
+  try {
+    const tabId = store.createTab("mongo-1", "accounting", "Query", "query", "");
+    await store.executeTabSql(tabId, "use archive");
+    const tab = store.tabs.find((item) => item.id === tabId);
+
+    assert.deepEqual(requests, []);
+    assert.equal(tab?.database, "archive");
+    assert.deepEqual(tab?.result?.rows, [["switched to db archive"]]);
   } finally {
     globalThis.fetch = originalFetch;
     restoreStorage();

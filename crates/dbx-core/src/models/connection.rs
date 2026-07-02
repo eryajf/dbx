@@ -659,6 +659,25 @@ impl ConnectionConfig {
             })
     }
 
+    pub fn is_starrocks(&self) -> bool {
+        self.db_type == DatabaseType::StarRocks
+            || self.driver_profile.as_deref().is_some_and(|profile| profile.eq_ignore_ascii_case("starrocks"))
+    }
+
+    pub fn bare_mysql_supports_tls(&self) -> bool {
+        self.is_starrocks()
+    }
+
+    pub fn bare_mysql_uses_tls(&self) -> bool {
+        if !self.bare_mysql_supports_tls() {
+            return false;
+        }
+        if mysql_url_params_tls_disabled(self.url_params.as_deref()) {
+            return false;
+        }
+        self.mysql_uses_tls()
+    }
+
     pub fn canonicalized(&self) -> Self {
         let mut config = self.clone();
         if config.db_type == DatabaseType::Mysql
@@ -1072,6 +1091,9 @@ impl ConnectionConfig {
     fn normalized_url_params(&self) -> String {
         let value = self.url_params.as_deref().unwrap_or("").trim();
         if self.needs_bare_mysql() {
+            if self.bare_mysql_uses_tls() {
+                return normalize_mysql_url_params(value, true, self.ca_cert_path.trim().is_empty());
+            }
             return normalize_bare_mysql_url_params(value);
         }
         match self.db_type {
@@ -1097,8 +1119,10 @@ impl ConnectionConfig {
         self.ssl || url_params_contains_flag(self.url_params.as_deref(), "secure", "true")
     }
 
-    fn mysql_uses_tls(&self) -> bool {
-        self.ssl || self.host.to_ascii_lowercase().ends_with(".tidbcloud.com")
+    pub fn mysql_uses_tls(&self) -> bool {
+        self.ssl
+            || self.host.to_ascii_lowercase().ends_with(".tidbcloud.com")
+            || mysql_url_params_require_tls(self.url_params.as_deref())
     }
 
     fn redis_tls_insecure_fragment(&self) -> &'static str {
@@ -1129,6 +1153,50 @@ fn url_params_contains_flag(params: Option<&str>, key: &str, expected: &str) -> 
     params.unwrap_or("").trim().trim_start_matches('?').split(['&', ';']).filter_map(|part| part.split_once('=')).any(
         |(part_key, value)| part_key.trim().eq_ignore_ascii_case(key) && value.trim().eq_ignore_ascii_case(expected),
     )
+}
+
+fn mysql_tls_file_param_is(key: &str, target: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace(['-', '_'], "");
+    normalized == format!("ssl{target}")
+}
+
+fn mysql_url_params_tls_disabled(params: Option<&str>) -> bool {
+    params.unwrap_or("").trim().trim_start_matches('?').split('&').any(|part| {
+        let part = part.trim();
+        if part.is_empty() {
+            return false;
+        }
+        let Some((key, value)) = part.split_once('=') else {
+            return false;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        (key.eq_ignore_ascii_case("require_ssl") && value.eq_ignore_ascii_case("false"))
+            || ((key.eq_ignore_ascii_case("ssl-mode") || key.eq_ignore_ascii_case("sslmode"))
+                && matches!(value.to_ascii_lowercase().replace('-', "_").as_str(), "disabled" | "disable"))
+    })
+}
+
+fn mysql_url_params_require_tls(params: Option<&str>) -> bool {
+    params.unwrap_or("").trim().trim_start_matches('?').split('&').any(|part| {
+        let part = part.trim();
+        if part.is_empty() {
+            return false;
+        }
+        let Some((key, value)) = part.split_once('=') else {
+            return mysql_tls_file_param_is(part, "cert") || mysql_tls_file_param_is(part, "key");
+        };
+        let key = key.trim();
+        let value = value.trim();
+        (key.eq_ignore_ascii_case("require_ssl") && value.eq_ignore_ascii_case("true"))
+            || mysql_tls_file_param_is(key, "cert")
+            || mysql_tls_file_param_is(key, "key")
+            || ((key.eq_ignore_ascii_case("ssl-mode") || key.eq_ignore_ascii_case("sslmode"))
+                && matches!(
+                    value.to_ascii_lowercase().replace('-', "_").as_str(),
+                    "required" | "require" | "verify_ca" | "verify_identity"
+                ))
+    })
 }
 
 fn normalize_bare_mysql_url_params(value: &str) -> String {
@@ -1863,7 +1931,7 @@ mod tests {
     }
 
     #[test]
-    fn starrocks_profile_omits_mysql_ssl_mode_param() {
+    fn starrocks_profile_omits_mysql_ssl_mode_param_when_tls_disabled() {
         let mut config = mysql_config("root", "secret", Some("analytics"));
         config.driver_profile = Some("starrocks".to_string());
         config.url_params = Some(
@@ -1872,7 +1940,36 @@ mod tests {
         );
 
         assert!(config.needs_bare_mysql());
+        assert!(!config.bare_mysql_uses_tls());
         assert_eq!(config.connection_url(), "mysql://root:secret@10.1.2.3:2883/analytics");
+    }
+
+    #[test]
+    fn starrocks_profile_preserves_mysql_tls_params_when_enabled() {
+        let mut config = mysql_config("root", "secret", Some("analytics"));
+        config.driver_profile = Some("starrocks".to_string());
+        config.ssl = true;
+        config.url_params = Some("verify_ca=true&verify_identity=false".to_string());
+
+        assert!(config.bare_mysql_uses_tls());
+        assert_eq!(
+            config.connection_url(),
+            "mysql://root:secret@10.1.2.3:2883/analytics?require_ssl=true&verify_ca=true&verify_identity=false&charset=utf8mb4"
+        );
+    }
+
+    #[test]
+    fn starrocks_database_type_preserves_mysql_tls_params_when_enabled() {
+        let mut config = mysql_config("root", "secret", Some("analytics"));
+        config.db_type = DatabaseType::StarRocks;
+        config.ssl = true;
+        config.ca_cert_path = "/tmp/starrocks-ca.pem".to_string();
+
+        assert!(config.bare_mysql_uses_tls());
+        assert_eq!(
+            config.connection_url(),
+            "mysql://root:secret@10.1.2.3:2883/analytics?require_ssl=true&verify_identity=false&charset=utf8mb4"
+        );
     }
 
     #[test]

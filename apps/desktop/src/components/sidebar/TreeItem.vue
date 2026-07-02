@@ -76,7 +76,7 @@ import { clearActiveTableReferencePayload, createTableReferencePayload, createTa
 import { editableRowIdentifierColumns, usesSyntheticRowIdKey } from "@/lib/tableEditing";
 import { tableOpenPageLimit } from "@/lib/tableOpenPageLimit";
 import { supportsDatabaseCreation, supportsDatabaseSearch, supportsFieldLineage, supportsObjectBrowserTreeNode, supportsSchemaDiagram, supportsSqlFileExecution, supportsTableImport, supportsTableTruncate, supportsTableStructureEditing, usesTreeSchemaMode } from "@/lib/databaseCapabilities";
-import { copyNameForTreeNode, objectSourceKindForTreeNode, sidebarSelectionCopyAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/treeNodeClick";
+import { copyNameForTreeNode, objectSourceKindForTreeNode, shouldRunTreeNodeRowAction, sidebarSelectionCopyAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/treeNodeClick";
 import { formatSqlInsert } from "@/lib/exportFormats";
 import { joinExportedDdls } from "@/lib/ddlExport";
 import { fetchTableDataForExport } from "@/lib/tableDataExport";
@@ -102,7 +102,7 @@ import {
   type TableAdminSqlOptions,
 } from "@/lib/dbAdminSql";
 import { buildRenameObjectSql, supportsObjectRename, type RenameableObjectType } from "@/lib/objectRenameSql";
-import { buildRoutineRenameObjectSourceStatements, supportsSourceBackedRoutineRename } from "@/lib/objectSourceEditor";
+import { buildEditableObjectSource, buildRoutineRenameObjectSourceStatements, supportsSourceBackedRoutineRename } from "@/lib/objectSourceEditor";
 import { buildViewDdl } from "@/lib/viewDdl";
 import { formatSqlForDisplay, sqlFormatDialectForDbType } from "@/lib/sqlFormatter";
 import DdlViewDialog from "@/components/objects/DdlViewDialog.vue";
@@ -126,6 +126,7 @@ import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { copyToClipboard } from "@/lib/clipboard";
 import { hasEnabledTransportLayers } from "@/lib/connectionTransport";
 import { formatShortcut } from "@/lib/shortcutRegistry";
+import { isWindows } from "@/lib/platform";
 import { rankSavedSqlHistory, type SavedSqlHistoryScope } from "@/lib/savedSqlHistory";
 import { isSqlServerLinkedNode } from "@/lib/sqlServerLinkedServers";
 import DatabaseIcon from "@/components/icons/DatabaseIcon.vue";
@@ -200,6 +201,7 @@ const settingsStore = useSettingsStore();
 const savedSqlStore = useSavedSqlStore();
 const { toast } = useToast();
 const { highlight } = useSqlHighlighter();
+const useWindowsSidebarCommentFont = isWindows();
 
 type StructureCopyFormat = "tsv" | "markdown";
 type DuplicateStructureSource = TreeNode & { connectionId: string; database: string };
@@ -578,6 +580,18 @@ async function toggle() {
       const collectionRef = node.id.includes("__vector_collection:") ? node.id.split("__vector_collection:").pop() || node.label : node.label;
       const tab = queryStore.createTab(node.connectionId, node.database || "default", node.label, "vector");
       queryStore.updateSql(tab, collectionRef);
+      api
+        .vectorGetCollectionDetail(node.connectionId, node.database || "default", collectionRef)
+        .then((info) => {
+          if (info.dimension != null) {
+            if (node.meta) {
+              (node.meta as Record<string, unknown>).dimension = info.dimension;
+            } else {
+              node.meta = { dimension: info.dimension } as any;
+            }
+          }
+        })
+        .catch(() => {});
     } else if (node.type === "database" && node.connectionId && hasTreeNodeDatabaseContext(node)) {
       const config = connectionStore.getConfig(node.connectionId);
       const effectiveDbType = effectiveDatabaseTypeForConnection(config);
@@ -622,17 +636,20 @@ async function toggle() {
   }
 }
 
-function runRowClickAction() {
+function runRowClickAction(clickDetail: number) {
   const node = props.node;
   if (node.type === "load-more") {
+    if (clickDetail > 1) return;
     void loadMoreObjectGroupChildren();
     return;
   }
   if (node.type === "object-browser") {
+    if (clickDetail > 1) return;
     void openObjectBrowser();
     return;
   }
   const action = treeNodeRowAction(node.type, canExpand.value, settingsStore.editorSettings.sidebarActivation);
+  if (!shouldRunTreeNodeRowAction(action, clickDetail)) return;
   if (action === "open-data") {
     openData();
   } else if (node.type === "mongo-collection") {
@@ -664,6 +681,18 @@ async function loadAllObjectGroupChildren() {
   } catch (e: any) {
     toast(t("connection.connectFailed", { message: translateBackendError(t, e?.message || String(e)) }), 5000);
   }
+}
+
+function onToggleClick() {
+  selectSingleTreeNode(props.node);
+  rowRef.value?.focus({ preventScroll: true });
+  void toggle();
+}
+
+function onToggleMouseDown(event: MouseEvent) {
+  if (event.button !== 0) return;
+  selectSingleTreeNode(props.node);
+  rowRef.value?.focus({ preventScroll: true });
 }
 
 function visibleTreeNodes(): TreeNode[] {
@@ -735,8 +764,7 @@ function onClick(event: MouseEvent) {
   selectSingleTreeNode(props.node);
   rowRef.value?.focus({ preventScroll: true });
   if (settingsStore.editorSettings.sidebarActivation === "double") return;
-  if (event.detail > 1) return;
-  runRowClickAction();
+  runRowClickAction(event.detail);
 }
 
 function onTreeItemContextMenu(event: MouseEvent, openContextMenu: (event: MouseEvent) => void) {
@@ -1765,9 +1793,17 @@ function viewObjectSource() {
       return api.getObjectSource(node.connectionId!, node.database!, schema, node.label, objectType as any);
     })
     .then(async (result) => {
+      const databaseType = currentDatabaseType();
+      if (!databaseType) throw new Error("Connection type is unavailable.");
       const tabId = queryStore.createTab(node.connectionId!, node.database!, `Source - ${node.label}`);
-      const formatted = await formatSqlForDisplay(result.source, sqlFormatDialectForDbType(currentDatabaseType()), settingsStore.editorSettings.sqlFormatter);
-      queryStore.updateSql(tabId, formatted);
+      const editable = await buildEditableObjectSource({
+        databaseType,
+        objectType,
+        schema,
+        name: node.label,
+        source: result.source,
+      });
+      queryStore.updateSql(tabId, editable);
       if (objectType !== "SEQUENCE") {
         queryStore.setObjectSource(tabId, {
           schema,
@@ -3415,6 +3451,16 @@ function openDatabaseExport() {
   };
 }
 
+function openAllDatabasesExport() {
+  const node = props.node;
+  if (node.type !== "connection" || !node.connectionId) return;
+  connectionStore.databaseExportSource = {
+    connectionId: node.connectionId,
+    database: "",
+    allDatabases: true,
+  };
+}
+
 function openTableImport() {
   const node = props.node;
   if (node.type !== "table" || !node.connectionId || !node.database) return;
@@ -3454,6 +3500,11 @@ const canExpand = computed(() =>
 const canPin = computed(() => canTreeNodePin(props.node.type));
 const canOpenSqlFileExecution = computed(() => {
   return supportsSqlFileExecution(rawDatabaseType());
+});
+const canExportAllDatabases = computed(() => {
+  if (props.node.type !== "connection" || !props.node.connectionId) return false;
+  const dbType = connectionStore.getConfig(props.node.connectionId)?.db_type;
+  return !["redis", "mongodb", "elasticsearch", "qdrant", "milvus", "weaviate", "chromadb", "etcd", "zookeeper", "mq", "nacos"].includes(dbType || "");
 });
 const canOpenDiagram = computed(() => {
   return !!props.node.database && supportsSchemaDiagram(currentDatabaseType());
@@ -3962,6 +4013,9 @@ function treeItemMenuItems(): ContextMenuItem[] {
     }
     if (canOpenSqlFileExecution.value) {
       items.push({ label: t("sqlFile.title"), action: openSqlFileExecution, icon: FileCode });
+    }
+    if (canExportAllDatabases.value) {
+      items.push({ label: t("contextMenu.exportAllDatabases"), action: openAllDatabasesExport, icon: Upload });
     }
     if (canCreateDatabase.value) {
       items.push({
@@ -4515,7 +4569,7 @@ function treeItemMenuItems(): ContextMenuItem[] {
           <div v-if="showDropBefore" class="absolute right-2 top-0 h-0.5 bg-primary rounded-full pointer-events-none" :style="{ left: paddingLeft }" />
           <div v-if="showDropAfter" class="absolute right-2 bottom-0 h-0.5 bg-primary rounded-full pointer-events-none" :style="{ left: paddingLeft }" />
           <template v-if="canExpand">
-            <button type="button" class="-m-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground" @click.stop="toggle">
+            <button type="button" class="-m-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground" @mousedown.stop="onToggleMouseDown" @click.stop="onToggleClick">
               <Loader2 v-if="node.isLoading" class="w-3.5 h-3.5 animate-spin" />
               <ChevronDown v-else-if="node.isExpanded" class="w-3.5 h-3.5" />
               <ChevronRight v-else class="w-3.5 h-3.5" />
@@ -4547,8 +4601,8 @@ function treeItemMenuItems(): ContextMenuItem[] {
           <Badge v-if="isNodeDefaultDatabase" variant="secondary" class="h-4 px-1.5 text-[10px]">
             {{ t("editor.defaultDatabase") }}
           </Badge>
-          <span v-if="columnComment" class="sidebar-object-comment ml-auto max-w-[20%] shrink-0 truncate text-right">{{ columnComment }}</span>
-          <span v-if="tableComment" class="sidebar-object-comment ml-auto max-w-[20%] shrink-0 truncate text-right">{{ tableComment }}</span>
+          <span v-if="columnComment" class="sidebar-object-comment ml-auto max-w-[20%] shrink-0 truncate text-right" :class="{ 'sidebar-object-comment--windows': useWindowsSidebarCommentFont }">{{ columnComment }}</span>
+          <span v-if="tableComment" class="sidebar-object-comment ml-auto max-w-[20%] shrink-0 truncate text-right" :class="{ 'sidebar-object-comment--windows': useWindowsSidebarCommentFont }">{{ tableComment }}</span>
           <span v-if="node.type === 'connection' && node.connectionId && connectionStore.connectedIds.has(node.connectionId)" class="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
           <span v-if="showsDatabaseOpenIndicator" class="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
           <Badge v-if="isConnectionReadonly" variant="secondary" class="h-4 px-1.5 text-[10px] gap-0.5"><Lock class="w-2.5 h-2.5" />{{ t("connection.readOnlyBadge") }}</Badge>
@@ -4979,6 +5033,13 @@ function treeItemMenuItems(): ContextMenuItem[] {
   opacity: 0.6;
   /* Sidebar rows repaint on hover; avoid heavier font shaping and fallback here. */
   text-rendering: auto;
+}
+
+.sidebar-object-comment--windows {
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 1;
 }
 
 .tree-item-connection-tint {

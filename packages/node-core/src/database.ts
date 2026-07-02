@@ -1,4 +1,5 @@
 import type { ConnectionConfig, ProxyTunnelConfig } from "./connections.js";
+import type { SslOptions } from "mysql2";
 import { createServer, connect as netConnect, type Server, type Socket } from "node:net";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -148,12 +149,15 @@ async function getMysqlPool(config: ConnectionConfig): Promise<import("mysql2/pr
 
   const mysql = await import("mysql2/promise");
   const endpoint = await connectionEndpoint(config);
-  const pool = mysql.default.createPool({
+  const poolOptions: import("mysql2/promise").PoolOptions = {
     uri: buildConnectionUrl(config, endpoint),
     connectionLimit: 3,
     idleTimeout: 30_000,
     connectTimeout: 10_000,
-  });
+  };
+  const tls = await mysqlTlsOptions(config);
+  if (tls) poolOptions.ssl = tls;
+  const pool = mysql.default.createPool(poolOptions);
   const entry: PoolEntry = { type: "mysql", pool, timer: setTimeout(() => {}, 0) };
   pools.set(key, entry);
   resetIdleTimer(key, entry);
@@ -209,7 +213,7 @@ async function connectionEndpoint(config: ConnectionConfig): Promise<{ host: str
 export function buildConnectionUrl(config: ConnectionConfig, endpoint: { host: string; port: number }): string {
   const db = config.database || "";
   if (isMysqlType(config.db_type)) {
-    const params = config.url_params || "";
+    const params = buildMysqlUrlParams(config);
     const suffix = params ? `?${params}` : "";
     return `mysql://${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}@${endpoint.host}:${endpoint.port}/${db}${suffix}`;
   }
@@ -394,6 +398,158 @@ function portBytes(port: number): Buffer {
 
 function isMysqlType(dbType: string): boolean {
   return dbType === "mysql" || dbType === "doris" || dbType === "starrocks" || dbType === "manticoresearch";
+}
+
+function isStarrocksConnection(config: ConnectionConfig): boolean {
+  return config.db_type === "starrocks" || config.driver_profile?.toLowerCase() === "starrocks";
+}
+
+function needsBareMysql(config: ConnectionConfig): boolean {
+  const profile = config.driver_profile?.toLowerCase();
+  return (
+    config.db_type === "doris" ||
+    config.db_type === "starrocks" ||
+    config.db_type === "manticoresearch" ||
+    profile === "doris" ||
+    profile === "starrocks" ||
+    profile === "manticoresearch" ||
+    profile === "selectdb" ||
+    profile === "oceanbase"
+  );
+}
+
+function mysqlTlsFileParamIs(key: string, target: "cert" | "key"): boolean {
+  return key.toLowerCase().replace(/[-_]/g, "") === `ssl${target}`;
+}
+
+function mysqlUrlParamsRequireTls(params: string): boolean {
+  for (const part of params.trim().replace(/^\?/, "").split("&")) {
+    if (!part) continue;
+    const [rawKey, rawValue = ""] = splitUrlParam(part);
+    const key = decodeUrlParamPart(rawKey);
+    const value = decodeUrlParamPart(rawValue);
+    if (key.toLowerCase() === "require_ssl" && value.toLowerCase() === "true") return true;
+    if (mysqlTlsFileParamIs(key, "cert") || mysqlTlsFileParamIs(key, "key")) return true;
+    if (key.toLowerCase() === "ssl-mode" || key.toLowerCase() === "sslmode") {
+      const mode = value.toLowerCase().replace(/-/g, "_");
+      if (mode === "required" || mode === "require" || mode === "verify_ca" || mode === "verify_identity") return true;
+    }
+  }
+  return false;
+}
+
+function mysqlUrlParamsTlsDisabled(params: string): boolean {
+  for (const part of params.trim().replace(/^\?/, "").split("&")) {
+    if (!part) continue;
+    const [rawKey, rawValue = ""] = splitUrlParam(part);
+    const key = decodeUrlParamPart(rawKey).toLowerCase();
+    const value = decodeUrlParamPart(rawValue).toLowerCase();
+    if (key === "require_ssl" && value === "false") return true;
+    if ((key === "ssl-mode" || key === "sslmode") && (value === "disabled" || value === "disable")) return true;
+  }
+  return false;
+}
+
+function mysqlUsesTls(config: ConnectionConfig): boolean {
+  return !!config.ssl || mysqlUrlParamsRequireTls(config.url_params || "");
+}
+
+function bareMysqlUsesTls(config: ConnectionConfig): boolean {
+  if (!isStarrocksConnection(config)) {
+    return false;
+  }
+  if (mysqlUrlParamsTlsDisabled(config.url_params || "")) {
+    return false;
+  }
+  return mysqlUsesTls(config);
+}
+
+function normalizeBareMysqlUrlParams(value: string): string {
+  return value
+    .trim()
+    .replace(/^\?/, "")
+    .split("&")
+    .filter((part) => {
+      if (!part) return false;
+      const key = decodeUrlParamPart(splitUrlParam(part)[0]).toLowerCase();
+      return (
+        key !== "charset" &&
+        key !== "ssl-mode" &&
+        key !== "sslmode" &&
+        key !== "require_ssl" &&
+        key !== "verify_ca" &&
+        key !== "verify_identity"
+      );
+    })
+    .join("&");
+}
+
+function normalizeMysqlUrlParams(value: string, forceTls: boolean, acceptInvalidCerts: boolean): string {
+  const parts = value
+    .trim()
+    .replace(/^\?/, "")
+    .split("&")
+    .filter((part) => part.length > 0);
+
+  if (forceTls) {
+    const filtered = parts.filter((part) => {
+      const key = decodeUrlParamPart(splitUrlParam(part)[0]).toLowerCase();
+      return key !== "ssl-mode" && key !== "sslmode" && key !== "require_ssl";
+    });
+    filtered.unshift("require_ssl=true");
+    if (acceptInvalidCerts && !filtered.some((part) => urlParamKeyIs(part, "verify_ca"))) {
+      filtered.push("verify_ca=false");
+    }
+    if (!filtered.some((part) => urlParamKeyIs(part, "verify_identity"))) {
+      filtered.push("verify_identity=false");
+    }
+    if (!filtered.some((part) => urlParamKeyIs(part, "charset"))) {
+      filtered.push("charset=utf8mb4");
+    }
+    return filtered.join("&");
+  }
+
+  if (
+    !parts.some(
+      (part) =>
+        urlParamKeyIs(part, "ssl-mode") || urlParamKeyIs(part, "sslmode") || urlParamKeyIs(part, "require_ssl"),
+    )
+  ) {
+    parts.unshift("ssl-mode=preferred");
+  }
+  if (!parts.some((part) => urlParamKeyIs(part, "charset"))) {
+    parts.push("charset=utf8mb4");
+  }
+  return parts.join("&");
+}
+
+function buildMysqlUrlParams(config: ConnectionConfig): string {
+  const raw = config.url_params || "";
+  if (needsBareMysql(config)) {
+    if (bareMysqlUsesTls(config)) {
+      return normalizeMysqlUrlParams(raw, true, !config.ca_cert_path?.trim());
+    }
+    return normalizeBareMysqlUrlParams(raw);
+  }
+  return raw;
+}
+
+async function mysqlTlsOptions(config: ConnectionConfig): Promise<SslOptions | undefined> {
+  if (!bareMysqlUsesTls(config)) return undefined;
+
+  const params = urlParams(config);
+  const tls: SslOptions = {};
+  const verifyCa = (params.get("verify_ca") || "").toLowerCase() === "true";
+  const verifyIdentity = (params.get("verify_identity") || "").toLowerCase() === "true";
+  if (!verifyCa && !verifyIdentity) {
+    tls.rejectUnauthorized = false;
+  }
+  if (config.ca_cert_path) tls.ca = await readFile(config.ca_cert_path);
+  const certPath = params.get("ssl-cert") || params.get("sslcert");
+  const keyPath = params.get("ssl-key") || params.get("sslkey");
+  if (certPath) tls.cert = await readFile(certPath);
+  if (keyPath) tls.key = await readFile(keyPath);
+  return tls;
 }
 
 function isPostgresType(dbType: string): boolean {
