@@ -2676,8 +2676,8 @@ onUnmounted(cleanupPreviewEditor);
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="database">{{ t("settings.defaultDataGridSortModeDatabase") }}</SelectItem>
                           <SelectItem value="local">{{ t("settings.defaultDataGridSortModeCurrentPage") }}</SelectItem>
+                          <SelectItem value="database">{{ t("settings.defaultDataGridSortModeDatabase") }}</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
