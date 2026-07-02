@@ -1156,11 +1156,12 @@ async function openData() {
       return;
     }
 
-    const defaultSortEnabled = settingsStore.editorSettings.defaultDataGridSortEnabled;
     let columns = cachedTableMeta?.columns ?? [];
     let primaryKeys = cachedTableMeta?.primaryKeys ?? [];
     let shouldRefreshTableMetaAfterOpen = shouldRefreshTableMeta;
-    if (defaultSortEnabled && columns.length === 0) {
+    const defaultSortDirection = settingsStore.editorSettings.defaultDataGridSortDirection;
+    const defaultSortMode = settingsStore.editorSettings.defaultDataGridSortMode;
+    if (defaultSortMode === "database" && columns.length === 0) {
       try {
         const nextColumns = await api.getColumns(node.connectionId, node.database, querySchema, node.label);
         const indexes = await api.listIndexes(node.connectionId, node.database, querySchema, node.label).catch(() => []);
@@ -1179,9 +1180,7 @@ async function openData() {
         console.warn("[DBX][openData:metadata:sort-default:error]", { traceId, tabId, elapsed: elapsed(), error });
       }
     }
-    const defaultSortColumn = defaultSortEnabled ? (primaryKeys[0] ?? columns[0]?.name) : undefined;
-    const defaultSortDirection = settingsStore.editorSettings.defaultDataGridSortDirection;
-    const defaultSortMode = settingsStore.editorSettings.defaultDataGridSortMode;
+    const defaultSortColumn = primaryKeys[0] ?? columns[0]?.name;
     const defaultOrderBy = defaultSortMode === "database" && defaultSortColumn ? `${effectiveDbType === "neo4j" ? `n.${quoteTableIdentifier(effectiveDbType, defaultSortColumn)}` : quoteTableIdentifier(effectiveDbType, defaultSortColumn)} ${defaultSortDirection.toUpperCase()}` : undefined;
     const includeRowId = usesSyntheticRowIdKey(effectiveDbType, primaryKeys);
     const sql = await buildTableSelectSql({
@@ -1212,9 +1211,12 @@ async function openData() {
       skipEnsureConnected: true,
       pagination: { limit, offset: 0 },
     });
-    if (defaultSortMode === "local" && defaultSortColumn) {
-      const columnIndex = columns.findIndex((column) => column.name === defaultSortColumn);
-      if (columnIndex >= 0) queryStore.sortTabResultLocally(tabId, defaultSortColumn, columnIndex, defaultSortDirection);
+    if (defaultSortMode === "local") {
+      const currentTab = queryStore.tabs.find((t) => t.id === tabId);
+      const resultColumns = currentTab?.result?.columns ?? [];
+      const resultSortColumn = defaultSortColumn && resultColumns.includes(defaultSortColumn) ? defaultSortColumn : resultColumns[0];
+      const columnIndex = resultSortColumn ? resultColumns.findIndex((column) => column === resultSortColumn) : -1;
+      if (resultSortColumn && columnIndex >= 0) queryStore.sortTabResultLocally(tabId, resultSortColumn, columnIndex, defaultSortDirection);
     } else {
       const currentTab = queryStore.tabs.find((t) => t.id === tabId);
       const columnIndex = defaultSortColumn ? columns.findIndex((column) => column.name === defaultSortColumn) : -1;

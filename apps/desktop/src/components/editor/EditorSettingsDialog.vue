@@ -227,7 +227,6 @@ const debugLogDownloaded = ref(false);
 const editShowColumnCommentsInHeader = ref(settingsStore.editorSettings.showColumnCommentsInHeader);
 const editShowColumnTypesInHeader = ref(settingsStore.editorSettings.showColumnTypesInHeader);
 const editCompactColumnHeaderActions = ref(settingsStore.editorSettings.compactColumnHeaderActions);
-const editDefaultDataGridSortEnabled = ref(settingsStore.editorSettings.defaultDataGridSortEnabled);
 const editDefaultDataGridSortMode = ref<DefaultDataGridSortMode>(settingsStore.editorSettings.defaultDataGridSortMode);
 const editDefaultDataGridSortDirection = ref<DefaultDataGridSortDirection>(settingsStore.editorSettings.defaultDataGridSortDirection);
 const editDataGridQuickEntry = ref(settingsStore.editorSettings.dataGridQuickEntry);
@@ -507,7 +506,6 @@ watch(
       editShowColumnCommentsInHeader.value = settingsStore.editorSettings.showColumnCommentsInHeader;
       editShowColumnTypesInHeader.value = settingsStore.editorSettings.showColumnTypesInHeader;
       editCompactColumnHeaderActions.value = settingsStore.editorSettings.compactColumnHeaderActions;
-      editDefaultDataGridSortEnabled.value = settingsStore.editorSettings.defaultDataGridSortEnabled;
       editDefaultDataGridSortMode.value = settingsStore.editorSettings.defaultDataGridSortMode;
       editDefaultDataGridSortDirection.value = settingsStore.editorSettings.defaultDataGridSortDirection;
       editDataGridQuickEntry.value = settingsStore.editorSettings.dataGridQuickEntry;
@@ -576,7 +574,6 @@ function hasChanges(): boolean {
     editShowColumnCommentsInHeader.value !== settingsStore.editorSettings.showColumnCommentsInHeader ||
     editShowColumnTypesInHeader.value !== settingsStore.editorSettings.showColumnTypesInHeader ||
     editCompactColumnHeaderActions.value !== settingsStore.editorSettings.compactColumnHeaderActions ||
-    editDefaultDataGridSortEnabled.value !== settingsStore.editorSettings.defaultDataGridSortEnabled ||
     editDefaultDataGridSortMode.value !== settingsStore.editorSettings.defaultDataGridSortMode ||
     editDefaultDataGridSortDirection.value !== settingsStore.editorSettings.defaultDataGridSortDirection ||
     editDataGridQuickEntry.value !== settingsStore.editorSettings.dataGridQuickEntry ||
@@ -625,7 +622,6 @@ async function persistSettings() {
     showColumnCommentsInHeader: editShowColumnCommentsInHeader.value,
     showColumnTypesInHeader: editShowColumnTypesInHeader.value,
     compactColumnHeaderActions: editCompactColumnHeaderActions.value,
-    defaultDataGridSortEnabled: editDefaultDataGridSortEnabled.value,
     defaultDataGridSortMode: editDefaultDataGridSortMode.value,
     defaultDataGridSortDirection: editDefaultDataGridSortDirection.value,
     dataGridQuickEntry: editDataGridQuickEntry.value,
@@ -717,7 +713,6 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editShowColumnCommentsInHeader.value = DEFAULT_EDITOR_SETTINGS.showColumnCommentsInHeader;
     editShowColumnTypesInHeader.value = DEFAULT_EDITOR_SETTINGS.showColumnTypesInHeader;
     editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
-    editDefaultDataGridSortEnabled.value = DEFAULT_EDITOR_SETTINGS.defaultDataGridSortEnabled;
     editDefaultDataGridSortMode.value = DEFAULT_EDITOR_SETTINGS.defaultDataGridSortMode;
     editDefaultDataGridSortDirection.value = DEFAULT_EDITOR_SETTINGS.defaultDataGridSortDirection;
     editDataGridQuickEntry.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry;
@@ -761,7 +756,6 @@ function resetAllDefaults() {
   editShowColumnCommentsInHeader.value = DEFAULT_EDITOR_SETTINGS.showColumnCommentsInHeader;
   editShowColumnTypesInHeader.value = DEFAULT_EDITOR_SETTINGS.showColumnTypesInHeader;
   editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
-  editDefaultDataGridSortEnabled.value = DEFAULT_EDITOR_SETTINGS.defaultDataGridSortEnabled;
   editDefaultDataGridSortMode.value = DEFAULT_EDITOR_SETTINGS.defaultDataGridSortMode;
   editDefaultDataGridSortDirection.value = DEFAULT_EDITOR_SETTINGS.defaultDataGridSortDirection;
   editDataGridQuickEntry.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry;
@@ -2665,19 +2659,16 @@ onUnmounted(cleanupPreviewEditor);
             <section v-else-if="activeSettingsTab === 'data'" class="flex flex-col gap-5 py-2">
               <div class="space-y-3">
                 <div class="text-sm font-medium text-muted-foreground">{{ t("settings.dataGridDisplay") }}</div>
-                <div class="flex flex-col gap-3 rounded-md border bg-muted/20 px-3 py-2">
-                  <div class="flex items-center justify-between gap-4">
-                    <div class="space-y-1">
-                      <Label for="default-data-grid-sort-enabled">
-                        {{ t("settings.defaultDataGridSortEnabled") }}
-                      </Label>
-                      <p class="text-xs text-muted-foreground">
-                        {{ t("settings.defaultDataGridSortEnabledDescription") }}
-                      </p>
-                    </div>
-                    <Switch id="default-data-grid-sort-enabled" v-model="editDefaultDataGridSortEnabled" />
+                <div class="flex flex-col gap-3 rounded-md border bg-muted/20 px-3 py-2 md:flex-row md:items-center md:justify-between">
+                  <div class="min-w-0 space-y-1">
+                    <Label>
+                      {{ t("settings.defaultDataGridSortMode") }}
+                    </Label>
+                    <p class="max-w-2xl text-xs text-muted-foreground">
+                      {{ t("settings.defaultDataGridSortModeDescription") }}
+                    </p>
                   </div>
-                  <div v-if="editDefaultDataGridSortEnabled" class="flex justify-end gap-2">
+                  <div class="flex shrink-0 gap-2 self-end md:self-auto">
                     <div class="space-y-1">
                       <Label for="default-data-grid-sort-mode" class="text-xs text-muted-foreground">{{ t("settings.defaultDataGridSortMode") }}</Label>
                       <Select :model-value="editDefaultDataGridSortMode" @update:model-value="onDefaultDataGridSortModeChange">

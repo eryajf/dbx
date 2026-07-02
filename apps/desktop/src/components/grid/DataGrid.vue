@@ -4821,9 +4821,8 @@ function applyColumnSort(column: string, columnIndex: number, direction: "asc" |
 }
 
 function quickSortColumn(column: string, columnIndex: number) {
-  if (!settingsStore.editorSettings.defaultDataGridSortEnabled) return false;
   if (columnIsSorted(column, columnIndex)) {
-    applyColumnSort(column, columnIndex, sortDir.value === "asc" ? "desc" : null, sortMode.value);
+    applyColumnSort(column, columnIndex, sortDir.value === "asc" ? "desc" : "asc", sortMode.value);
     return true;
   }
   applyColumnSort(column, columnIndex, settingsStore.editorSettings.defaultDataGridSortDirection, settingsStore.editorSettings.defaultDataGridSortMode);

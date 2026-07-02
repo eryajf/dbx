@@ -346,7 +346,6 @@ export interface EditorSettings {
   showColumnCommentsInHeader: boolean;
   showColumnTypesInHeader: boolean;
   compactColumnHeaderActions: boolean;
-  defaultDataGridSortEnabled: boolean;
   defaultDataGridSortMode: DefaultDataGridSortMode;
   defaultDataGridSortDirection: DefaultDataGridSortDirection;
   dataGridQuickEntry: boolean;
@@ -458,8 +457,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   showColumnCommentsInHeader: true,
   showColumnTypesInHeader: true,
   compactColumnHeaderActions: true,
-  defaultDataGridSortEnabled: false,
-  defaultDataGridSortMode: "database",
+  defaultDataGridSortMode: "local",
   defaultDataGridSortDirection: "asc",
   dataGridQuickEntry: false,
   dataGridRenderMode: "canvas",
@@ -522,7 +520,7 @@ function normalizeDataGridRenderMode(value: unknown): DataGridRenderMode {
 }
 
 function normalizeDefaultDataGridSortMode(value: unknown): DefaultDataGridSortMode {
-  return value === "local" ? "local" : DEFAULT_EDITOR_SETTINGS.defaultDataGridSortMode;
+  return value === "database" || value === "local" ? value : DEFAULT_EDITOR_SETTINGS.defaultDataGridSortMode;
 }
 
 function normalizeDefaultDataGridSortDirection(value: unknown): DefaultDataGridSortDirection {
@@ -618,6 +616,7 @@ function normalizeToolbarItems(items: Partial<ToolbarItems> | undefined): Toolba
 }
 
 export function normalizeEditorSettings(settings: Partial<EditorSettings>, existing?: EditorSettings): EditorSettings {
+  const legacyDefaultSortEnabled = (settings as Partial<EditorSettings> & { defaultDataGridSortEnabled?: boolean }).defaultDataGridSortEnabled;
   const sqlSemanticDiagnosticsMode = normalizeSqlSemanticDiagnosticsMode(settings.sqlSemanticDiagnosticsMode, settings.sqlSemanticDiagnosticsEnabled);
   return {
     fontFamily: settings.fontFamily ?? DEFAULT_EDITOR_SETTINGS.fontFamily,
@@ -667,8 +666,7 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
     showColumnCommentsInHeader: settings.showColumnCommentsInHeader ?? DEFAULT_EDITOR_SETTINGS.showColumnCommentsInHeader,
     showColumnTypesInHeader: settings.showColumnTypesInHeader ?? DEFAULT_EDITOR_SETTINGS.showColumnTypesInHeader,
     compactColumnHeaderActions: settings.compactColumnHeaderActions ?? DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions,
-    defaultDataGridSortEnabled: settings.defaultDataGridSortEnabled ?? DEFAULT_EDITOR_SETTINGS.defaultDataGridSortEnabled,
-    defaultDataGridSortMode: normalizeDefaultDataGridSortMode(settings.defaultDataGridSortMode),
+    defaultDataGridSortMode: legacyDefaultSortEnabled === false ? "local" : normalizeDefaultDataGridSortMode(settings.defaultDataGridSortMode),
     defaultDataGridSortDirection: normalizeDefaultDataGridSortDirection(settings.defaultDataGridSortDirection),
     dataGridQuickEntry: settings.dataGridQuickEntry ?? DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry,
     dataGridRenderMode: normalizeDataGridRenderMode(settings.dataGridRenderMode),
@@ -850,7 +848,6 @@ export const useSettingsStore = defineStore("settings", () => {
     if (partial.showColumnCommentsInHeader !== undefined) editorSettings.value.showColumnCommentsInHeader = partial.showColumnCommentsInHeader;
     if (partial.showColumnTypesInHeader !== undefined) editorSettings.value.showColumnTypesInHeader = partial.showColumnTypesInHeader;
     if (partial.compactColumnHeaderActions !== undefined) editorSettings.value.compactColumnHeaderActions = partial.compactColumnHeaderActions;
-    if (partial.defaultDataGridSortEnabled !== undefined) editorSettings.value.defaultDataGridSortEnabled = partial.defaultDataGridSortEnabled;
     if (partial.defaultDataGridSortMode !== undefined) editorSettings.value.defaultDataGridSortMode = normalizeDefaultDataGridSortMode(partial.defaultDataGridSortMode);
     if (partial.defaultDataGridSortDirection !== undefined) editorSettings.value.defaultDataGridSortDirection = normalizeDefaultDataGridSortDirection(partial.defaultDataGridSortDirection);
     if (partial.dataGridQuickEntry !== undefined) editorSettings.value.dataGridQuickEntry = partial.dataGridQuickEntry;
