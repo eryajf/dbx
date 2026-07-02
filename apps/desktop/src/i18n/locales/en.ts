@@ -148,6 +148,7 @@ export default {
     clearSelection: "Clear Selection",
     sortByDate: "Sort by Date Modified",
     sortByFolder: "Sort by Folder Structure",
+    exportedCount: "Imported {count} SQL files",
   },
 
   connection: {
@@ -2373,6 +2374,10 @@ export default {
     searchConnection: "Search connections...",
     searchDatabase: "Search databases...",
     searchSchema: "Search schemas...",
+    deployScriptTitle: "Deployment Script",
+    deployScriptAllTitle: "All Deployment Scripts",
+    executeScript: "Execute Script",
+    deploy: "Next",
   },
   schemaDiff: {
     optionsTitle: "Compare Options",

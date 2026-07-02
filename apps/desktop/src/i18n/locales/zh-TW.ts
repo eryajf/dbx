@@ -150,6 +150,7 @@ export default withEnglishFallback({
     clearSelection: "清除選取",
     sortByDate: "依修改日期排序",
     sortByFolder: "依資料夾結構排序",
+    exportedCount: "已匯入 {count} 個 SQL 檔案",
   },
 
   connection: {
@@ -2258,6 +2259,10 @@ export default withEnglishFallback({
     searchConnection: "搜尋連線...",
     searchDatabase: "搜尋資料庫...",
     searchSchema: "搜尋結構描述...",
+    deployScriptTitle: "部署指令碼",
+    deployScriptAllTitle: "全部部署指令碼",
+    executeScript: "執行指令碼",
+    deploy: "下一步",
   },
   schemaDiff: {
     optionsTitle: "比較選項",

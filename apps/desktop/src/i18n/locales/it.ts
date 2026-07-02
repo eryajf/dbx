@@ -149,6 +149,7 @@ export default withEnglishFallback({
     clearSelection: "Cancella selezione",
     sortByDate: "Ordina per data di modifica",
     sortByFolder: "Ordina per struttura cartelle",
+    exportedCount: "Importati {count} file SQL",
   },
 
   connection: {
@@ -2374,6 +2375,10 @@ export default withEnglishFallback({
     searchConnection: "Cerca connessioni...",
     searchDatabase: "Cerca database...",
     searchSchema: "Cerca schemi...",
+    deployScriptTitle: "Script di distribuzione",
+    deployScriptAllTitle: "Tutti gli script di distribuzione",
+    executeScript: "Esegui script",
+    deploy: "Avanti",
   },
   schemaDiff: {
     optionsTitle: "Opzioni di Confronto",

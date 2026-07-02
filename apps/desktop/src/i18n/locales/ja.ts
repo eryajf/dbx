@@ -150,6 +150,7 @@ export default withEnglishFallback({
     clearSelection: "選択を解除",
     sortByDate: "更新日時で並べ替え",
     sortByFolder: "フォルダ構造で並べ替え",
+    exportedCount: "インポート済み {count} 個の SQL ファイル",
   },
   connection: {
     title: "新しい接続",
@@ -2355,6 +2356,10 @@ export default withEnglishFallback({
     searchConnection: "接続を検索...",
     searchDatabase: "データベースを検索...",
     searchSchema: "スキーマを検索...",
+    deployScriptTitle: "デプロイスクリプト",
+    deployScriptAllTitle: "全デプロイスクリプト",
+    executeScript: "スクリプト実行",
+    deploy: "次へ",
   },
   schemaDiff: {
     optionsTitle: "比較オプション",
