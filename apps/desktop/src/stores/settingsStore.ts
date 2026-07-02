@@ -60,6 +60,8 @@ export type InterfaceLayout = "separated" | "classic";
 
 export type UpdateDownloadSource = "official" | "cnb";
 export type SqlSemanticDiagnosticsMode = "auto" | "enabled" | "disabled";
+export type DefaultDataGridSortMode = "database" | "local";
+export type DefaultDataGridSortDirection = "asc" | "desc";
 
 export const DEFAULT_SIDEBAR_TABLE_PAGE_SIZE = 1000;
 const SQL_SEMANTIC_DIAGNOSTICS_AUTO_ENABLED = false;
@@ -344,6 +346,9 @@ export interface EditorSettings {
   showColumnCommentsInHeader: boolean;
   showColumnTypesInHeader: boolean;
   compactColumnHeaderActions: boolean;
+  defaultDataGridSortEnabled: boolean;
+  defaultDataGridSortMode: DefaultDataGridSortMode;
+  defaultDataGridSortDirection: DefaultDataGridSortDirection;
   dataGridQuickEntry: boolean;
   dataGridRenderMode: DataGridRenderMode;
   tableFontSize: number;
@@ -453,6 +458,9 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   showColumnCommentsInHeader: true,
   showColumnTypesInHeader: true,
   compactColumnHeaderActions: true,
+  defaultDataGridSortEnabled: false,
+  defaultDataGridSortMode: "database",
+  defaultDataGridSortDirection: "asc",
   dataGridQuickEntry: false,
   dataGridRenderMode: "canvas",
   tableFontSize: TABLE_FONT_SIZE_DEFAULT,
@@ -511,6 +519,14 @@ function normalizeCellDetailPanelLayout(value: unknown): CellDetailPanelLayout {
 
 function normalizeDataGridRenderMode(value: unknown): DataGridRenderMode {
   return DATA_GRID_RENDER_MODES.includes(value as DataGridRenderMode) ? (value as DataGridRenderMode) : DEFAULT_EDITOR_SETTINGS.dataGridRenderMode;
+}
+
+function normalizeDefaultDataGridSortMode(value: unknown): DefaultDataGridSortMode {
+  return value === "local" ? "local" : DEFAULT_EDITOR_SETTINGS.defaultDataGridSortMode;
+}
+
+function normalizeDefaultDataGridSortDirection(value: unknown): DefaultDataGridSortDirection {
+  return value === "desc" ? "desc" : DEFAULT_EDITOR_SETTINGS.defaultDataGridSortDirection;
 }
 
 function normalizeTableFontSize(value: unknown): number {
@@ -651,6 +667,9 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
     showColumnCommentsInHeader: settings.showColumnCommentsInHeader ?? DEFAULT_EDITOR_SETTINGS.showColumnCommentsInHeader,
     showColumnTypesInHeader: settings.showColumnTypesInHeader ?? DEFAULT_EDITOR_SETTINGS.showColumnTypesInHeader,
     compactColumnHeaderActions: settings.compactColumnHeaderActions ?? DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions,
+    defaultDataGridSortEnabled: settings.defaultDataGridSortEnabled ?? DEFAULT_EDITOR_SETTINGS.defaultDataGridSortEnabled,
+    defaultDataGridSortMode: normalizeDefaultDataGridSortMode(settings.defaultDataGridSortMode),
+    defaultDataGridSortDirection: normalizeDefaultDataGridSortDirection(settings.defaultDataGridSortDirection),
     dataGridQuickEntry: settings.dataGridQuickEntry ?? DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry,
     dataGridRenderMode: normalizeDataGridRenderMode(settings.dataGridRenderMode),
     tableFontSize: normalizeTableFontSize(settings.tableFontSize),
@@ -831,6 +850,9 @@ export const useSettingsStore = defineStore("settings", () => {
     if (partial.showColumnCommentsInHeader !== undefined) editorSettings.value.showColumnCommentsInHeader = partial.showColumnCommentsInHeader;
     if (partial.showColumnTypesInHeader !== undefined) editorSettings.value.showColumnTypesInHeader = partial.showColumnTypesInHeader;
     if (partial.compactColumnHeaderActions !== undefined) editorSettings.value.compactColumnHeaderActions = partial.compactColumnHeaderActions;
+    if (partial.defaultDataGridSortEnabled !== undefined) editorSettings.value.defaultDataGridSortEnabled = partial.defaultDataGridSortEnabled;
+    if (partial.defaultDataGridSortMode !== undefined) editorSettings.value.defaultDataGridSortMode = normalizeDefaultDataGridSortMode(partial.defaultDataGridSortMode);
+    if (partial.defaultDataGridSortDirection !== undefined) editorSettings.value.defaultDataGridSortDirection = normalizeDefaultDataGridSortDirection(partial.defaultDataGridSortDirection);
     if (partial.dataGridQuickEntry !== undefined) editorSettings.value.dataGridQuickEntry = partial.dataGridQuickEntry;
     if (partial.dataGridRenderMode !== undefined) editorSettings.value.dataGridRenderMode = normalizeDataGridRenderMode(partial.dataGridRenderMode);
     if (partial.tableFontSize !== undefined) editorSettings.value.tableFontSize = normalizeTableFontSize(partial.tableFontSize);

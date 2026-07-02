@@ -68,7 +68,7 @@ import * as api from "@/lib/api";
 import { uuid } from "@/lib/utils";
 import { resolveDefaultDatabase } from "@/lib/defaultDatabase";
 import { canTreeNodePin, canTreeNodeShowExpander, treeItemPaddingLeft, usesFullWidthTreeLabel } from "@/lib/sidebarTreeItemLayout";
-import { buildTableSelectSql } from "@/lib/tableSelectSql";
+import { buildTableSelectSql, quoteTableIdentifier } from "@/lib/tableSelectSql";
 import { buildTableDeleteTemplate, buildTableInsertTemplate, buildTableSelectTemplate, buildTableUpdateTemplate } from "@/lib/tableSqlTemplates";
 import { connectionFilePath, defaultSqliteBackupFileName, isMemorySqlitePath, sqliteBackupSourcePath } from "@/lib/connectionFile";
 import { revealPathInFileManager } from "@/lib/tauri";
@@ -1156,8 +1156,33 @@ async function openData() {
       return;
     }
 
-    const columns = cachedTableMeta?.columns ?? [];
-    const primaryKeys = cachedTableMeta?.primaryKeys ?? [];
+    const defaultSortEnabled = settingsStore.editorSettings.defaultDataGridSortEnabled;
+    let columns = cachedTableMeta?.columns ?? [];
+    let primaryKeys = cachedTableMeta?.primaryKeys ?? [];
+    let shouldRefreshTableMetaAfterOpen = shouldRefreshTableMeta;
+    if (defaultSortEnabled && columns.length === 0) {
+      try {
+        const nextColumns = await api.getColumns(node.connectionId, node.database, querySchema, node.label);
+        const indexes = await api.listIndexes(node.connectionId, node.database, querySchema, node.label).catch(() => []);
+        columns = nextColumns;
+        primaryKeys = editableRowIdentifierColumns(effectiveDbType, nextColumns, indexes, tableType);
+        queryStore.setTableMeta(tabId, {
+          schema: tableSchema,
+          tableName: node.label,
+          tableType,
+          columns: nextColumns,
+          primaryKeys,
+        });
+        shouldRefreshTableMetaAfterOpen = false;
+        logPhase("metadata-loaded-for-sort", { tabId, columnCount: nextColumns.length, primaryKeyCount: primaryKeys.length });
+      } catch (error) {
+        console.warn("[DBX][openData:metadata:sort-default:error]", { traceId, tabId, elapsed: elapsed(), error });
+      }
+    }
+    const defaultSortColumn = defaultSortEnabled ? (primaryKeys[0] ?? columns[0]?.name) : undefined;
+    const defaultSortDirection = settingsStore.editorSettings.defaultDataGridSortDirection;
+    const defaultSortMode = settingsStore.editorSettings.defaultDataGridSortMode;
+    const defaultOrderBy = defaultSortMode === "database" && defaultSortColumn ? `${effectiveDbType === "neo4j" ? `n.${quoteTableIdentifier(effectiveDbType, defaultSortColumn)}` : quoteTableIdentifier(effectiveDbType, defaultSortColumn)} ${defaultSortDirection.toUpperCase()}` : undefined;
     const includeRowId = usesSyntheticRowIdKey(effectiveDbType, primaryKeys);
     const sql = await buildTableSelectSql({
       databaseType: effectiveDbType,
@@ -1166,6 +1191,7 @@ async function openData() {
       tableType,
       columns: columns.map((column) => column.name),
       primaryKeys,
+      orderBy: defaultOrderBy,
       limit,
       includeRowId,
     });
@@ -1186,9 +1212,23 @@ async function openData() {
       skipEnsureConnected: true,
       pagination: { limit, offset: 0 },
     });
+    if (defaultSortMode === "local" && defaultSortColumn) {
+      const columnIndex = columns.findIndex((column) => column.name === defaultSortColumn);
+      if (columnIndex >= 0) queryStore.sortTabResultLocally(tabId, defaultSortColumn, columnIndex, defaultSortDirection);
+    } else {
+      const currentTab = queryStore.tabs.find((t) => t.id === tabId);
+      const columnIndex = defaultSortColumn ? columns.findIndex((column) => column.name === defaultSortColumn) : -1;
+      if (currentTab) {
+        currentTab.resultSortColumn = defaultSortColumn;
+        currentTab.resultSortColumnIndex = columnIndex >= 0 ? columnIndex : undefined;
+        currentTab.resultSortDirection = defaultSortColumn ? defaultSortDirection : undefined;
+        currentTab.resultSortMode = defaultSortColumn ? defaultSortMode : undefined;
+        currentTab.orderByInput = defaultOrderBy;
+      }
+    }
     console.info("[DBX][openData:execute:done]", { traceId, tabId, elapsed: elapsed() });
     logPhase("execute-tab-sql", { tabId });
-    if (shouldRefreshTableMeta && isCurrentDataTab()) {
+    if (shouldRefreshTableMetaAfterOpen && isCurrentDataTab()) {
       void refreshTableMetaInBackground();
       logPhase("metadata-started", { tabId });
     }

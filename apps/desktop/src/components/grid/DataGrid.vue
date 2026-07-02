@@ -4820,6 +4820,16 @@ function applyColumnSort(column: string, columnIndex: number, direction: "asc" |
   emit("sort", column, columnIndex, direction, currentWhereInput(), mode);
 }
 
+function quickSortColumn(column: string, columnIndex: number) {
+  if (!settingsStore.editorSettings.defaultDataGridSortEnabled) return false;
+  if (columnIsSorted(column, columnIndex)) {
+    applyColumnSort(column, columnIndex, sortDir.value === "asc" ? "desc" : null, sortMode.value);
+    return true;
+  }
+  applyColumnSort(column, columnIndex, settingsStore.editorSettings.defaultDataGridSortDirection, settingsStore.editorSettings.defaultDataGridSortMode);
+  return true;
+}
+
 function selectHeaderSort(value: string, column: string, columnIndex: number) {
   if (value === "clear") {
     applyColumnSort(column, columnIndex, null, sortMode.value);
@@ -8804,7 +8814,8 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                               :title="t('grid.sort')"
                               :aria-expanded="open"
                               @mousedown.stop
-                              @click.stop="toggle"
+                              @click.stop="quickSortColumn(col.name, col.actualColIdx) || toggle()"
+                              @contextmenu.prevent.stop="toggle"
                             >
                               <ArrowUp v-if="columnIsSorted(col.name, col.actualColIdx) && sortDir === 'asc'" class="h-3 w-3 shrink-0" />
                               <ArrowDown v-else-if="columnIsSorted(col.name, col.actualColIdx) && sortDir === 'desc'" class="h-3 w-3 shrink-0" />
