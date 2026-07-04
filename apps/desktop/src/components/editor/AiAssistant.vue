@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, type Component } from "vue";
-import { uuid } from "@/lib/utils";
+import { uuid } from "@/lib/common/utils";
 import { useI18n } from "vue-i18n";
 import { translateBackendError } from "@/i18n/backend-errors";
-import { ArrowUp, ArrowRightLeft, AlertTriangle, Bot, Check, ChevronRight, CircleSlash, Copy, Database, GitBranch, HelpCircle, History, Loader2, MessageSquarePlus, Replace, Server, ShieldCheck, Table2, Play, Square, Trash2, Terminal, Wand2, Wrench, X, Zap, TestTube } from "@lucide/vue";
+import { ArrowUp, ArrowRightLeft, AlertTriangle, Bot, Check, ChevronRight, CircleSlash, Copy, Database, GitBranch, HelpCircle, History, Loader2, MessageSquarePlus, Pencil, Replace, Server, ShieldCheck, Table2, Play, Square, Trash2, Terminal, Wand2, Wrench, X, Zap, TestTube } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -14,30 +14,31 @@ import { useTheme } from "@/composables/useTheme";
 import { useSettingsStore, AI_PROVIDER_PRESETS, type AiProvider } from "@/stores/settingsStore";
 import AiProviderLogo from "@/components/icons/AiProviderLogo.vue";
 import { useConnectionStore } from "@/stores/connectionStore";
-import { connectionIconType } from "@/lib/connectionPresentation";
+import { connectionIconType } from "@/lib/connection/connectionPresentation";
 import DatabaseIcon from "@/components/icons/DatabaseIcon.vue";
 import { useQueryStore } from "@/stores/queryStore";
 import { useToast } from "@/composables/useToast";
-import { buildAiContext, runAgentStream, isVectorDbType, type AiAction } from "@/lib/ai";
-import { formatAiModelOption } from "@/lib/aiModelPresentation";
-import type { AgentEvent } from "@/lib/tauri";
-import { buildAiAgentPlan } from "@/lib/aiAgentPlan";
-import { buildAiAgentStepItems, toolCallStepKey, upsertAgentStep, type AiAgentStepItem, type AiAgentStepTone } from "@/lib/aiAgentStepPresentation";
-import { createAiShikiCodeHighlighter, type AiCodeHighlighter } from "@/lib/aiCodeHighlighter";
-import { createAiMessageRenderer } from "@/lib/aiMessageRender";
-import { formatAiInlineMarkdown, handleAiMarkdownLinkClick } from "@/lib/aiMarkdown";
-import { aiCancelStream, aiListModels, saveAiConversation, loadAiConversations, deleteAiConversation, listSchemas, listTables, type AiConversation, type AiModelInfo } from "@/lib/api";
-import type { AiMessage } from "@/lib/api";
+import { buildAiContext, runAgentStream, isVectorDbType, type AiAction } from "@/lib/ai/ai";
+import { formatAiModelOption } from "@/lib/ai/aiModelPresentation";
+import type { AgentEvent } from "@/lib/backend/tauri";
+import { buildAiAgentPlan } from "@/lib/ai/aiAgentPlan";
+import { buildAiAgentStepItems, toolCallStepKey, upsertAgentStep, type AiAgentStepItem, type AiAgentStepTone } from "@/lib/ai/aiAgentStepPresentation";
+import { createAiShikiCodeHighlighter, type AiCodeHighlighter } from "@/lib/ai/aiCodeHighlighter";
+import { createAiMessageRenderer } from "@/lib/ai/aiMessageRender";
+import { formatAiInlineMarkdown, handleAiMarkdownLinkClick } from "@/lib/ai/aiMarkdown";
+import { aiCancelStream, aiListModels, saveAiConversation, loadAiConversations, deleteAiConversation, listSchemas, listTables, type AiConversation, type AiModelInfo } from "@/lib/backend/api";
+import type { AiMessage } from "@/lib/backend/api";
 import type { ConnectionConfig, QueryTab, TableInfo } from "@/types/database";
 import { useDatabaseOptions } from "@/composables/useDatabaseOptions";
-import { decodeSelectableDatabaseValue, encodeSelectableDatabaseValue, formatDatabaseLabel, resolveDefaultDatabase } from "@/lib/defaultDatabase";
-import { isSchemaAware } from "@/lib/databaseCapabilities";
+import { decodeSelectableDatabaseValue, encodeSelectableDatabaseValue, formatDatabaseLabel, resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
+import { isSchemaAware } from "@/lib/database/databaseCapabilities";
 import ExplainPlanViewer from "@/components/explain/ExplainPlanViewer.vue";
-import { parseExplainResult, type ParsedExplainPlan } from "@/lib/explainPlan";
-import { copyToClipboard } from "@/lib/clipboard";
-import { AI_TABLE_MENTION_CANDIDATE_LIMIT, AI_TABLE_MENTION_SCHEMA_LIMIT, filterAiTableMentionCandidates, formatAiTableMention, parseAiTableMentions, type AiTableMention } from "@/lib/aiTableMentions";
-import { isAiPromptImeCompositionEvent, shouldSubmitAiPromptOnKeydown } from "@/lib/aiPromptKeyboard";
-import { looksLikeActionProposal, containsChinese } from "@/lib/aiProposalDetect";
+import { parseExplainResult, type ParsedExplainPlan } from "@/lib/diagram/explainPlan";
+import { copyToClipboard } from "@/lib/common/clipboard";
+import { AI_TABLE_MENTION_CANDIDATE_LIMIT, AI_TABLE_MENTION_SCHEMA_LIMIT, filterAiTableMentionCandidates, formatAiTableMention, parseAiTableMentions, type AiTableMention } from "@/lib/ai/aiTableMentions";
+import { isAiPromptImeCompositionEvent, shouldSubmitAiPromptOnKeydown } from "@/lib/ai/aiPromptKeyboard";
+import { looksLikeActionProposal, containsChinese } from "@/lib/ai/aiProposalDetect";
+import { visibleToActualIndex } from "@/lib/ai/aiMessageEdit";
 
 const { t } = useI18n();
 const settings = useSettingsStore();
@@ -86,6 +87,58 @@ const agentTokens = ref<{ input: number; output: number } | null>(null);
 const promptHistory = ref<string[]>([]);
 const historyIndex = ref(-1);
 const draftBeforeHistory = ref("");
+
+const editingMessageIndex = ref<number | null>(null);
+const editingContent = ref("");
+const editCompositionActive = ref(false);
+
+function startEditMessage(visibleIndex: number) {
+  if (isGenerating.value) return;
+  editingMessageIndex.value = visibleIndex;
+  editingContent.value = visibleMessages.value[visibleIndex].content;
+  nextTick(() => {
+    const el = document.querySelector<HTMLTextAreaElement>("[data-edit-textarea]");
+    if (el) {
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
+  });
+}
+
+function cancelEdit() {
+  editingMessageIndex.value = null;
+  editingContent.value = "";
+}
+
+function submitEdit(visibleIndex: number) {
+  const content = editingContent.value.trim();
+  if (!content) return;
+  const actualIndex = visibleToActualIndex(messages.value, visibleIndex);
+  if (actualIndex < 0) return;
+  if (!props.connection || !props.tab) return;
+  if (!settings.isConfigured()) {
+    toast(t("ai.noConfig"));
+    return;
+  }
+  messages.value = messages.value.slice(0, actualIndex);
+  editingMessageIndex.value = null;
+  editingContent.value = "";
+  selectedMentions.value = [];
+  prompt.value = content;
+  send();
+}
+
+function onEditKeydown(event: KeyboardEvent, visibleIndex: number) {
+  if (isAiPromptImeCompositionEvent(event, editCompositionActive.value)) return;
+  if (event.key === "Escape") {
+    cancelEdit();
+    return;
+  }
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    submitEdit(visibleIndex);
+  }
+}
 
 // Inline model selector
 const modelOptions = ref<AiModelInfo[]>([]);
@@ -1155,9 +1208,33 @@ async function openExternalUrl(url: string) {
     <ScrollArea v-else ref="scrollRef" class="min-h-0 flex-1 overflow-hidden">
       <div class="flex flex-col gap-3 p-3">
         <template v-for="(msg, i) in visibleMessages" :key="i">
-          <div v-if="msg.role === 'user'" class="flex justify-end">
-            <div class="max-w-[85%] whitespace-pre-wrap rounded-lg bg-primary px-3 py-2 text-xs text-primary-foreground">
-              {{ msg.content }}
+          <div v-if="msg.role === 'user'" class="group flex justify-end">
+            <div class="max-w-[85%]">
+              <template v-if="editingMessageIndex === i">
+                <textarea
+                  data-edit-textarea
+                  v-model="editingContent"
+                  rows="3"
+                  class="w-full resize-none rounded-lg border bg-background px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-primary"
+                  @keydown="onEditKeydown($event, i)"
+                  @compositionstart="editCompositionActive = true"
+                  @compositionend="editCompositionActive = false"
+                />
+                <div class="mt-1.5 flex justify-end gap-1.5">
+                  <Button size="sm" variant="ghost" class="h-6 px-2 text-[11px]" @click="cancelEdit">{{ t("ai.editCancel") }}</Button>
+                  <Button size="sm" class="h-6 px-2 text-[11px]" @click="submitEdit(i)">{{ t("ai.editResend") }}</Button>
+                </div>
+              </template>
+              <template v-else>
+                <div class="flex items-start gap-1">
+                  <button v-if="!isGenerating" class="mt-1 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground group-hover:flex" :title="t('ai.editMessage')" @click="startEditMessage(i)">
+                    <Pencil class="h-3 w-3" />
+                  </button>
+                  <div class="whitespace-pre-wrap rounded-lg bg-primary px-3 py-2 text-xs text-primary-foreground">
+                    {{ msg.content }}
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
 

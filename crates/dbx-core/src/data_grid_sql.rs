@@ -11,7 +11,10 @@ mod data_grid_tdengine_sql;
 use data_grid_tdengine_sql::build_tdengine_data_grid_save_statements;
 
 use crate::models::connection::DatabaseType;
-use crate::sql_dialect::{quote_table_identifier, table_pagination_strategy, TablePaginationStrategy};
+use crate::sql_dialect::{
+    firebird_rows_clause, quote_table_identifier, table_pagination_strategy, uses_single_row_insert_statements,
+    TablePaginationStrategy,
+};
 use crate::transfer::{format_ch_array_sql_literal, format_pg_array_sql_literal};
 
 const DBX_ROWID_COLUMN: &str = "__DBX_ROWID";
@@ -356,6 +359,15 @@ pub fn build_data_grid_copy_insert_statement(options: DataGridCopyInsertStatemen
             )
         })
         .collect::<Vec<_>>();
+    if options.database_type.is_some_and(uses_single_row_insert_statements) {
+        return Some(
+            value_rows
+                .iter()
+                .map(|values| format!("INSERT INTO {table} ({columns}) VALUES {values};"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
     Some(format!(
         "INSERT INTO {table} ({columns}) VALUES{}{};",
         if value_rows.len() == 1 { " " } else { "\n" },
@@ -496,6 +508,10 @@ pub fn build_data_grid_column_distinct_values_sql(options: DataGridColumnDistinc
         TablePaginationStrategy::SqlServerTop => format!("SELECT TOP ({limit}) {select_list}{from_clause}"),
         TablePaginationStrategy::IrisTop => format!("SELECT TOP {limit} {select_list}{from_clause}"),
         TablePaginationStrategy::InformixFirst => format!("SELECT FIRST {limit} {select_list}{from_clause}"),
+        TablePaginationStrategy::FirebirdRows => {
+            let rows = firebird_rows_clause(limit, 0);
+            format!("SELECT {select_list}{from_clause} {rows}")
+        }
         TablePaginationStrategy::Db2FetchFirst | TablePaginationStrategy::FetchFirst => {
             format!("SELECT {select_list}{from_clause} FETCH FIRST {limit} ROWS ONLY")
         }
@@ -2059,6 +2075,28 @@ mod tests {
     }
 
     #[test]
+    fn oracle_copy_insert_statement_uses_one_statement_per_row() {
+        let statement = build_data_grid_copy_insert_statement(DataGridCopyInsertStatementOptions {
+            database_type: Some(DatabaseType::Oracle),
+            table_meta: Some(DataGridTableMeta {
+                schema: Some("APP".to_string()),
+                table_name: "USERS".to_string(),
+                primary_keys: vec!["ID".to_string()],
+                columns: None,
+            }),
+            columns: vec!["ID".to_string(), "NAME".to_string()],
+            source_columns: None,
+            rows: vec![vec![json!(1), json!("Ada")], vec![json!(2), json!("Linus")]],
+            exclude_primary_keys: false,
+        });
+
+        assert_eq!(
+            statement.as_deref(),
+            Some("INSERT INTO \"APP\".\"USERS\" (\"ID\", \"NAME\") VALUES (1, 'Ada');\nINSERT INTO \"APP\".\"USERS\" (\"ID\", \"NAME\") VALUES (2, 'Linus');")
+        );
+    }
+
+    #[test]
     fn mysql_copy_statements_preserve_blob_hex_literals() {
         let table_meta = DataGridTableMeta {
             schema: None,
@@ -2283,6 +2321,20 @@ mod tests {
             }),
             "SELECT * FROM (SELECT \"KIND\" AS dbx_value, COUNT(*) AS dbx_count FROM \"APP\".\"EVENTS\" GROUP BY \"KIND\" ORDER BY dbx_count DESC, dbx_value) WHERE ROWNUM <= 10"
         );
+        assert_eq!(
+            build_data_grid_column_distinct_values_sql(DataGridColumnDistinctValuesSqlOptions {
+                database_type: Some(DatabaseType::Firebird),
+                schema: None,
+                table_name: "USERS".to_string(),
+                column_name: "STATUS".to_string(),
+                column_info: Some(column("STATUS", "varchar(32)", true, None)),
+                where_input: Some("WHERE DELETED_AT IS NULL".to_string()),
+                search_value: None,
+                limit: Some(25),
+                include_counts: false,
+            }),
+            "SELECT \"STATUS\" AS dbx_value FROM \"USERS\" WHERE (DELETED_AT IS NULL) GROUP BY \"STATUS\" ORDER BY dbx_value ROWS 25"
+        );
     }
 
     #[test]
@@ -2424,6 +2476,28 @@ mod tests {
             format_grid_sql_literal(&json!("123-not-a-number"), Some(DatabaseType::Oracle), Some(&number)),
             "'123-not-a-number'"
         );
+    }
+
+    #[test]
+    fn prepares_sqlserver_bigint_update_from_numeric_string() {
+        let result = prepare_data_grid_save(DataGridSaveStatementOptions {
+            database_type: Some(DatabaseType::SqlServer),
+            table_meta: DataGridTableMeta {
+                schema: Some("dbo".to_string()),
+                table_name: "users".to_string(),
+                primary_keys: vec!["Id".to_string()],
+                columns: Some(vec![column("Id", "int", false, None), column("UserId", "bigint", true, None)]),
+            },
+            columns: vec!["Id".to_string(), "UserId".to_string()],
+            source_columns: None,
+            rows: vec![vec![json!(1), json!(142189065666650_i64)]],
+            dirty_rows: vec![(0, vec![(1, json!("144847503924137986"))])],
+            deleted_rows: vec![],
+            new_rows: vec![],
+        });
+
+        assert_eq!(result.validation_error, None);
+        assert_eq!(result.statements, vec!["UPDATE [dbo].[users] SET [UserId] = 144847503924137986 WHERE [Id] = 1;"]);
     }
 
     #[test]
