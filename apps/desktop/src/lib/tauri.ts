@@ -190,6 +190,11 @@ export interface WebDavPasswordStatus {
   hasSavedPassword: boolean;
 }
 
+export interface WebDavSyncSecretsStatus {
+  enabled: boolean;
+  hasSavedPassphrase: boolean;
+}
+
 export interface QueryPagination {
   limit: number;
   offset: number;
@@ -426,6 +431,18 @@ export async function saveWebdavSavedPassword(config: WebDavConfig, password: st
 
 export async function forgetWebdavSavedPassword(config: WebDavConfig): Promise<void> {
   return invoke("forget_webdav_saved_password", { config });
+}
+
+export async function webdavSyncSecretsStatus(): Promise<WebDavSyncSecretsStatus> {
+  return invoke("webdav_sync_secrets_status");
+}
+
+export async function saveWebdavSyncSecretsPreference(enabled: boolean, passphrase?: string): Promise<void> {
+  return invoke("save_webdav_sync_secrets_preference", { enabled, passphrase });
+}
+
+export async function forgetWebdavSyncSecretsPassphrase(): Promise<void> {
+  return invoke("forget_webdav_sync_secrets_passphrase");
 }
 
 export async function webdavSyncUpload(config: WebDavConfig, editorSettings?: unknown, secretsPassphrase?: string): Promise<WebDavSyncSummary> {

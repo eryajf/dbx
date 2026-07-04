@@ -52,11 +52,14 @@ import {
   aiTestConnection,
   checkMcpServerStatus,
   installMcpServer,
+  forgetWebdavSyncSecretsPassphrase,
   forgetWebdavSavedPassword,
   listSystemFonts,
+  saveWebdavSyncSecretsPreference,
   saveWebdavSavedPassword,
   webdavPasswordStatus,
   webdavSyncDownload,
+  webdavSyncSecretsStatus,
   webdavSyncTest,
   webdavSyncUpload,
   type AiModelInfo,
@@ -1272,13 +1275,14 @@ const webdavHasSavedPassword = ref(false);
 const webdavRemotePath = ref(localStorage.getItem("dbx-webdav-remote-path") || DEFAULT_WEB_DAV_REMOTE_PATH);
 const webdavSyncSecrets = ref(false);
 const webdavSecretsPassphrase = ref("");
+const webdavHasSavedSecretsPassphrase = ref(false);
 const webdavAutoUploadEnabled = ref(localStorage.getItem("dbx-webdav-auto-upload-enabled") === "true");
 const webdavAutoUploadIntervalMinutes = ref(Number(localStorage.getItem("dbx-webdav-auto-upload-interval-minutes") || String(DEFAULT_WEB_DAV_AUTO_UPLOAD_INTERVAL_MINUTES)));
 const webdavBusy = ref<"" | "test" | "upload" | "download">("");
 const webdavMessage = ref("");
 const webdavError = ref(false);
 
-const webdavReady = computed(() => !!webdavEndpoint.value.trim() && !webdavBusy.value && (!webdavSyncSecrets.value || !!webdavSecretsPassphrase.value.trim()));
+const webdavReady = computed(() => !!webdavEndpoint.value.trim() && !webdavBusy.value && (!webdavSyncSecrets.value || !!webdavSecretsPassphrase.value.trim() || webdavHasSavedSecretsPassphrase.value));
 
 function currentWebDavConfig(): WebDavConfig {
   return {
@@ -1314,6 +1318,7 @@ async function runWebDavAction(kind: "test" | "upload" | "download", action: () 
   try {
     rememberWebDavFields();
     await applyWebDavPasswordPreference();
+    await applyWebDavSyncSecretsPreference();
     setWebDavResult(await action());
   } catch (e: any) {
     setWebDavResult(e?.message || String(e), true);
@@ -1347,6 +1352,40 @@ async function applyWebDavPasswordPreference() {
   if (!webdavRememberPassword.value && webdavHasSavedPassword.value) {
     await forgetWebdavSavedPassword(currentWebDavAccountConfig());
     webdavHasSavedPassword.value = false;
+  }
+}
+
+async function refreshWebDavSyncSecretsStatus() {
+  try {
+    const status = await webdavSyncSecretsStatus();
+    webdavSyncSecrets.value = status.enabled;
+    webdavHasSavedSecretsPassphrase.value = status.hasSavedPassphrase;
+  } catch {
+    webdavSyncSecrets.value = false;
+    webdavHasSavedSecretsPassphrase.value = false;
+  }
+}
+
+async function applyWebDavSyncSecretsPreference() {
+  const passphrase = webdavSecretsPassphrase.value.trim();
+  if (!webdavSyncSecrets.value) {
+    await saveWebdavSyncSecretsPreference(false);
+    return;
+  }
+  await saveWebdavSyncSecretsPreference(true, passphrase || undefined);
+  if (passphrase) {
+    webdavHasSavedSecretsPassphrase.value = true;
+    webdavSecretsPassphrase.value = "";
+  }
+}
+
+async function clearWebDavSyncSecretsPassphrase() {
+  try {
+    await forgetWebdavSyncSecretsPassphrase();
+    webdavHasSavedSecretsPassphrase.value = false;
+    webdavSecretsPassphrase.value = "";
+  } catch (e: any) {
+    setWebDavResult(e?.message || String(e), true);
   }
 }
 
@@ -1419,7 +1458,9 @@ watch(
       editDebugLoggingEnabled.value = settingsStore.desktopSettings.debug_logging_enabled;
       editSidebarTablePageSize.value = settingsStore.desktopSettings.sidebar_table_page_size ?? DEFAULT_SIDEBAR_TABLE_PAGE_SIZE;
       webdavPassword.value = "";
+      webdavSecretsPassphrase.value = "";
       await refreshWebDavPasswordStatus();
+      await refreshWebDavSyncSecretsStatus();
       syncAiEditState();
       if (!isWeb && activeSettingsTab.value === "mcp") void refreshMcpStatus();
       if (!isWeb && activeSettingsTab.value === "ai" && aiIsCodexCli.value) void ensureCodexMcpStatus();
@@ -3159,7 +3200,21 @@ onUnmounted(cleanupPreviewEditor);
                 </div>
                 <div v-if="webdavSyncSecrets" class="space-y-2">
                   <Label for="webdav-secrets-passphrase">{{ t("settings.syncSecretsPassphrase") }}</Label>
-                  <PasswordInput id="webdav-secrets-passphrase" v-model="webdavSecretsPassphrase" autocomplete="new-password" />
+                  <div class="flex items-center gap-2">
+                    <PasswordInput id="webdav-secrets-passphrase" v-model="webdavSecretsPassphrase" class="min-w-0 flex-1" :placeholder="webdavHasSavedSecretsPassphrase ? '••••••••' : ''" :show-toggle="!webdavHasSavedSecretsPassphrase || !!webdavSecretsPassphrase" autocomplete="new-password" />
+                    <Button
+                      v-if="webdavHasSavedSecretsPassphrase"
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      class="h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground"
+                      :title="t('settings.syncClearSavedPassword')"
+                      :aria-label="t('settings.syncClearSavedPassword')"
+                      @click="clearWebDavSyncSecretsPassphrase"
+                    >
+                      <X class="size-3.5" />
+                    </Button>
+                  </div>
                   <p class="text-xs text-muted-foreground">{{ t("settings.syncSecretsPassphraseDescription") }}</p>
                 </div>
               </div>

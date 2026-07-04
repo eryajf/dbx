@@ -1092,6 +1092,11 @@ export interface WebDavPasswordStatus {
   hasSavedPassword: boolean;
 }
 
+export interface WebDavSyncSecretsStatus {
+  enabled: boolean;
+  hasSavedPassphrase: boolean;
+}
+
 export async function webdavSyncTest(config: WebDavConfig): Promise<void> {
   return post("/api/cloud-sync/webdav/test", { config });
 }
@@ -1106,6 +1111,18 @@ export async function saveWebdavSavedPassword(config: WebDavConfig, password: st
 
 export async function forgetWebdavSavedPassword(config: WebDavConfig): Promise<void> {
   return post("/api/cloud-sync/webdav/forget-password", { config });
+}
+
+export async function webdavSyncSecretsStatus(): Promise<WebDavSyncSecretsStatus> {
+  return post("/api/cloud-sync/webdav/sync-secrets-status", {});
+}
+
+export async function saveWebdavSyncSecretsPreference(enabled: boolean, passphrase?: string): Promise<void> {
+  return post("/api/cloud-sync/webdav/save-sync-secrets-preference", { enabled, passphrase });
+}
+
+export async function forgetWebdavSyncSecretsPassphrase(): Promise<void> {
+  return post("/api/cloud-sync/webdav/forget-sync-secrets-passphrase", {});
 }
 
 export async function webdavSyncUpload(config: WebDavConfig, editorSettings?: unknown, secretsPassphrase?: string): Promise<WebDavSyncSummary> {
