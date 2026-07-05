@@ -33,19 +33,20 @@ import { useVisibilityChange } from "@/composables/useVisibilityChange";
 import { useWebDavAutoUpload } from "@/composables/useWebDavAutoUpload";
 import "@/i18n";
 import { translateBackendError } from "@/i18n/backend-errors";
-import * as api from "@/lib/api";
-import { connectionRedactedNameLabel } from "@/lib/connectionPresentation";
-import { quickConnectionOpenTarget } from "@/lib/connectionOpenTarget";
-import { resolveDefaultDatabase } from "@/lib/defaultDatabase";
-import { findTreeNodeById, resolveNewQueryTarget } from "@/lib/newQueryContext";
-import { buildExecutableObjectSourceStatements, objectSourceSaveExecutionMode } from "@/lib/objectSourceEditor";
-import { resolveExecutableSql, resolveExecutableSqlWithBackend, type SqlExecutionSnapshot } from "@/lib/sqlExecutionTarget";
-import { uuid } from "@/lib/utils";
-import { isTauriRuntime } from "@/lib/tauriRuntime";
-import { openQueryResultArchiveFile } from "@/lib/queryResultArchiveFile";
-import { sqlFileTitleFromPath } from "@/lib/sqlFileOpen";
+import * as api from "@/lib/backend/api";
+import { connectionRedactedNameLabel } from "@/lib/connection/connectionPresentation";
+import { quickConnectionOpenTarget } from "@/lib/connection/connectionOpenTarget";
+import { resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
+import { findTreeNodeById, resolveNewQueryTarget } from "@/lib/sql/newQueryContext";
+import { buildExecutableObjectSourceStatements, objectSourceSaveExecutionMode } from "@/lib/table/objectSourceEditor";
+import { resolveExecutableSql, resolveExecutableSqlWithBackend, type SqlExecutionSnapshot } from "@/lib/sql/sqlExecutionTarget";
+import { uuid } from "@/lib/common/utils";
+import { isMacOS } from "@/lib/backend/platform";
+import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { openQueryResultArchiveFile } from "@/lib/query/queryResultArchiveFile";
+import { sqlFileTitleFromPath } from "@/lib/sql/sqlFileOpen";
 import type { ConnectionConfig, ObjectSourceKind, QueryTab } from "@/types/database";
-import { parseConnectionDeepLink, type ConnectionDeepLinkDraft } from "@/lib/connectionDeepLink";
+import { parseConnectionDeepLink, type ConnectionDeepLinkDraft } from "@/lib/connection/connectionDeepLink";
 import {
   isBrowserReloadShortcut,
   isCloseTabShortcut,
@@ -65,25 +66,26 @@ import {
   isZoomInShortcut,
   isZoomOutShortcut,
   switchToTabIndexFromShortcut,
-} from "@/lib/keyboardShortcuts";
-import { isPreviewTab } from "@/lib/tabPresentation";
-import { supportsSqlFileExecution } from "@/lib/databaseCapabilities";
-import { classifyAiSqlExecution } from "@/lib/aiSqlExecutionPolicy";
-import { buildHistoryAiAnalysisPrompt } from "@/lib/historyAiAnalysis";
-import { countAvailableAgentDriverUpdates, type AgentDriverUpdateBadgeState } from "@/lib/agentDriverUpdateBadge";
-import { safeLocalStorageGet, safeLocalStorageSet } from "@/lib/safeStorage";
-import { apiUrl, webPath } from "@/lib/webPath";
-import { APP_FONT_SANS_CSS_VAR, DEFAULT_UI_FONT_FAMILY } from "@/lib/appFonts";
-import { rankSavedSqlHistory } from "@/lib/savedSqlHistory";
-import { isSchemaAware, isSingleDatabase, usesTreeSchemaMode } from "@/lib/databaseFeatureSupport";
-import { codeMirrorSqlDialect, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection } from "@/lib/jdbcDialect";
-import { detectDatabaseFileType } from "@/lib/databaseFileDetection";
+} from "@/lib/editor/keyboardShortcuts";
+import { isPreviewTab } from "@/lib/tabs/tabPresentation";
+import { supportsSqlFileExecution } from "@/lib/database/databaseCapabilities";
+import { classifyAiSqlExecution } from "@/lib/ai/aiSqlExecutionPolicy";
+import { buildHistoryAiAnalysisPrompt } from "@/lib/history/historyAiAnalysis";
+import { countAvailableAgentDriverUpdates, type AgentDriverUpdateBadgeState } from "@/lib/connection/agentDriverUpdateBadge";
+import { safeLocalStorageGet, safeLocalStorageSet } from "@/lib/backend/safeStorage";
+import { apiUrl, webPath } from "@/lib/common/webPath";
+import { APP_FONT_SANS_CSS_VAR, DEFAULT_UI_FONT_FAMILY } from "@/lib/app/appFonts";
+import { rankSavedSqlHistory } from "@/lib/savedSql/savedSqlHistory";
+import { initSavedSqlEditorPositions } from "@/lib/app/savedSqlEditorPosition";
+import { isSchemaAware, isSingleDatabase, usesTreeSchemaMode } from "@/lib/database/databaseFeatureSupport";
+import { codeMirrorSqlDialect, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
+import { detectDatabaseFileType } from "@/lib/database/databaseFileDetection";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { HistoryEntry } from "@/lib/tauri";
-import type { AiAction } from "@/lib/ai";
+import type { HistoryEntry } from "@/lib/backend/tauri";
+import type { AiAction } from "@/lib/ai/ai";
 
 const AiAssistant = defineAsyncComponent(() => import("@/components/editor/AiAssistant.vue"));
 const QueryHistory = defineAsyncComponent(() => import("@/components/editor/QueryHistory.vue"));
@@ -121,7 +123,7 @@ const connectionDialogPrefill = ref<ConnectionDeepLinkDraft | null>(null);
 const connectionDialogInitialTab = ref<ConfigTab | undefined>(undefined);
 const settingsPageTabOpen = ref(false);
 const settingsPageActive = ref(false);
-const settingsInitialTab = ref("editor");
+const settingsInitialTab = ref("appearance");
 const settingsInitialSection = ref<string | undefined>(undefined);
 const showQueryEditorDdlDialog = ref(false);
 const driverStoreTabOpen = ref(false);
@@ -264,7 +266,7 @@ const appVersion = ref("");
 const isClassicLayout = computed(() => settingsStore.editorSettings.appLayout === "classic");
 const updateNotificationsEnabled = computed(() => settingsStore.editorSettings.updateNotificationsEnabled);
 
-function openSettings(initialTab = "editor", initialSection?: string) {
+function openSettings(initialTab = "appearance", initialSection?: string) {
   settingsInitialTab.value = initialTab;
   settingsInitialSection.value = initialSection;
   if (!settingsPageActive.value) {
@@ -561,8 +563,10 @@ function finishPendingAppClose(action: AppCloseAction) {
   }
   pendingAppCloseAction.value = null;
   pendingSaveShouldCloseTab.value = true;
-  queryStore.flushPendingPersist();
-  void performCloseAction(action);
+  void queryStore
+    .flushPendingPersist()
+    .catch(() => {})
+    .finally(() => performCloseAction(action));
 }
 
 function continuePendingAppCloseAfterSave() {
@@ -1340,6 +1344,7 @@ async function handleQuickOpenSelect(item: any) {
       database: item.database,
       schema: item.schema,
       tableName: item.objectName || item.tableName,
+      tableType: item.type === "view" ? "VIEW" : item.type === "materialized_view" ? "MATERIALIZED_VIEW" : "TABLE",
     });
   } else if (item.type === "procedure" || item.type === "function" || item.type === "sequence" || item.type === "package" || item.type === "package-body") {
     // Open the object source in a source tab
@@ -1527,35 +1532,35 @@ function onLoginSuccess() {
   setupRequired.value = false;
   needsAuth.value = true;
   window.history.replaceState(null, "", webPath("/"));
-  initApp();
+  void initApp();
 }
 
-function initApp() {
+async function initApp() {
   const t0 = performance.now();
   console.log("[STARTUP] initApp begin");
-  settingsStore
-    .initDesktopSettings()
-    .catch(() => {})
-    .then(() => {
-      void savedSqlStore
-        .initFromStorage()
-        .then(() => {
-          console.log(`[STARTUP]   savedSqlStore.initFromStorage: ${(performance.now() - t0).toFixed(0)}ms`);
-          void queryStore.hydrateSavedSqlTabs();
-        })
-        .catch((e: any) => {
-          toast(t("connection.loadFailed", { message: e?.message || String(e) }), 5000);
-        });
-      return connectionStore.initFromDisk();
-    })
-    .then(() => {
-      console.log(`[STARTUP]   connectionStore.initFromDisk: ${(performance.now() - t0).toFixed(0)}ms`);
-      restoreActiveConnectionContext();
-    })
-    .catch((e: any) => {
-      toast(t("connection.loadFailed", { message: e?.message || String(e) }), 5000);
-    });
   settingsStore.initAiConfig();
+  try {
+    await settingsStore.initEditorSettings();
+    console.log(`[STARTUP]   settingsStore.initEditorSettings: ${(performance.now() - t0).toFixed(0)}ms`);
+    await queryStore.initOpenTabs();
+    console.log(`[STARTUP]   queryStore.initOpenTabs: ${(performance.now() - t0).toFixed(0)}ms`);
+    await settingsStore.initDesktopSettings().catch(() => {});
+
+    void Promise.all([initSavedSqlEditorPositions(), savedSqlStore.initFromStorage()])
+      .then(() => {
+        console.log(`[STARTUP]   savedSqlStore.initFromStorage: ${(performance.now() - t0).toFixed(0)}ms`);
+        void queryStore.hydrateSavedSqlTabs();
+      })
+      .catch((e: any) => {
+        toast(t("connection.loadFailed", { message: e?.message || String(e) }), 5000);
+      });
+
+    await connectionStore.initFromDisk();
+    console.log(`[STARTUP]   connectionStore.initFromDisk: ${(performance.now() - t0).toFixed(0)}ms`);
+    restoreActiveConnectionContext();
+  } catch (e: any) {
+    toast(t("connection.loadFailed", { message: e?.message || String(e) }), 5000);
+  }
 }
 
 function restoreActiveConnectionContext() {
@@ -1639,10 +1644,11 @@ onMounted(async () => {
   }
   // macOS: Ctrl+click fires both click and contextmenu.
   // Intercept click in capture phase to prevent unwanted navigation.
+  // Windows/Linux use Ctrl+click for multi-select; do not block there.
   document.addEventListener(
     "click",
     (e) => {
-      if (e.ctrlKey) e.stopPropagation();
+      if (e.ctrlKey && isMacOS()) e.stopPropagation();
     },
     true,
   );
@@ -1659,7 +1665,7 @@ onMounted(async () => {
     if (needsAuth.value && !authenticated.value) {
       history.replaceState(null, "", webPath("/login"));
     }
-    if (!setupRequired.value && (!needsAuth.value || authenticated.value)) initApp();
+    if (!setupRequired.value && (!needsAuth.value || authenticated.value)) void initApp();
     api
       .getAppVersion()
       .then((v) => {
@@ -1668,7 +1674,7 @@ onMounted(async () => {
       .catch(() => {});
     return;
   }
-  initApp();
+  void initApp();
   setupFileDrop().catch(() => {});
   setTimeout(() => {
     runUpdateNotificationChecks();
@@ -1855,6 +1861,7 @@ onUnmounted(() => {
                           database: activeTab.database,
                           schema: target.schema,
                           tableName: target.tableName,
+                          tableType: target.tableType,
                         })
                     "
                     @object-schema-change="(schema) => activeTab && queryStore.updateSchema(activeTab.id, schema)"

@@ -5,7 +5,7 @@ use std::io::Write;
 use tokio::sync::RwLock;
 
 use crate::models::connection::DatabaseType;
-use crate::sql_dialect::{qualified_table_name, quote_table_identifier};
+use crate::sql_dialect::{qualified_table_name, quote_table_identifier, uses_single_row_insert_statements};
 use crate::transfer::{
     format_ch_array_sql_literal, format_pg_array_sql_literal, is_identity_column_extra, quote_identifier,
     selected_columns_include_identity_extras, wrap_dameng_identity_insert_sql,
@@ -154,6 +154,10 @@ pub struct BuildDatabaseSqlExportOptions {
 }
 
 pub fn format_export_sql_literal(value: &Value) -> String {
+    format_export_sql_literal_for_database(value, None)
+}
+
+fn format_export_sql_literal_for_database(value: &Value, database_type: Option<DatabaseType>) -> String {
     if value.is_null() {
         return "NULL".to_string();
     }
@@ -167,7 +171,7 @@ pub fn format_export_sql_literal(value: &Value) -> String {
         return format_pg_array_sql_literal(arr);
     }
     let text = value.as_str().map_or_else(|| value.to_string(), ToString::to_string);
-    quote_export_sql_string(&text)
+    quote_export_sql_string_for_database(&text, database_type)
 }
 
 fn format_export_sql_literal_typed(
@@ -186,11 +190,51 @@ fn format_export_sql_literal_typed(
     if let Some(literal) = format_export_temporal_literal(value, database_type, column_type) {
         return literal;
     }
-    format_export_sql_literal(value)
+    format_export_sql_literal_for_database(value, database_type)
 }
 
 fn quote_export_sql_string(text: &str) -> String {
     format!("'{}'", text.replace('\\', "\\\\").replace('\'', "''"))
+}
+
+fn quote_export_sql_string_for_database(text: &str, database_type: Option<DatabaseType>) -> String {
+    if is_mysql_compatible_export_literal_target(database_type) {
+        quote_mysql_compatible_export_sql_string(text)
+    } else {
+        quote_export_sql_string(text)
+    }
+}
+
+fn quote_mysql_compatible_export_sql_string(text: &str) -> String {
+    format!("'{}'", escape_mysql_compatible_export_sql_string(text))
+}
+
+fn escape_mysql_compatible_export_sql_string(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            // MySQL-family dumps should keep control characters out of the
+            // physical script layout while relying on the dialect's escapes.
+            '\0' => escaped.push_str("\\0"),
+            '\x08' => escaped.push_str("\\b"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            '\x0c' => escaped.push_str("\\f"),
+            '\x1a' => escaped.push_str("\\Z"),
+            '\\' => escaped.push_str("\\\\"),
+            '\'' => escaped.push_str("''"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn is_mysql_compatible_export_literal_target(database_type: Option<DatabaseType>) -> bool {
+    matches!(
+        database_type,
+        Some(DatabaseType::Mysql | DatabaseType::Doris | DatabaseType::StarRocks | DatabaseType::Goldendb)
+    )
 }
 
 fn format_export_temporal_literal(
@@ -357,7 +401,7 @@ fn format_mysql_bit_literal(value: &Value) -> String {
             if !trimmed.is_empty() && trimmed.bytes().all(|byte| byte == b'0' || byte == b'1') {
                 return format!("b'{trimmed}'");
             }
-            format!("b'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
+            format!("b'{}'", escape_mysql_compatible_export_sql_string(value))
         }
         other => format_export_sql_literal(other),
     }
@@ -388,7 +432,11 @@ pub fn build_export_insert_statements(options: BuildExportInsertStatementsOption
     if insert_columns.is_empty() {
         return Ok(Vec::new());
     }
-    let batch_size = options.batch_size.unwrap_or(DATABASE_EXPORT_INSERT_BATCH_SIZE).max(1);
+    let batch_size = if options.database_type.is_some_and(uses_single_row_insert_statements) {
+        1
+    } else {
+        options.batch_size.unwrap_or(DATABASE_EXPORT_INSERT_BATCH_SIZE).max(1)
+    };
     let columns = insert_columns
         .iter()
         .map(|(_, column)| quote_table_identifier(options.database_type, column))
@@ -778,8 +826,17 @@ pub async fn export_database_sql_core(
     let mut functions: Vec<String> = Vec::new();
 
     if request.include_objects && request.selected_tables.is_empty() {
-        if let Ok(objects) =
-            crate::schema::list_objects_core(state, &request.connection_id, &request.database, &request.schema).await
+        if let Ok(objects) = crate::schema::list_objects_core(
+            state,
+            &request.connection_id,
+            &request.database,
+            &request.schema,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
         {
             for obj in &objects {
                 let ot = obj.object_type.to_uppercase();
@@ -1259,6 +1316,63 @@ mod tests {
     }
 
     #[test]
+    fn mysql_export_inserts_escape_control_characters() {
+        let statements = build_export_insert_statements(BuildExportInsertStatementsOptions {
+            database_type: Some(DatabaseType::Mysql),
+            schema: None,
+            table_name: Some("notes".to_string()),
+            qualified_table_name: None,
+            columns: vec!["body".to_string()],
+            column_types: vec![Some("text".to_string())],
+            column_extras: Vec::new(),
+            rows: vec![vec![json!("line1\nline2\tcol\rend\\slash\0\x1aO'Hara")]],
+            batch_size: Some(10),
+        })
+        .unwrap();
+
+        assert_eq!(
+            statements,
+            vec!["INSERT INTO `notes` (`body`) VALUES ('line1\\nline2\\tcol\\rend\\\\slash\\0\\ZO''Hara');"]
+        );
+    }
+
+    #[test]
+    fn doris_export_inserts_escape_control_characters() {
+        let statements = build_export_insert_statements(BuildExportInsertStatementsOptions {
+            database_type: Some(DatabaseType::Doris),
+            schema: Some("warehouse".to_string()),
+            table_name: Some("events".to_string()),
+            qualified_table_name: None,
+            columns: vec!["message".to_string()],
+            column_types: vec![Some("varchar(255)".to_string())],
+            column_extras: Vec::new(),
+            rows: vec![vec![json!("first\nsecond\tthird")]],
+            batch_size: Some(10),
+        })
+        .unwrap();
+
+        assert_eq!(statements, vec!["INSERT INTO `warehouse`.`events` (`message`) VALUES ('first\\nsecond\\tthird');"]);
+    }
+
+    #[test]
+    fn postgres_export_inserts_keep_literal_control_characters() {
+        let statements = build_export_insert_statements(BuildExportInsertStatementsOptions {
+            database_type: Some(DatabaseType::Postgres),
+            schema: Some("public".to_string()),
+            table_name: Some("notes".to_string()),
+            qualified_table_name: None,
+            columns: vec!["body".to_string()],
+            column_types: vec![Some("text".to_string())],
+            column_extras: Vec::new(),
+            rows: vec![vec![json!("line1\nline2\tend")]],
+            batch_size: Some(10),
+        })
+        .unwrap();
+
+        assert_eq!(statements, vec!["INSERT INTO \"public\".\"notes\" (\"body\") VALUES ('line1\nline2\tend');"]);
+    }
+
+    #[test]
     fn builds_batched_insert_statements_for_export() {
         let statements = build_export_insert_statements(BuildExportInsertStatementsOptions {
             database_type: Some(DatabaseType::Mysql),
@@ -1278,6 +1392,30 @@ mod tests {
             vec![
                 "INSERT INTO `users` (`id`, `name`) VALUES (1, 'Ada'), (2, 'O''Hara');",
                 "INSERT INTO `users` (`id`, `name`) VALUES (3, 'Linus');",
+            ]
+        );
+    }
+
+    #[test]
+    fn oracle_export_inserts_use_one_statement_per_row() {
+        let statements = build_export_insert_statements(BuildExportInsertStatementsOptions {
+            database_type: Some(DatabaseType::Oracle),
+            schema: Some("APP".to_string()),
+            table_name: Some("USERS".to_string()),
+            qualified_table_name: None,
+            columns: vec!["ID".to_string(), "NAME".to_string()],
+            column_types: Vec::new(),
+            column_extras: Vec::new(),
+            rows: vec![vec![json!(1), json!("Ada")], vec![json!(2), json!("Linus")]],
+            batch_size: Some(100),
+        })
+        .unwrap();
+
+        assert_eq!(
+            statements,
+            vec![
+                "INSERT INTO \"APP\".\"USERS\" (\"ID\", \"NAME\") VALUES (1, 'Ada');",
+                "INSERT INTO \"APP\".\"USERS\" (\"ID\", \"NAME\") VALUES (2, 'Linus');",
             ]
         );
     }

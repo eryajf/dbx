@@ -156,7 +156,7 @@ export interface ConnectionConfig {
   read_only?: boolean;
 }
 
-export type TransportLayerConfig = ({ type: "ssh" } & SshTunnelConfig) | ({ type: "proxy" } & ProxyTunnelConfig);
+export type TransportLayerConfig = ({ type: "ssh" } & SshTunnelConfig) | ({ type: "proxy" } & ProxyTunnelConfig) | ({ type: "http_tunnel" } & HttpTunnelConfig);
 
 export interface SshTunnelConfig {
   id: string;
@@ -183,6 +183,15 @@ export interface ProxyTunnelConfig {
   port: number;
   username?: string;
   password?: string;
+}
+
+export interface HttpTunnelConfig {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  url: string;
+  token?: string;
+  connect_timeout_secs?: number;
 }
 
 export interface AttachedDatabaseConfig {
@@ -503,6 +512,7 @@ export type TreeNodeType =
   | "saved-sql-root"
   | "saved-sql-folder"
   | "saved-sql-file"
+  | "table-search-control"
   | "load-more"
   | "column"
   | "index"
@@ -514,6 +524,9 @@ export type TreeNodeType =
   | "etcd-root"
   | "zookeeper-root"
   | "mongo-db"
+  | "mongo-gridfs"
+  | "mongo-buckets"
+  | "mongo-bucket"
   | "mongo-collection"
   | "vector-collection"
   | "elasticsearch-index";
@@ -558,6 +571,7 @@ export interface TreeNode {
   partitionParentSchema?: string;
   partitionParentName?: string;
   hiddenChildren?: TreeNode[];
+  tableSearchParentId?: string;
   savedSqlId?: string;
   savedSqlFolderId?: string;
   meta?: ColumnInfo | IndexInfo | ForeignKeyInfo | TriggerInfo | VectorCollectionMeta;
@@ -575,10 +589,10 @@ export interface TableStructureEditorDraft {
   newTableName: string;
   tableComment: string;
   originalTableComment: string;
-  columns: import("@/lib/tableStructureEditorSql").EditableStructureColumn[];
-  indexes: import("@/lib/tableStructureEditorSql").EditableStructureIndex[];
-  foreignKeys: import("@/lib/tableStructureEditorSql").EditableStructureForeignKey[];
-  triggers: import("@/lib/tableStructureEditorSql").EditableStructureTrigger[];
+  columns: import("@/lib/table/tableStructureEditorSql").EditableStructureColumn[];
+  indexes: import("@/lib/table/tableStructureEditorSql").EditableStructureIndex[];
+  foreignKeys: import("@/lib/table/tableStructureEditorSql").EditableStructureForeignKey[];
+  triggers: import("@/lib/table/tableStructureEditorSql").EditableStructureTrigger[];
   initialized: boolean;
 }
 
@@ -619,7 +633,7 @@ export interface QueryTab {
   resultRuns?: QueryResultRun[];
   activeResultRunId?: string;
   resultAutoSave?: boolean;
-  explainPlan?: import("@/lib/explainPlan").ParsedExplainPlan;
+  explainPlan?: import("@/lib/diagram/explainPlan").ParsedExplainPlan;
   explainError?: string;
   explainSql?: string;
   lastExplainedSql?: string;
@@ -637,7 +651,7 @@ export interface QueryTab {
   executionId?: string;
   isExplaining?: boolean;
   explainExecutionId?: string;
-  mode: "data" | "query" | "redis" | "redis-dashboard" | "mongo" | "vector" | "etcd" | "zookeeper" | "mq" | "nacos" | "objects" | "structure" | "users";
+  mode: "data" | "query" | "redis" | "redis-dashboard" | "mongo" | "mongo-gridfs" | "mongo-bucket" | "vector" | "etcd" | "zookeeper" | "mq" | "nacos" | "objects" | "structure" | "users";
   mqTenant?: string;
   mqInitialTab?: "topics";
   nacosNamespace?: string;
@@ -683,6 +697,9 @@ export interface QueryTab {
   mongoEditTarget?: {
     collection: string;
     idColumn: "_id";
+  };
+  mongoBucket?: {
+    bucketName: string;
   };
   resultEvicted?: boolean;
   whereInput?: string;
@@ -735,4 +752,6 @@ export interface CollectionInfo {
   name: string;
   id: string;
   dimension?: number;
+  kind?: "collection" | "bucket";
+  bucketName?: string;
 }

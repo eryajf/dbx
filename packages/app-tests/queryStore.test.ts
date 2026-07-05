@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { isReactive } from "vue";
-import { decodeQueryResultArchive } from "../../apps/desktop/src/lib/queryResultArchive.ts";
+import { decodeQueryResultArchive } from "../../apps/desktop/src/lib/query/queryResultArchive.ts";
 import { useConnectionStore } from "../../apps/desktop/src/stores/connectionStore.ts";
 import { useQueryStore } from "../../apps/desktop/src/stores/queryStore.ts";
 import { useSettingsStore } from "../../apps/desktop/src/stores/settingsStore.ts";
@@ -144,10 +144,11 @@ test("external SQL file paths persist with open query tabs", async () => {
     const tabId = store.createTab("conn-1", "db", "draft.sql");
     store.updateSql(tabId, "select 1;");
     store.linkExternalSqlPath(tabId, "/tmp/draft.sql", "draft.sql");
-    store.flushPendingPersist();
+    await store.flushPendingPersist();
 
     setActivePinia(createPinia());
     store = useQueryStore();
+    await store.initOpenTabs();
     const tab = store.tabs.find((item) => item.id === tabId);
 
     assert.equal(tab?.externalSqlPath, "/tmp/draft.sql");
@@ -177,13 +178,14 @@ test("clean saved SQL tabs persist without duplicating SQL text", async () => {
       createdAt: "2026-06-27T00:00:00.000Z",
       updatedAt: "2026-06-27T00:00:00.000Z",
     });
-    store.flushPendingPersist();
+    await store.flushPendingPersist();
 
-    const rawTabs = localStorage.getItem("dbx-open-tabs") ?? "";
+    const rawTabs = localStorage.getItem("dbx-app-state:open_tabs") ?? "";
     assert.equal(rawTabs.includes("large_table"), false);
 
     setActivePinia(createPinia());
     store = useQueryStore();
+    await store.initOpenTabs();
     const tab = store.tabs.find((item) => item.savedSqlId === "saved-1");
 
     assert.equal(tab?.sql, "");
@@ -209,13 +211,14 @@ test("dirty saved SQL tabs keep unsaved edits in open tab persistence", async ()
       updatedAt: "2026-06-27T00:00:00.000Z",
     });
     store.updateSql(tabId, "SELECT 2;");
-    store.flushPendingPersist();
+    await store.flushPendingPersist();
 
-    const rawTabs = localStorage.getItem("dbx-open-tabs") ?? "";
+    const rawTabs = localStorage.getItem("dbx-app-state:open_tabs") ?? "";
     assert.equal(rawTabs.includes("SELECT 2;"), true);
 
     setActivePinia(createPinia());
     store = useQueryStore();
+    await store.initOpenTabs();
     const tab = store.tabs.find((item) => item.savedSqlId === "saved-1");
 
     assert.equal(tab?.sql, "SELECT 2;");
@@ -452,7 +455,7 @@ test("close other fixed tabs does not close regular tabs", () => {
   );
 });
 
-test("close other tabs pauses on restored unsaved query tabs", () => {
+test("close other tabs pauses on restored unsaved query tabs", async () => {
   const restoreStorage = installMemoryStorage();
   try {
     localStorage.setItem(
@@ -479,6 +482,7 @@ test("close other tabs pauses on restored unsaved query tabs", () => {
     localStorage.setItem("dbx-active-tab", "b");
     setActivePinia(createPinia());
     const store = useQueryStore();
+    await store.initOpenTabs();
 
     store.closeOtherTabs("b");
 
@@ -1916,7 +1920,7 @@ test("data tab execution preserves pagination offset metadata", async () => {
   }
 });
 
-test("data tab default pagination is independent from query result page size", async () => {
+test("data tab default pagination follows persisted rows-per-page", async () => {
   const restoreStorage = installMemoryStorage();
   setActivePinia(createPinia());
   const connectionStore = useConnectionStore();
@@ -1949,12 +1953,12 @@ test("data tab default pagination is independent from query result page size", a
   });
 
   try {
-    await store.executeTabSql(tabId, 'SELECT * FROM "users" LIMIT 100;');
+    await store.executeTabSql(tabId, 'SELECT * FROM "users" LIMIT 1000;');
 
     assert.equal(preparedPagination, false);
-    assert.equal(executeBody.maxRows, 100);
-    assert.equal(executeBody.fetchSize, 100);
-    assert.equal(tab.resultPageLimit, 100);
+    assert.equal(executeBody.maxRows, 1000);
+    assert.equal(executeBody.fetchSize, 1000);
+    assert.equal(tab.resultPageLimit, 1000);
     assert.equal(tab.resultPageOffset, 0);
   } finally {
     globalThis.fetch = originalFetch;
