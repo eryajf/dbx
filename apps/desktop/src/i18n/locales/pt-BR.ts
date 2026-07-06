@@ -2826,6 +2826,8 @@ export default withEnglishFallback({
     sidebarHiddenTablePrefixesPlaceholder: "Exemplo:\nODS_\nT8Y2_LONG_",
     sidebarTablePageSize: "Tamanho da página da barra lateral",
     sidebarTablePageSizeDescription: "Número máximo de tabelas/objetos carregados por página na árvore lateral. Aumente se tiver muitas tabelas para reduzir páginas.",
+    sidebarTableSearchEnabled: "Ativar busca de tabelas por banco",
+    sidebarTableSearchEnabledDescription: "Mostra uma busca local sob bancos, schemas ou grupos de tabelas expandidos para filtrar tabelas separadamente.",
     sidebarHideTableComments: "Ocultar comentários de tabela na barra lateral",
     sidebarHideTableCommentsDescription: "Ocultar os comentários inline de tabela/view exibidos ao lado dos nomes na árvore da barra lateral para economizar espaço horizontal.",
     sidebarAllowHorizontalScroll: "Permitir rolagem horizontal da barra lateral",

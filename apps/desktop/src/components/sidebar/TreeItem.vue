@@ -3944,6 +3944,16 @@ const rowStyle = computed(() => {
     "--tree-connection-active-focus-bg": hexToRgba(color, 0.22),
   };
 });
+const tableSearchStyle = computed(() => {
+  const color = connectionColor.value;
+  const rowBackgroundColor = color ? hexToRgba(color, isActiveConnectionScope.value ? 0.14 : 0.08) : "transparent";
+  return {
+    paddingLeft: paddingLeft.value,
+    "--tree-table-search-row-bg": rowBackgroundColor,
+    "--tree-table-search-input-bg": color ? hexToRgba(color, isActiveConnectionScope.value ? 0.05 : 0.03) : "hsl(var(--background) / 0.56)",
+    "--tree-table-search-border": color ? hexToRgba(color, isActiveConnectionScope.value ? 0.12 : 0.08) : "hsl(var(--border) / 0.36)",
+  };
+});
 
 function togglePin() {
   connectionStore.toggleTreeNodePin(props.node.id);
@@ -4933,7 +4943,7 @@ function treeItemMenuItems(): ContextMenuItem[] {
 </script>
 
 <template>
-  <div v-if="node.type === 'table-search-control'" class="flex h-7 items-center py-0.5 pr-2" :style="{ paddingLeft }" @click.stop @dblclick.stop @mousedown.stop @keydown.stop>
+  <div v-if="node.type === 'table-search-control'" class="tree-table-search-control flex h-7 items-center py-0.5 pr-2" :style="tableSearchStyle" @click.stop @dblclick.stop @mousedown.stop @keydown.stop>
     <div class="relative w-full min-w-0">
       <Search class="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
       <Input
@@ -4941,7 +4951,8 @@ function treeItemMenuItems(): ContextMenuItem[] {
         autocapitalize="off"
         autocorrect="off"
         spellcheck="false"
-        class="h-6 w-full rounded border-border/70 bg-background pl-7 pr-6 text-xs shadow-none focus-visible:ring-1"
+        class="h-6 w-full rounded border pl-7 pr-6 text-xs shadow-none focus-visible:ring-1"
+        :style="{ backgroundColor: 'var(--tree-table-search-input-bg)', borderColor: 'var(--tree-table-search-border)' }"
         :placeholder="t(node.label)"
         :aria-label="t(node.label)"
         :data-sidebar-table-search-parent-id="tableSearchParentId"
@@ -5604,6 +5615,26 @@ function treeItemMenuItems(): ContextMenuItem[] {
 
 .tree-item-connection-tint.tree-item-active:focus::before {
   background-color: var(--tree-connection-active-focus-bg, var(--tree-connection-active-bg));
+}
+
+.tree-table-search-control {
+  position: relative;
+  isolation: isolate;
+  background-color: transparent;
+}
+
+.tree-table-search-control::before {
+  content: "";
+  position: absolute;
+  inset: 0 -9999px;
+  z-index: 0;
+  background-color: var(--tree-table-search-row-bg);
+  pointer-events: none;
+}
+
+.tree-table-search-control > * {
+  position: relative;
+  z-index: 1;
 }
 
 /* Unfocused: subtle gray */

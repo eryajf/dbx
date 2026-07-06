@@ -276,6 +276,7 @@ const editingShortcutId = ref<ShortcutActionId | null>(null);
 const editSidebarActivation = ref(settingsStore.editorSettings.sidebarActivation);
 const editSidebarObjectDisplay = ref(settingsStore.editorSettings.sidebarObjectDisplay);
 const sidebarObjectDisplayHelp = ref<"grouped" | "simple" | null>(null);
+const editSidebarTableSearchEnabled = ref(settingsStore.editorSettings.sidebarTableSearchEnabled);
 const editAutoSelectActiveSidebarNode = ref(settingsStore.editorSettings.autoSelectActiveSidebarNode);
 const editOpenTabsRestoreMode = ref<OpenTabsRestoreMode>(settingsStore.editorSettings.openTabsRestoreMode);
 const editDisconnectTabHandlingMode = ref<DisconnectTabHandlingMode>(settingsStore.editorSettings.disconnectTabHandlingMode);
@@ -570,6 +571,7 @@ watch(
       sqlFormatterConfigValid.value = true;
       editSidebarActivation.value = settingsStore.editorSettings.sidebarActivation;
       editSidebarObjectDisplay.value = settingsStore.editorSettings.sidebarObjectDisplay;
+      editSidebarTableSearchEnabled.value = settingsStore.editorSettings.sidebarTableSearchEnabled;
       editAutoSelectActiveSidebarNode.value = settingsStore.editorSettings.autoSelectActiveSidebarNode;
       editOpenTabsRestoreMode.value = settingsStore.editorSettings.openTabsRestoreMode;
       editDisconnectTabHandlingMode.value = settingsStore.editorSettings.disconnectTabHandlingMode;
@@ -661,6 +663,7 @@ function hasChanges(): boolean {
     JSON.stringify(editSqlFormatter.value) !== JSON.stringify(normalizeSqlFormatterSettings(settingsStore.editorSettings.sqlFormatter)) ||
     editSidebarActivation.value !== settingsStore.editorSettings.sidebarActivation ||
     editSidebarObjectDisplay.value !== settingsStore.editorSettings.sidebarObjectDisplay ||
+    editSidebarTableSearchEnabled.value !== settingsStore.editorSettings.sidebarTableSearchEnabled ||
     editAutoSelectActiveSidebarNode.value !== settingsStore.editorSettings.autoSelectActiveSidebarNode ||
     editOpenTabsRestoreMode.value !== settingsStore.editorSettings.openTabsRestoreMode ||
     editDisconnectTabHandlingMode.value !== settingsStore.editorSettings.disconnectTabHandlingMode ||
@@ -711,6 +714,7 @@ async function persistSettings() {
     sqlFormatter: normalizeSqlFormatterSettings(editSqlFormatter.value),
     sidebarActivation: editSidebarActivation.value,
     sidebarObjectDisplay: editSidebarObjectDisplay.value,
+    sidebarTableSearchEnabled: editSidebarTableSearchEnabled.value,
     autoSelectActiveSidebarNode: editAutoSelectActiveSidebarNode.value,
     openTabsRestoreMode: editOpenTabsRestoreMode.value,
     disconnectTabHandlingMode: editDisconnectTabHandlingMode.value,
@@ -800,6 +804,7 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editSidebarTablePageSize.value = DEFAULT_SIDEBAR_TABLE_PAGE_SIZE;
     editSidebarActivation.value = DEFAULT_EDITOR_SETTINGS.sidebarActivation;
     editSidebarObjectDisplay.value = DEFAULT_EDITOR_SETTINGS.sidebarObjectDisplay;
+    editSidebarTableSearchEnabled.value = DEFAULT_EDITOR_SETTINGS.sidebarTableSearchEnabled;
     editAutoSelectActiveSidebarNode.value = DEFAULT_EDITOR_SETTINGS.autoSelectActiveSidebarNode;
     editOpenTabsRestoreMode.value = DEFAULT_EDITOR_SETTINGS.openTabsRestoreMode;
     editDisconnectTabHandlingMode.value = DEFAULT_EDITOR_SETTINGS.disconnectTabHandlingMode;
@@ -870,6 +875,7 @@ function resetAllDefaults() {
   sqlFormatterConfigValid.value = true;
   editSidebarActivation.value = DEFAULT_EDITOR_SETTINGS.sidebarActivation;
   editSidebarObjectDisplay.value = DEFAULT_EDITOR_SETTINGS.sidebarObjectDisplay;
+  editSidebarTableSearchEnabled.value = DEFAULT_EDITOR_SETTINGS.sidebarTableSearchEnabled;
   editAutoSelectActiveSidebarNode.value = DEFAULT_EDITOR_SETTINGS.autoSelectActiveSidebarNode;
   editOpenTabsRestoreMode.value = DEFAULT_EDITOR_SETTINGS.openTabsRestoreMode;
   editDisconnectTabHandlingMode.value = DEFAULT_EDITOR_SETTINGS.disconnectTabHandlingMode;
@@ -2853,6 +2859,15 @@ onUnmounted(cleanupPreviewEditor);
                     </div>
                   </Button>
                 </div>
+              </div>
+              <div class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
+                <div class="flex items-center gap-2">
+                  <Label for="sidebar-table-search-enabled">{{ t("settings.sidebarTableSearchEnabled") }}</Label>
+                  <HelpTooltip :label="t('settings.sidebarTableSearchEnabled')">
+                    {{ t("settings.sidebarTableSearchEnabledDescription") }}
+                  </HelpTooltip>
+                </div>
+                <Switch id="sidebar-table-search-enabled" v-model="editSidebarTableSearchEnabled" />
               </div>
               <div class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
                 <div class="flex items-center gap-2">

@@ -2723,6 +2723,8 @@ export default withEnglishFallback({
     sidebarHiddenTablePrefixesPlaceholder: "範例：\nODS_\nT8Y2_LONG_",
     sidebarTablePageSize: "側邊欄分頁大小",
     sidebarTablePageSizeDescription: "側邊欄樹每頁最多載入的資料表/物件數量。資料表多時可調大減少翻頁次數。",
+    sidebarTableSearchEnabled: "啟用庫下資料表搜尋框",
+    sidebarTableSearchEnabledDescription: "在已展開的資料庫、schema 或資料表分組下顯示局部資料表搜尋框，用於為不同庫分別篩選資料表。",
     sidebarHideTableComments: "隱藏側邊欄資料表註解",
     sidebarHideTableCommentsDescription: "隱藏側邊欄樹狀清單中名稱旁的資料表/檢視註解，以節省橫向空間。",
     sidebarAllowHorizontalScroll: "允許側邊欄水平捲動",

@@ -148,6 +148,14 @@ test("defaults update notifications to enabled", () => {
   assert.equal(normalizeEditorSettings({ updateNotificationsEnabled: false } as any).updateNotificationsEnabled, false);
 });
 
+test("defaults sidebar table search to disabled and preserves saved booleans", () => {
+  assert.equal(DEFAULT_EDITOR_SETTINGS.sidebarTableSearchEnabled, false);
+  assert.equal(normalizeEditorSettings({}).sidebarTableSearchEnabled, false);
+  assert.equal(normalizeEditorSettings({ sidebarTableSearchEnabled: true }).sidebarTableSearchEnabled, true);
+  assert.equal(normalizeEditorSettings({ sidebarTableSearchEnabled: false }).sidebarTableSearchEnabled, false);
+  assert.equal(normalizeEditorSettings({ sidebarTableSearchEnabled: "yes" as any }).sidebarTableSearchEnabled, false);
+});
+
 test("defaults shortcut settings", () => {
   const settings = normalizeEditorSettings({});
 

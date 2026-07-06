@@ -2883,6 +2883,8 @@ export default withEnglishFallback({
     sidebarHiddenTablePrefixesPlaceholder: "例如：\nODS_\nT8Y2_LONG_",
     sidebarTablePageSize: "侧边栏分页大小",
     sidebarTablePageSizeDescription: "侧边栏树每页最多加载的表/对象数量。表多时可以调大减少翻页次数。",
+    sidebarTableSearchEnabled: "启用库下表搜索框",
+    sidebarTableSearchEnabledDescription: "在已展开的数据库、schema 或表分组下显示局部表搜索框，用于为不同库分别过滤表。",
     sidebarHideTableComments: "隐藏侧边栏表注释",
     sidebarHideTableCommentsDescription: "隐藏侧边栏中表名旁边显示的表/视图注释，以节省横向空间。",
     sidebarAllowHorizontalScroll: "允许侧边栏横向滚动",

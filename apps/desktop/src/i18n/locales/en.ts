@@ -2883,6 +2883,8 @@ export default {
     sidebarHiddenTablePrefixesPlaceholder: "Example:\nODS_\nT8Y2_LONG_",
     sidebarTablePageSize: "Sidebar page size",
     sidebarTablePageSizeDescription: "Maximum number of tables/objects loaded per page in the sidebar tree. Increase if you have many tables and want fewer pages.",
+    sidebarTableSearchEnabled: "Enable table search inside databases",
+    sidebarTableSearchEnabledDescription: "Show a local table search box under expanded databases, schemas, or table groups so each scope can filter tables independently.",
     sidebarHideTableComments: "Hide table comments in sidebar",
     sidebarHideTableCommentsDescription: "Hide the inline table/view comments shown next to names in the sidebar tree to save horizontal space.",
     sidebarAllowHorizontalScroll: "Allow sidebar horizontal scroll",
