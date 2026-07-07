@@ -427,6 +427,8 @@ export interface QueryResultRun {
   resultSortMode?: "database" | "local";
   resultLocalSortOriginalRows?: QueryResult["rows"];
   orderByInput?: string;
+  openTableDefaultSortApplied?: boolean;
+  openTableDefaultSortOrderBy?: string;
   resultPageSql?: string;
   resultPageLimit?: number;
   resultPageOffset?: number;
@@ -616,6 +618,8 @@ export interface QueryTab {
   resultSortMode?: "database" | "local";
   resultLocalSortOriginalRows?: QueryResult["rows"];
   orderByInput?: string;
+  openTableDefaultSortApplied?: boolean;
+  openTableDefaultSortOrderBy?: string;
   resultPageSql?: string;
   resultPageLimit?: number;
   resultPageOffset?: number;

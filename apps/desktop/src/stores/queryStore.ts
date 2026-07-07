@@ -457,6 +457,8 @@ export const useQueryStore = defineStore("query", () => {
       resultSortDirection: tab.resultSortDirection,
       resultSortMode: tab.resultSortMode,
       orderByInput: tab.orderByInput,
+      openTableDefaultSortApplied: tab.openTableDefaultSortApplied,
+      openTableDefaultSortOrderBy: tab.openTableDefaultSortOrderBy,
       resultPageSql: tab.resultPageSql,
       resultPageLimit: tab.resultPageLimit,
       resultPageOffset: tab.resultPageOffset,
@@ -505,6 +507,8 @@ export const useQueryStore = defineStore("query", () => {
       resultSortDirection: tab.resultSortDirection,
       resultSortMode: tab.resultSortMode,
       orderByInput: tab.orderByInput,
+      openTableDefaultSortApplied: tab.openTableDefaultSortApplied,
+      openTableDefaultSortOrderBy: tab.openTableDefaultSortOrderBy,
       resultPageSql: tab.resultPageSql,
       resultPageLimit: tab.resultPageLimit,
       resultPageOffset: tab.resultPageOffset,
@@ -561,6 +565,8 @@ export const useQueryStore = defineStore("query", () => {
     tab.resultSortDirection = direction ?? undefined;
     tab.resultSortMode = direction ? "local" : undefined;
     tab.resultSortedSql = undefined;
+    tab.openTableDefaultSortApplied = undefined;
+    tab.openTableDefaultSortOrderBy = undefined;
     if (!direction) tab.resultLocalSortOriginalRows = undefined;
 
     touchResult(tab);
@@ -637,6 +643,8 @@ export const useQueryStore = defineStore("query", () => {
       resultSortDirection: t.resultSortDirection,
       resultSortMode: t.resultSortMode,
       orderByInput: t.orderByInput,
+      openTableDefaultSortApplied: t.openTableDefaultSortApplied,
+      openTableDefaultSortOrderBy: t.openTableDefaultSortOrderBy,
       resultPageLimit: t.resultPageLimit,
       resultPageOffset: t.resultPageOffset,
       whereInput: t.whereInput,
@@ -1244,6 +1252,8 @@ export const useQueryStore = defineStore("query", () => {
       resultSortMode: undefined,
       resultLocalSortOriginalRows: undefined,
       orderByInput: undefined,
+      openTableDefaultSortApplied: undefined,
+      openTableDefaultSortOrderBy: undefined,
       resultPageSql: undefined,
       resultPageLimit: undefined,
       resultPageOffset: undefined,
@@ -2636,6 +2646,8 @@ export const useQueryStore = defineStore("query", () => {
     tab.resultSortColumnIndex = undefined;
     tab.resultSortDirection = undefined;
     tab.resultSortMode = undefined;
+    tab.openTableDefaultSortApplied = undefined;
+    tab.openTableDefaultSortOrderBy = undefined;
     touchResult(tab);
     tab.queryAnalysis = undefined;
     tab.querySourceColumns = undefined;

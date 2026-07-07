@@ -4930,7 +4930,7 @@ function quickSortColumn(column: string, columnIndex: number) {
     applyColumnSort(column, columnIndex, sortDir.value === "asc" ? "desc" : "asc", sortMode.value);
     return true;
   }
-  applyColumnSort(column, columnIndex, settingsStore.editorSettings.defaultDataGridSortDirection, settingsStore.editorSettings.defaultDataGridSortMode);
+  applyColumnSort(column, columnIndex, settingsStore.editorSettings.dataGridQuickSortDirection, settingsStore.editorSettings.dataGridQuickSortMode);
   return true;
 }
 

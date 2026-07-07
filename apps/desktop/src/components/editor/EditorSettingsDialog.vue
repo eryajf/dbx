@@ -37,8 +37,9 @@ import {
   type OpenTabsRestoreMode,
   type SqlSemanticDiagnosticsMode,
   type UpdateDownloadSource,
-  type DefaultDataGridSortMode,
-  type DefaultDataGridSortDirection,
+  type OpenTableDefaultSortMode,
+  type DataGridQuickSortMode,
+  type DataGridQuickSortDirection,
   type CustomThemeColors,
   type CustomTheme,
 } from "@/stores/settingsStore";
@@ -258,8 +259,9 @@ const debugLogDownloaded = ref(false);
 const editShowColumnCommentsInHeader = ref(settingsStore.editorSettings.showColumnCommentsInHeader);
 const editShowColumnTypesInHeader = ref(settingsStore.editorSettings.showColumnTypesInHeader);
 const editCompactColumnHeaderActions = ref(settingsStore.editorSettings.compactColumnHeaderActions);
-const editDefaultDataGridSortMode = ref<DefaultDataGridSortMode>(settingsStore.editorSettings.defaultDataGridSortMode);
-const editDefaultDataGridSortDirection = ref<DefaultDataGridSortDirection>(settingsStore.editorSettings.defaultDataGridSortDirection);
+const editOpenTableDefaultSortMode = ref<OpenTableDefaultSortMode>(settingsStore.editorSettings.openTableDefaultSortMode);
+const editDataGridQuickSortMode = ref<DataGridQuickSortMode>(settingsStore.editorSettings.dataGridQuickSortMode);
+const editDataGridQuickSortDirection = ref<DataGridQuickSortDirection>(settingsStore.editorSettings.dataGridQuickSortDirection);
 const editDataGridQuickEntry = ref(settingsStore.editorSettings.dataGridQuickEntry);
 const editInfiniteScroll = ref(settingsStore.editorSettings.infiniteScroll);
 const editInfiniteScrollMaxRows = ref(settingsStore.editorSettings.infiniteScrollMaxRows);
@@ -560,8 +562,9 @@ watch(
       editShowColumnCommentsInHeader.value = settingsStore.editorSettings.showColumnCommentsInHeader;
       editShowColumnTypesInHeader.value = settingsStore.editorSettings.showColumnTypesInHeader;
       editCompactColumnHeaderActions.value = settingsStore.editorSettings.compactColumnHeaderActions;
-      editDefaultDataGridSortMode.value = settingsStore.editorSettings.defaultDataGridSortMode;
-      editDefaultDataGridSortDirection.value = settingsStore.editorSettings.defaultDataGridSortDirection;
+      editOpenTableDefaultSortMode.value = settingsStore.editorSettings.openTableDefaultSortMode;
+      editDataGridQuickSortMode.value = settingsStore.editorSettings.dataGridQuickSortMode;
+      editDataGridQuickSortDirection.value = settingsStore.editorSettings.dataGridQuickSortDirection;
       editDataGridQuickEntry.value = settingsStore.editorSettings.dataGridQuickEntry;
       editInfiniteScroll.value = settingsStore.editorSettings.infiniteScroll;
       editInfiniteScrollMaxRows.value = settingsStore.editorSettings.infiniteScrollMaxRows;
@@ -653,8 +656,9 @@ function hasChanges(): boolean {
     editShowColumnCommentsInHeader.value !== settingsStore.editorSettings.showColumnCommentsInHeader ||
     editShowColumnTypesInHeader.value !== settingsStore.editorSettings.showColumnTypesInHeader ||
     editCompactColumnHeaderActions.value !== settingsStore.editorSettings.compactColumnHeaderActions ||
-    editDefaultDataGridSortMode.value !== settingsStore.editorSettings.defaultDataGridSortMode ||
-    editDefaultDataGridSortDirection.value !== settingsStore.editorSettings.defaultDataGridSortDirection ||
+    editOpenTableDefaultSortMode.value !== settingsStore.editorSettings.openTableDefaultSortMode ||
+    editDataGridQuickSortMode.value !== settingsStore.editorSettings.dataGridQuickSortMode ||
+    editDataGridQuickSortDirection.value !== settingsStore.editorSettings.dataGridQuickSortDirection ||
     editDataGridQuickEntry.value !== settingsStore.editorSettings.dataGridQuickEntry ||
     editInfiniteScroll.value !== settingsStore.editorSettings.infiniteScroll ||
     editInfiniteScrollMaxRows.value !== settingsStore.editorSettings.infiniteScrollMaxRows ||
@@ -705,8 +709,9 @@ async function persistSettings() {
     showColumnCommentsInHeader: editShowColumnCommentsInHeader.value,
     showColumnTypesInHeader: editShowColumnTypesInHeader.value,
     compactColumnHeaderActions: editCompactColumnHeaderActions.value,
-    defaultDataGridSortMode: editDefaultDataGridSortMode.value,
-    defaultDataGridSortDirection: editDefaultDataGridSortDirection.value,
+    openTableDefaultSortMode: editOpenTableDefaultSortMode.value,
+    dataGridQuickSortMode: editDataGridQuickSortMode.value,
+    dataGridQuickSortDirection: editDataGridQuickSortDirection.value,
     dataGridQuickEntry: editDataGridQuickEntry.value,
     infiniteScroll: editInfiniteScroll.value,
     infiniteScrollMaxRows: editInfiniteScrollMaxRows.value,
@@ -816,8 +821,9 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editShowColumnCommentsInHeader.value = DEFAULT_EDITOR_SETTINGS.showColumnCommentsInHeader;
     editShowColumnTypesInHeader.value = DEFAULT_EDITOR_SETTINGS.showColumnTypesInHeader;
     editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
-    editDefaultDataGridSortMode.value = DEFAULT_EDITOR_SETTINGS.defaultDataGridSortMode;
-    editDefaultDataGridSortDirection.value = DEFAULT_EDITOR_SETTINGS.defaultDataGridSortDirection;
+    editOpenTableDefaultSortMode.value = DEFAULT_EDITOR_SETTINGS.openTableDefaultSortMode;
+    editDataGridQuickSortMode.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickSortMode;
+    editDataGridQuickSortDirection.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickSortDirection;
     editDataGridQuickEntry.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry;
     editInfiniteScroll.value = DEFAULT_EDITOR_SETTINGS.infiniteScroll;
     editInfiniteScrollMaxRows.value = DEFAULT_EDITOR_SETTINGS.infiniteScrollMaxRows;
@@ -864,8 +870,9 @@ function resetAllDefaults() {
   editShowColumnCommentsInHeader.value = DEFAULT_EDITOR_SETTINGS.showColumnCommentsInHeader;
   editShowColumnTypesInHeader.value = DEFAULT_EDITOR_SETTINGS.showColumnTypesInHeader;
   editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
-  editDefaultDataGridSortMode.value = DEFAULT_EDITOR_SETTINGS.defaultDataGridSortMode;
-  editDefaultDataGridSortDirection.value = DEFAULT_EDITOR_SETTINGS.defaultDataGridSortDirection;
+  editOpenTableDefaultSortMode.value = DEFAULT_EDITOR_SETTINGS.openTableDefaultSortMode;
+  editDataGridQuickSortMode.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickSortMode;
+  editDataGridQuickSortDirection.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickSortDirection;
   editDataGridQuickEntry.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry;
   editInfiniteScroll.value = DEFAULT_EDITOR_SETTINGS.infiniteScroll;
   editInfiniteScrollMaxRows.value = DEFAULT_EDITOR_SETTINGS.infiniteScrollMaxRows;
@@ -1086,12 +1093,16 @@ function onUpdateDownloadSourceChange(v: any) {
   if (v === "official" || v === "cnb" || v === "atomgit") editUpdateDownloadSource.value = v;
 }
 
-function onDefaultDataGridSortModeChange(v: any) {
-  if (v === "database" || v === "local") editDefaultDataGridSortMode.value = v;
+function onOpenTableDefaultSortModeChange(v: any) {
+  if (v === "none" || v === "primary-key-asc" || v === "primary-key-desc") editOpenTableDefaultSortMode.value = v;
 }
 
-function onDefaultDataGridSortDirectionChange(v: any) {
-  if (v === "asc" || v === "desc") editDefaultDataGridSortDirection.value = v;
+function onDataGridQuickSortModeChange(v: any) {
+  if (v === "database" || v === "local") editDataGridQuickSortMode.value = v;
+}
+
+function onDataGridQuickSortDirectionChange(v: any) {
+  if (v === "asc" || v === "desc") editDataGridQuickSortDirection.value = v;
 }
 
 function setSidebarObjectDisplay(value: "grouped" | "simple") {
@@ -3013,34 +3024,56 @@ onUnmounted(cleanupPreviewEditor);
                 <div class="flex flex-col gap-3 rounded-md border bg-muted/20 px-3 py-2 md:flex-row md:items-center md:justify-between">
                   <div class="min-w-0 space-y-1">
                     <Label>
-                      {{ t("settings.defaultDataGridSortMode") }}
+                      {{ t("settings.openTableDefaultSortMode") }}
                     </Label>
                     <p class="max-w-2xl text-xs text-muted-foreground">
-                      {{ t("settings.defaultDataGridSortModeDescription") }}
+                      {{ t("settings.openTableDefaultSortModeDescription") }}
+                    </p>
+                  </div>
+                  <div class="flex shrink-0 self-end md:self-auto">
+                    <Select :model-value="editOpenTableDefaultSortMode" @update:model-value="onOpenTableDefaultSortModeChange">
+                      <SelectTrigger id="open-table-default-sort-mode" class="h-8 w-40">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">{{ t("settings.openTableDefaultSortModeNone") }}</SelectItem>
+                        <SelectItem value="primary-key-asc">{{ t("settings.openTableDefaultSortModePrimaryKeyAsc") }}</SelectItem>
+                        <SelectItem value="primary-key-desc">{{ t("settings.openTableDefaultSortModePrimaryKeyDesc") }}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div class="flex flex-col gap-3 rounded-md border bg-muted/20 px-3 py-2 md:flex-row md:items-center md:justify-between">
+                  <div class="min-w-0 space-y-1">
+                    <Label>
+                      {{ t("settings.dataGridQuickSort") }}
+                    </Label>
+                    <p class="max-w-2xl text-xs text-muted-foreground">
+                      {{ t("settings.dataGridQuickSortDescription") }}
                     </p>
                   </div>
                   <div class="flex shrink-0 gap-2 self-end md:self-auto">
                     <div class="space-y-1">
-                      <Label for="default-data-grid-sort-mode" class="text-xs text-muted-foreground">{{ t("settings.defaultDataGridSortMode") }}</Label>
-                      <Select :model-value="editDefaultDataGridSortMode" @update:model-value="onDefaultDataGridSortModeChange">
-                        <SelectTrigger id="default-data-grid-sort-mode" class="h-8 w-40">
+                      <Label for="data-grid-quick-sort-mode" class="text-xs text-muted-foreground">{{ t("settings.dataGridQuickSortMode") }}</Label>
+                      <Select :model-value="editDataGridQuickSortMode" @update:model-value="onDataGridQuickSortModeChange">
+                        <SelectTrigger id="data-grid-quick-sort-mode" class="h-8 w-40">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="local">{{ t("settings.defaultDataGridSortModeCurrentPage") }}</SelectItem>
-                          <SelectItem value="database">{{ t("settings.defaultDataGridSortModeDatabase") }}</SelectItem>
+                          <SelectItem value="local">{{ t("settings.dataGridQuickSortModeCurrentPage") }}</SelectItem>
+                          <SelectItem value="database">{{ t("settings.dataGridQuickSortModeDatabase") }}</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     <div class="space-y-1">
-                      <Label for="default-data-grid-sort-direction" class="text-xs text-muted-foreground">{{ t("settings.defaultDataGridSortDirection") }}</Label>
-                      <Select :model-value="editDefaultDataGridSortDirection" @update:model-value="onDefaultDataGridSortDirectionChange">
-                        <SelectTrigger id="default-data-grid-sort-direction" class="h-8 w-28">
+                      <Label for="data-grid-quick-sort-direction" class="text-xs text-muted-foreground">{{ t("settings.dataGridQuickSortDirection") }}</Label>
+                      <Select :model-value="editDataGridQuickSortDirection" @update:model-value="onDataGridQuickSortDirectionChange">
+                        <SelectTrigger id="data-grid-quick-sort-direction" class="h-8 w-28">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="asc">{{ t("settings.defaultDataGridSortDirectionAsc") }}</SelectItem>
-                          <SelectItem value="desc">{{ t("settings.defaultDataGridSortDirectionDesc") }}</SelectItem>
+                          <SelectItem value="asc">{{ t("settings.dataGridQuickSortDirectionAsc") }}</SelectItem>
+                          <SelectItem value="desc">{{ t("settings.dataGridQuickSortDirectionDesc") }}</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>

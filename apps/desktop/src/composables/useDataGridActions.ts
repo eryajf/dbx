@@ -47,6 +47,51 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
     });
   }
 
+  function openTableDefaultSortForTab(tab: QueryTab): { column: string; columnIndex: number; direction: "asc" | "desc"; orderBy: string } | undefined {
+    const mode = settingsStore.editorSettings.openTableDefaultSortMode;
+    if (mode === "none") return undefined;
+    const tableMeta = tableMetaForDataTab(tab);
+    const primaryKeys = tab.tableMeta ? tab.tableMeta.primaryKeys : (tableMeta?.primaryKeys ?? []);
+    const column = primaryKeys[0];
+    if (!column) return undefined;
+    const config = connectionStore.getConfig(tab.connectionId);
+    const effectiveDbType = effectiveDatabaseTypeForConnection(config);
+    const quotedColumn = quoteTableIdentifier(effectiveDbType, column);
+    const direction = mode === "primary-key-desc" ? "desc" : "asc";
+    const orderBy = `${effectiveDbType === "neo4j" ? `n.${quotedColumn}` : quotedColumn} ${direction.toUpperCase()}`;
+    const columnIndex = tableMeta?.columns.findIndex((item) => item.name === column) ?? -1;
+    return { column, columnIndex, direction, orderBy };
+  }
+
+  function currentReloadOrderByIsOpenTableDefault(tab: QueryTab, orderBy?: string): boolean {
+    const trimmedOrderBy = orderBy?.trim();
+    if (tab.openTableDefaultSortApplied) {
+      const defaultOrderBy = tab.openTableDefaultSortOrderBy?.trim();
+      return !trimmedOrderBy || (!!defaultOrderBy && trimmedOrderBy === defaultOrderBy);
+    }
+    return !trimmedOrderBy && !tab.resultSortColumn && !tab.resultSortDirection && !tab.orderByInput?.trim();
+  }
+
+  function applyOpenTableDefaultSortState(tab: QueryTab, sort: ReturnType<typeof openTableDefaultSortForTab>) {
+    if (!sort) {
+      tab.resultSortColumn = undefined;
+      tab.resultSortColumnIndex = undefined;
+      tab.resultSortDirection = undefined;
+      tab.resultSortMode = undefined;
+      tab.orderByInput = undefined;
+      tab.openTableDefaultSortApplied = undefined;
+      tab.openTableDefaultSortOrderBy = undefined;
+      return;
+    }
+    tab.resultSortColumn = sort.column;
+    tab.resultSortColumnIndex = sort.columnIndex >= 0 ? sort.columnIndex : undefined;
+    tab.resultSortDirection = sort.direction;
+    tab.resultSortMode = "database";
+    tab.orderByInput = sort.orderBy;
+    tab.openTableDefaultSortApplied = true;
+    tab.openTableDefaultSortOrderBy = sort.orderBy;
+  }
+
   async function refreshDataTabTableMeta(tab: QueryTab, trace?: { traceId: string; elapsed: () => string }): Promise<void> {
     if (tab.mode !== "data" || !tab.connectionId || !tab.database) return;
     const tableMeta = tableMetaForDataTab(tab);
@@ -129,7 +174,16 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
       }
       try {
         console.info("[DBX][reloadData:build-sql:start]", { traceId, elapsed: elapsed() });
-        const nextSql = await buildTableSql(tab, { whereInput, orderBy, limit: pageLimit, offset: pageOffset });
+        let nextOrderBy = orderBy;
+        if (currentReloadOrderByIsOpenTableDefault(tab, orderBy)) {
+          const openTableDefaultSort = openTableDefaultSortForTab(tab);
+          applyOpenTableDefaultSortState(tab, openTableDefaultSort);
+          nextOrderBy = openTableDefaultSort?.orderBy;
+        } else if (orderBy?.trim() !== tab.openTableDefaultSortOrderBy?.trim()) {
+          tab.openTableDefaultSortApplied = undefined;
+          tab.openTableDefaultSortOrderBy = undefined;
+        }
+        const nextSql = await buildTableSql(tab, { whereInput, orderBy: nextOrderBy, limit: pageLimit, offset: pageOffset });
         console.info("[DBX][reloadData:build-sql:done]", { traceId, elapsed: elapsed() });
         queryStore.updateSql(tab.id, nextSql);
         console.info("[DBX][reloadData:execute:start]", { traceId, elapsed: elapsed() });
@@ -196,6 +250,8 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
   async function onSort(column: string, columnIndex: number, direction: "asc" | "desc" | null, whereInput?: string, mode: DataGridSortMode = "database") {
     const tab = activeTab.value;
     if (!tab) return;
+    tab.openTableDefaultSortApplied = undefined;
+    tab.openTableDefaultSortOrderBy = undefined;
     tab.resultSortColumn = direction ? column : undefined;
     tab.resultSortColumnIndex = direction ? columnIndex : undefined;
     tab.resultSortDirection = direction ?? undefined;

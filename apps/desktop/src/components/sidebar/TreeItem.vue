@@ -1305,9 +1305,9 @@ async function openData() {
     let columns = cachedTableMeta?.columns ?? [];
     let primaryKeys = cachedTableMeta?.primaryKeys ?? [];
     let shouldRefreshTableMetaAfterOpen = shouldRefreshTableMeta;
-    const defaultSortDirection = settingsStore.editorSettings.defaultDataGridSortDirection;
-    const defaultSortMode = settingsStore.editorSettings.defaultDataGridSortMode;
-    if (defaultSortMode === "database" && columns.length === 0) {
+    const openTableDefaultSortMode = settingsStore.editorSettings.openTableDefaultSortMode;
+    const shouldApplyOpenTableDefaultSort = openTableDefaultSortMode !== "none";
+    if (shouldApplyOpenTableDefaultSort && columns.length === 0) {
       try {
         const loadedMetadata = await loadTableMetadata({
           connectionId: node.connectionId,
@@ -1329,8 +1329,9 @@ async function openData() {
         console.warn("[DBX][openData:metadata:sort-default:error]", { traceId, tabId, elapsed: elapsed(), error });
       }
     }
-    const defaultSortColumn = primaryKeys[0] ?? columns[0]?.name;
-    const defaultOrderBy = defaultSortMode === "database" && defaultSortColumn ? `${effectiveDbType === "neo4j" ? `n.${quoteTableIdentifier(effectiveDbType, defaultSortColumn)}` : quoteTableIdentifier(effectiveDbType, defaultSortColumn)} ${defaultSortDirection.toUpperCase()}` : undefined;
+    const defaultSortColumn = shouldApplyOpenTableDefaultSort ? primaryKeys[0] : undefined;
+    const defaultSortDirection = openTableDefaultSortMode === "primary-key-desc" ? "desc" : "asc";
+    const defaultOrderBy = defaultSortColumn ? `${effectiveDbType === "neo4j" ? `n.${quoteTableIdentifier(effectiveDbType, defaultSortColumn)}` : quoteTableIdentifier(effectiveDbType, defaultSortColumn)} ${defaultSortDirection.toUpperCase()}` : undefined;
     const includeRowId = usesSyntheticRowIdKey(effectiveDbType, primaryKeys, tableType);
     const sql = await buildTableSelectSql({
       databaseType: effectiveDbType,
@@ -1360,21 +1361,23 @@ async function openData() {
       skipEnsureConnected: true,
       pagination: { limit, offset: 0 },
     });
-    if (defaultSortMode === "local") {
-      const currentTab = queryStore.tabs.find((t) => t.id === tabId);
-      const resultColumns = currentTab?.result?.columns ?? [];
-      const resultSortColumn = defaultSortColumn && resultColumns.includes(defaultSortColumn) ? defaultSortColumn : resultColumns[0];
-      const columnIndex = resultSortColumn ? resultColumns.findIndex((column) => column === resultSortColumn) : -1;
-      if (resultSortColumn && columnIndex >= 0) queryStore.sortTabResultLocally(tabId, resultSortColumn, columnIndex, defaultSortDirection);
-    } else {
+    if (defaultSortColumn) {
       const currentTab = queryStore.tabs.find((t) => t.id === tabId);
       const columnIndex = defaultSortColumn ? columns.findIndex((column) => column.name === defaultSortColumn) : -1;
       if (currentTab) {
         currentTab.resultSortColumn = defaultSortColumn;
         currentTab.resultSortColumnIndex = columnIndex >= 0 ? columnIndex : undefined;
         currentTab.resultSortDirection = defaultSortColumn ? defaultSortDirection : undefined;
-        currentTab.resultSortMode = defaultSortColumn ? defaultSortMode : undefined;
+        currentTab.resultSortMode = "database";
         currentTab.orderByInput = defaultOrderBy;
+        currentTab.openTableDefaultSortApplied = true;
+        currentTab.openTableDefaultSortOrderBy = defaultOrderBy;
+      }
+    } else {
+      const currentTab = queryStore.tabs.find((t) => t.id === tabId);
+      if (currentTab) {
+        currentTab.openTableDefaultSortApplied = undefined;
+        currentTab.openTableDefaultSortOrderBy = undefined;
       }
     }
     console.info("[DBX][openData:execute:done]", { traceId, tabId, elapsed: elapsed() });

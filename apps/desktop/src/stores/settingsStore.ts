@@ -63,8 +63,9 @@ export type InterfaceLayout = "separated" | "classic";
 
 export type UpdateDownloadSource = "official" | "cnb" | "atomgit";
 export type SqlSemanticDiagnosticsMode = "auto" | "enabled" | "disabled";
-export type DefaultDataGridSortMode = "database" | "local";
-export type DefaultDataGridSortDirection = "asc" | "desc";
+export type OpenTableDefaultSortMode = "none" | "primary-key-asc" | "primary-key-desc";
+export type DataGridQuickSortMode = "database" | "local";
+export type DataGridQuickSortDirection = "asc" | "desc";
 export type OpenTabsRestoreMode = "all" | "pinned" | "none";
 
 export const DEFAULT_SIDEBAR_TABLE_PAGE_SIZE = 1000;
@@ -377,8 +378,9 @@ export interface EditorSettings {
   showColumnCommentsInHeader: boolean;
   showColumnTypesInHeader: boolean;
   compactColumnHeaderActions: boolean;
-  defaultDataGridSortMode: DefaultDataGridSortMode;
-  defaultDataGridSortDirection: DefaultDataGridSortDirection;
+  openTableDefaultSortMode: OpenTableDefaultSortMode;
+  dataGridQuickSortMode: DataGridQuickSortMode;
+  dataGridQuickSortDirection: DataGridQuickSortDirection;
   dataGridQuickEntry: boolean;
   dataGridRenderMode: DataGridRenderMode;
   dataGridSearchMode: DataGridSearchMode;
@@ -502,8 +504,9 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   showColumnCommentsInHeader: true,
   showColumnTypesInHeader: true,
   compactColumnHeaderActions: true,
-  defaultDataGridSortMode: "local",
-  defaultDataGridSortDirection: "asc",
+  openTableDefaultSortMode: "none",
+  dataGridQuickSortMode: "local",
+  dataGridQuickSortDirection: "asc",
   dataGridQuickEntry: false,
   dataGridRenderMode: "canvas",
   dataGridSearchMode: "filter",
@@ -572,12 +575,16 @@ function normalizeDataGridRenderMode(value: unknown): DataGridRenderMode {
   return DATA_GRID_RENDER_MODES.includes(value as DataGridRenderMode) ? (value as DataGridRenderMode) : DEFAULT_EDITOR_SETTINGS.dataGridRenderMode;
 }
 
-function normalizeDefaultDataGridSortMode(value: unknown): DefaultDataGridSortMode {
-  return value === "database" || value === "local" ? value : DEFAULT_EDITOR_SETTINGS.defaultDataGridSortMode;
+function normalizeOpenTableDefaultSortMode(value: unknown): OpenTableDefaultSortMode {
+  return value === "primary-key-asc" || value === "primary-key-desc" || value === "none" ? value : DEFAULT_EDITOR_SETTINGS.openTableDefaultSortMode;
 }
 
-function normalizeDefaultDataGridSortDirection(value: unknown): DefaultDataGridSortDirection {
-  return value === "desc" ? "desc" : DEFAULT_EDITOR_SETTINGS.defaultDataGridSortDirection;
+function normalizeDataGridQuickSortMode(value: unknown): DataGridQuickSortMode {
+  return value === "database" || value === "local" ? value : DEFAULT_EDITOR_SETTINGS.dataGridQuickSortMode;
+}
+
+function normalizeDataGridQuickSortDirection(value: unknown): DataGridQuickSortDirection {
+  return value === "desc" ? "desc" : DEFAULT_EDITOR_SETTINGS.dataGridQuickSortDirection;
 }
 
 function normalizeDataGridSearchMode(value: unknown): DataGridSearchMode {
@@ -680,7 +687,11 @@ function normalizeToolbarItems(items: Partial<ToolbarItems> | undefined): Toolba
 }
 
 export function normalizeEditorSettings(settings: Partial<EditorSettings>, existing?: EditorSettings): EditorSettings {
-  const legacyDefaultSortEnabled = (settings as Partial<EditorSettings> & { defaultDataGridSortEnabled?: boolean }).defaultDataGridSortEnabled;
+  const legacyDefaultSort = settings as Partial<EditorSettings> & {
+    defaultDataGridSortEnabled?: boolean;
+    defaultDataGridSortMode?: DataGridQuickSortMode;
+    defaultDataGridSortDirection?: DataGridQuickSortDirection;
+  };
   const sqlSemanticDiagnosticsMode = normalizeSqlSemanticDiagnosticsMode(settings.sqlSemanticDiagnosticsMode, settings.sqlSemanticDiagnosticsEnabled);
   return {
     fontFamily: normalizeFontFamily(settings.fontFamily, DEFAULT_EDITOR_SETTINGS.fontFamily),
@@ -733,8 +744,9 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
     showColumnCommentsInHeader: settings.showColumnCommentsInHeader ?? DEFAULT_EDITOR_SETTINGS.showColumnCommentsInHeader,
     showColumnTypesInHeader: settings.showColumnTypesInHeader ?? DEFAULT_EDITOR_SETTINGS.showColumnTypesInHeader,
     compactColumnHeaderActions: settings.compactColumnHeaderActions ?? DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions,
-    defaultDataGridSortMode: legacyDefaultSortEnabled === false ? "local" : normalizeDefaultDataGridSortMode(settings.defaultDataGridSortMode),
-    defaultDataGridSortDirection: normalizeDefaultDataGridSortDirection(settings.defaultDataGridSortDirection),
+    openTableDefaultSortMode: normalizeOpenTableDefaultSortMode(settings.openTableDefaultSortMode),
+    dataGridQuickSortMode: legacyDefaultSort.defaultDataGridSortEnabled === false ? "local" : normalizeDataGridQuickSortMode(settings.dataGridQuickSortMode ?? legacyDefaultSort.defaultDataGridSortMode),
+    dataGridQuickSortDirection: normalizeDataGridQuickSortDirection(settings.dataGridQuickSortDirection ?? legacyDefaultSort.defaultDataGridSortDirection),
     dataGridQuickEntry: settings.dataGridQuickEntry ?? DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry,
     dataGridRenderMode: normalizeDataGridRenderMode(settings.dataGridRenderMode),
     dataGridSearchMode: normalizeDataGridSearchMode(settings.dataGridSearchMode),
@@ -971,8 +983,9 @@ export const useSettingsStore = defineStore("settings", () => {
     if (partial.showColumnCommentsInHeader !== undefined) editorSettings.value.showColumnCommentsInHeader = partial.showColumnCommentsInHeader;
     if (partial.showColumnTypesInHeader !== undefined) editorSettings.value.showColumnTypesInHeader = partial.showColumnTypesInHeader;
     if (partial.compactColumnHeaderActions !== undefined) editorSettings.value.compactColumnHeaderActions = partial.compactColumnHeaderActions;
-    if (partial.defaultDataGridSortMode !== undefined) editorSettings.value.defaultDataGridSortMode = normalizeDefaultDataGridSortMode(partial.defaultDataGridSortMode);
-    if (partial.defaultDataGridSortDirection !== undefined) editorSettings.value.defaultDataGridSortDirection = normalizeDefaultDataGridSortDirection(partial.defaultDataGridSortDirection);
+    if (partial.openTableDefaultSortMode !== undefined) editorSettings.value.openTableDefaultSortMode = normalizeOpenTableDefaultSortMode(partial.openTableDefaultSortMode);
+    if (partial.dataGridQuickSortMode !== undefined) editorSettings.value.dataGridQuickSortMode = normalizeDataGridQuickSortMode(partial.dataGridQuickSortMode);
+    if (partial.dataGridQuickSortDirection !== undefined) editorSettings.value.dataGridQuickSortDirection = normalizeDataGridQuickSortDirection(partial.dataGridQuickSortDirection);
     if (partial.dataGridQuickEntry !== undefined) editorSettings.value.dataGridQuickEntry = partial.dataGridQuickEntry;
     if (partial.dataGridRenderMode !== undefined) editorSettings.value.dataGridRenderMode = normalizeDataGridRenderMode(partial.dataGridRenderMode);
     if (partial.dataGridSearchMode !== undefined) editorSettings.value.dataGridSearchMode = normalizeDataGridSearchMode(partial.dataGridSearchMode);
