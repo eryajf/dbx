@@ -947,7 +947,7 @@ export default {
     tableInfoSearch: "Search...",
     tableInfoNoResults: "No results",
     goToColumn: "Go to column",
-    searchColumn: "Search column...",
+    searchColumn: "Search column/comment...",
     noColumnsFound: "No columns found",
     queryError: "Query Error",
     dataUnavailable: "Table data needs to be reloaded.",

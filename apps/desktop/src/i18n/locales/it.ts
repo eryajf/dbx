@@ -889,7 +889,7 @@ export default withEnglishFallback({
     tableInfoSearch: "Cerca...",
     tableInfoNoResults: "Nessun risultato",
     goToColumn: "Vai alla colonna",
-    searchColumn: "Cerca colonna...",
+    searchColumn: "Cerca colonna/commento...",
     noColumnsFound: "Nessuna colonna trovata",
     queryError: "Errore Query",
     dataUnavailable: "I dati della tabella devono essere ricaricati.",

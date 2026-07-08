@@ -949,7 +949,7 @@ export default withEnglishFallback({
     tableInfoSearch: "搜索...",
     tableInfoNoResults: "无匹配结果",
     goToColumn: "跳转列",
-    searchColumn: "搜索列...",
+    searchColumn: "搜索列/注释...",
     noColumnsFound: "未找到列",
     queryError: "查询出错",
     dataUnavailable: "表数据需要重新加载。",

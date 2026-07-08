@@ -884,7 +884,7 @@ export default withEnglishFallback({
     tableInfoSearch: "Buscar...",
     tableInfoNoResults: "Sin resultados",
     goToColumn: "Ir a la columna",
-    searchColumn: "Buscar columna...",
+    searchColumn: "Buscar columna/comentario...",
     noColumnsFound: "No se encontraron columnas",
     tableInfo: "Información de tabla",
     tableInfoColumns: "Columnas",

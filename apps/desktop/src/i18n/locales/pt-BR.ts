@@ -890,7 +890,7 @@ export default withEnglishFallback({
     tableInfoSearch: "Pesquisar...",
     tableInfoNoResults: "Nenhum resultado",
     goToColumn: "Ir para a coluna",
-    searchColumn: "Buscar coluna...",
+    searchColumn: "Buscar coluna/comentário...",
     noColumnsFound: "Nenhuma coluna encontrada",
     queryError: "Erro na Consulta",
     dataUnavailable: "Os dados da tabela precisam ser recarregados.",

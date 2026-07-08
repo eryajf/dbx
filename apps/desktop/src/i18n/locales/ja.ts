@@ -885,7 +885,7 @@ export default withEnglishFallback({
     tableInfoSearch: "検索...",
     tableInfoNoResults: "結果なし",
     goToColumn: "列へ移動",
-    searchColumn: "列を検索...",
+    searchColumn: "列/コメントを検索...",
     noColumnsFound: "列が見つかりません",
     queryError: "クエリエラー",
     dataUnavailable: "テーブルデータを再読み込みする必要があります。",

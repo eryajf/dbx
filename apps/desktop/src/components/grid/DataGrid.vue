@@ -129,6 +129,7 @@ import { appendColumnValueFilterCondition, buildColumnValueFilterCondition, buil
 import { clampSearchSplitWidth } from "@/lib/dataGrid/dataGridSearchSplit";
 import { MAX_RESULT_PAGE_SIZE, MIN_RESULT_PAGE_SIZE, normalizeResultPageSize, resultPageSizeMenuOptions } from "@/lib/dataGrid/paginationPageSize";
 import { allNullColumnIndexes, filterColumnVisibilityOptions, hiddenColumnIndexesWithAllNullColumns, invertedHiddenColumnIndexes, nextHiddenColumnIndexes, removeAutoHiddenColumnIndexes, visibleColumnIndexesForFilter } from "@/lib/dataGrid/dataGridColumnVisibility";
+import { buildDataGridColumnLookupItems, filterDataGridColumnLookupItems } from "@/lib/dataGrid/dataGridColumnLookup";
 import { columnOrderKeysForIndexes, isDefaultColumnOrder, moveVisibleColumnIndex, orderedColumnIndexes, uniqueDataGridColumnOrderKeys } from "@/lib/dataGrid/dataGridColumnOrder";
 import { dataGridColumnLayoutScopeKey, loadDataGridColumnOrder, removeDataGridColumnOrder, saveDataGridColumnOrder } from "@/lib/dataGrid/dataGridColumnLayoutStorage";
 import { parseClipboardTable, summarizeSelection } from "@/lib/dataGrid/gridSelection";
@@ -2498,16 +2499,15 @@ const displayableColumnIndexes = computed(() =>
     .map(({ index }) => index),
 );
 const goToColumnItems = computed(() =>
-  displayableColumnIndexes.value.map((index) => ({
-    index,
-    name: props.result.columns[index] ?? `#${index + 1}`,
-    sourceName: props.sourceColumns?.[index],
-  })),
+  buildDataGridColumnLookupItems({
+    columns: props.result.columns,
+    sourceColumns: props.sourceColumns,
+    displayableIndexes: displayableColumnIndexes.value,
+    commentByColumn: columnCommentMap.value,
+  }),
 );
 const filteredGoToColumns = computed(() => {
-  const query = goToColumnSearch.value.trim().toLocaleLowerCase();
-  if (!query) return goToColumnItems.value;
-  return goToColumnItems.value.filter((column) => column.name.toLocaleLowerCase().includes(query) || column.sourceName?.toLocaleLowerCase().includes(query));
+  return filterDataGridColumnLookupItems(goToColumnItems.value, goToColumnSearch.value);
 });
 const orderedDisplayableColumnIndexes = computed(() =>
   orderedColumnIndexes({
@@ -2551,7 +2551,7 @@ const allNullColumnCount = computed(() => allNullColumnIndexesForResult.value.le
 const canToggleAllNullColumns = computed(() => nullColumnsHidden.value || (allNullColumnCount.value > 0 && displayableColumnCount.value > 1));
 function filteredColumnVisibilityOptions(query: string) {
   const displayable = new Set(displayableColumnIndexes.value);
-  return filterColumnVisibilityOptions(props.result.columns, query).filter((option) => displayable.has(option.index));
+  return filterColumnVisibilityOptions(props.result.columns, query, { sourceColumns: props.sourceColumns, commentByColumn: columnCommentMap.value }).filter((option) => displayable.has(option.index));
 }
 function isColumnVisible(columnIndex: number): boolean {
   return !hiddenColumnIndexes.value.has(columnIndex);
@@ -8863,9 +8863,10 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                       </button>
                     </div>
                     <div class="max-h-56 overflow-auto rounded border">
-                      <button v-for="column in filteredGoToColumns" :key="column.index" type="button" class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground" @click="scrollToColumn(column.index)">
+                      <button v-for="column in filteredGoToColumns" :key="column.index" type="button" class="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5 px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground" @click="scrollToColumn(column.index)">
                         <span class="min-w-0 truncate">{{ column.name }}</span>
-                        <span class="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">#{{ column.index + 1 }}</span>
+                        <span class="shrink-0 font-mono text-[10px] text-muted-foreground">#{{ column.index + 1 }}</span>
+                        <span v-if="column.comment" class="col-span-2 min-w-0 truncate text-[11px] leading-4 text-muted-foreground" :title="column.comment">{{ column.comment }}</span>
                       </button>
                       <div v-if="!filteredGoToColumns.length" class="px-2 py-3 text-center text-xs text-muted-foreground">{{ t("grid.noColumnsFound") }}</div>
                     </div>

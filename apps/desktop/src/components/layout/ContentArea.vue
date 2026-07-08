@@ -80,7 +80,7 @@ type DataGridHandle = {
   visibleColumnCount: number;
   displayableColumnCount: number;
   hiddenColumnCount: number;
-  filteredColumnVisibilityOptions: (search: string) => Array<{ index: number; column: string }>;
+  filteredColumnVisibilityOptions: (search: string) => Array<{ index: number; column: string; comment?: string }>;
   isColumnVisible: (columnIndex: number) => boolean;
   toggleColumnVisibility: (columnIndex: number) => void;
   showAllColumns: () => void;
@@ -1179,7 +1179,10 @@ defineExpose({ focusSearch, refreshData, handleModRTarget, requestQueryEditorExe
                   <span class="flex h-4 w-4 items-center justify-center rounded border" :class="dataGridRef?.isColumnVisible(option.index) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-transparent'">
                     <Check class="h-3 w-3 stroke-[3]" />
                   </span>
-                  <span class="truncate font-mono text-xs" :title="option.column">{{ option.column }}</span>
+                  <span class="min-w-0">
+                    <span class="block truncate font-mono text-xs" :title="option.column">{{ option.column }}</span>
+                    <span v-if="option.comment" class="block truncate text-[11px] leading-4 text-muted-foreground" :title="option.comment">{{ option.comment }}</span>
+                  </span>
                 </button>
                 <div v-if="columnVisibilityOptions.length === 0" class="px-2 py-6 text-center text-xs text-muted-foreground">
                   {{ t("grid.noSearchResults") }}

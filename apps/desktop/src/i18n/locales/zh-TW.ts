@@ -890,7 +890,7 @@ export default withEnglishFallback({
     tableInfoSearch: "搜尋……",
     tableInfoNoResults: "沒有相符結果",
     goToColumn: "跳轉欄",
-    searchColumn: "搜尋欄...",
+    searchColumn: "搜尋欄/註解...",
     noColumnsFound: "未找到欄",
     dataUnavailable: "資料表資料需要重新載入。",
     dataUnavailableHintPrefix: "按 ",
