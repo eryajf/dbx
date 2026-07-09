@@ -28,10 +28,12 @@ const emit = defineEmits<{
 }>();
 
 const open = ref(false);
+const editorRootRef = ref<HTMLDivElement | null>(null);
 const inputRef = ref<HTMLInputElement | null>(null);
 const localValue = ref(props.modelValue);
 let closeHandled = false;
 let isCommitting = false;
+let skipCommitOnClose = false;
 
 const hasDate = computed(() => props.kind !== "time");
 const hasTime = computed(() => props.kind !== "date");
@@ -82,7 +84,7 @@ watch(
 
 function setOpen(value: boolean) {
   open.value = value;
-  if (!value && props.commitOnClose && !closeHandled) finishCommit();
+  if (!value && props.commitOnClose && !closeHandled && !skipCommitOnClose) finishCommit();
 }
 
 function setModelValue(value: string) {
@@ -187,15 +189,33 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 function onInputBlur() {
-  if (!props.commitOnClose || open.value || closeHandled) return;
+  if (!props.commitOnClose || open.value || closeHandled || skipCommitOnClose) return;
   finishCommit();
 }
 
 function onPopoverInteractOutside(event: PointerDownOutsideEvent | FocusOutsideEvent) {
   const originalEvent = event.detail.originalEvent;
+  if (isEditorInteractionTarget(originalEvent.target)) {
+    event.preventDefault();
+    closePickerOnly();
+    return;
+  }
   if (isSelectInteractionTarget(originalEvent.target)) {
     event.preventDefault();
   }
+}
+
+function closePickerOnly() {
+  if (!open.value) return;
+  skipCommitOnClose = true;
+  setOpen(false);
+  nextTick(() => {
+    skipCommitOnClose = false;
+  });
+}
+
+function isEditorInteractionTarget(target: EventTarget | null): boolean {
+  return target instanceof Node && !!editorRootRef.value?.contains(target);
 }
 
 function isSelectInteractionTarget(target: EventTarget | null): boolean {
@@ -225,7 +245,7 @@ function twoDigit(value: string | number): string {
 
 <template>
   <Popover :open="open" :modal="false" @update:open="setOpen">
-    <div :class="editorRootClass" @click.stop>
+    <div ref="editorRootRef" :class="editorRootClass" @click.stop>
       <PopoverAnchor as-child>
         <input ref="inputRef" :value="localValue" :class="inputClass" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="NULL" @blur="onInputBlur" @click.stop @input="updateTextInput" @keydown.stop="onKeydown" />
       </PopoverAnchor>
