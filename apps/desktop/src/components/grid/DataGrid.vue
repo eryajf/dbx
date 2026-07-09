@@ -115,7 +115,7 @@ import { canFormatCellDetailJson, cellDetailEditorText, compactJsonText, default
 import { renderWktOnCanvas, isHexGeometry } from "@/lib/dataGrid/geometryPreview";
 import { buildDataGridCellDetail, buildDataGridColumnDetail, buildDataGridRowDetail, dataGridColumnDetailJson, dataGridColumnDetailTsv, dataGridRowDetailJson, dataGridRowDetailTsv, filterDataGridDetailFields, type DataGridCellDetail } from "@/lib/dataGrid/dataGridDetail";
 import { applyColumnFormatter, buildColumnFormatterKey, normalizeColumnFormatter, resolveColumnFormatter, type ColumnFormatterConfig, type DateTimeFormatterUnit, DateTimePatterns } from "@/lib/dataGrid/columnFormatter";
-import { temporalCellEditorKind, type TemporalCellEditorKind } from "@/lib/dataGrid/dataGridTemporalEditor";
+import { temporalCellEditorConfig, type TemporalCellEditorConfig } from "@/lib/dataGrid/dataGridTemporalEditor";
 import { isCancelSearchShortcut, isCopyCurrentRowShortcut, isDeleteCurrentRowShortcut, isFocusSearchShortcut, isModRShortcut, isSaveShortcut, isToggleTransposeShortcut } from "@/lib/editor/keyboardShortcuts";
 import { dataGridHeaderContentWidth, scrollbarGutterWidth } from "@/lib/dataGrid/dataGridScrollGutter";
 import { canGoNextDataGridPage } from "@/lib/dataGrid/dataGridPagination";
@@ -3994,8 +3994,8 @@ function tableColumnForGridColumn(columnIndex: number): ColumnInfo | undefined {
   return props.tableMeta?.columns.find((column) => column.name.toLowerCase() === columnName.toLowerCase());
 }
 
-function temporalEditorKindForColumn(columnIndex: number): TemporalCellEditorKind | undefined {
-  return temporalCellEditorKind(tableColumnForGridColumn(columnIndex)?.data_type, props.databaseType);
+function temporalEditorConfigForColumn(columnIndex: number): TemporalCellEditorConfig | undefined {
+  return temporalCellEditorConfig(tableColumnForGridColumn(columnIndex)?.data_type, props.databaseType);
 }
 
 function enumValuesForGridColumn(columnIndex: number): string[] {
@@ -4852,9 +4852,9 @@ watch(activeCellDetail, (detail) => {
 
 const detailEditValue = ref("");
 const isEditingDetail = ref(false);
-const detailTemporalEditorKind = computed(() => {
+const detailTemporalEditorConfig = computed(() => {
   const detail = activeCellDetail.value;
-  return detail ? temporalEditorKindForColumn(detail.colIndex) : undefined;
+  return detail ? temporalEditorConfigForColumn(detail.colIndex) : undefined;
 });
 const sideDetailPrioritizesValue = computed(() => !cellDetailPanelIsBottom.value && !isEditingDetail.value && !!activeCellDetail.value?.formattedJson);
 const sideDetailValueFillsHeight = computed(() => cellDetailPanelIsBottom.value || isEditingDetail.value || (!cellDetailPanelIsBottom.value && !activeCellDetail.value?.imagePreviewUrl));
@@ -9103,7 +9103,15 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                       @dblclick.stop="canEditCellItem(displayItems[cell.recordIndex], cell.valueIndex) && startDomCellEdit(displayItems[cell.recordIndex].id, cell.valueIndex, cell.display, $event)"
                     >
                       <template v-if="editingCell?.rowId === displayItems[cell.recordIndex]?.id && editingCell?.col === cell.valueIndex">
-                        <TemporalCellEditor v-if="temporalEditorKindForColumn(cell.valueIndex)" v-model="editValue" :kind="temporalEditorKindForColumn(cell.valueIndex)!" cell-layout="transpose" @cancel="cancelEdit" @commit="commitGridEdit" />
+                        <TemporalCellEditor
+                          v-if="temporalEditorConfigForColumn(cell.valueIndex)"
+                          v-model="editValue"
+                          :kind="temporalEditorConfigForColumn(cell.valueIndex)!.kind"
+                          :fraction-precision="temporalEditorConfigForColumn(cell.valueIndex)!.fractionPrecision"
+                          cell-layout="transpose"
+                          @cancel="cancelEdit"
+                          @commit="commitGridEdit"
+                        />
                         <EnumCellEditor v-else-if="isEnumGridColumn(cell.valueIndex)" v-model="editValue" :values="enumValuesForGridColumn(cell.valueIndex)" :nullable="isEnumGridColumnNullable(cell.valueIndex)" cell-layout="transpose" @cancel="cancelEdit" @commit="commitGridEdit" />
                         <textarea
                           v-else-if="cellUsesExpandedEditor(displayItems[cell.recordIndex]?.id, cell.valueIndex)"
@@ -9578,7 +9586,14 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                   />
                   <div ref="canvasOverlayRef" class="canvas-grid-overlay dbx-data-grid-font-family sticky left-0 top-0 z-10 overflow-visible" :style="canvasOverlayStyle">
                     <div v-if="canvasEditingCell" class="absolute pointer-events-auto z-20 tabular-nums" :style="canvasEditingCellStyle" @mousedown.stop @click.stop>
-                      <TemporalCellEditor v-if="temporalEditorKindForColumn(canvasEditingCell.actualColIdx)" v-model="editValue" :kind="temporalEditorKindForColumn(canvasEditingCell.actualColIdx)!" @cancel="cancelEdit" @commit="commitGridEdit" />
+                      <TemporalCellEditor
+                        v-if="temporalEditorConfigForColumn(canvasEditingCell.actualColIdx)"
+                        v-model="editValue"
+                        :kind="temporalEditorConfigForColumn(canvasEditingCell.actualColIdx)!.kind"
+                        :fraction-precision="temporalEditorConfigForColumn(canvasEditingCell.actualColIdx)!.fractionPrecision"
+                        @cancel="cancelEdit"
+                        @commit="commitGridEdit"
+                      />
                       <EnumCellEditor
                         v-else-if="isEnumGridColumn(canvasEditingCell.actualColIdx)"
                         v-model="editValue"
@@ -9721,7 +9736,14 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                       @contextmenu="onCellContext(item.id, item.displayIndex, col.actualColIdx, col.visibleColIdx, $event)"
                     >
                       <template v-if="editingCell?.rowId === item.id && editingCell?.col === col.actualColIdx">
-                        <TemporalCellEditor v-if="temporalEditorKindForColumn(col.actualColIdx)" v-model="editValue" :kind="temporalEditorKindForColumn(col.actualColIdx)!" @cancel="cancelEdit" @commit="commitGridEdit" />
+                        <TemporalCellEditor
+                          v-if="temporalEditorConfigForColumn(col.actualColIdx)"
+                          v-model="editValue"
+                          :kind="temporalEditorConfigForColumn(col.actualColIdx)!.kind"
+                          :fraction-precision="temporalEditorConfigForColumn(col.actualColIdx)!.fractionPrecision"
+                          @cancel="cancelEdit"
+                          @commit="commitGridEdit"
+                        />
                         <EnumCellEditor v-else-if="isEnumGridColumn(col.actualColIdx)" v-model="editValue" :values="enumValuesForGridColumn(col.actualColIdx)" :nullable="isEnumGridColumnNullable(col.actualColIdx)" @cancel="cancelEdit" @commit="commitGridEdit" />
                         <textarea
                           v-else-if="cellUsesExpandedEditor(item.id, col.actualColIdx)"
@@ -10144,7 +10166,16 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                     </div>
                     <template v-if="isEditingDetail">
                       <div class="min-h-0 flex-1" :style="sideDetailEditorStyle">
-                        <TemporalCellEditor v-if="detailTemporalEditorKind" v-model="detailEditValue" :kind="detailTemporalEditorKind" variant="inline" :commit-on-close="false" @cancel="cancelDetailEdit" @commit="commitDetailEdit" />
+                        <TemporalCellEditor
+                          v-if="detailTemporalEditorConfig"
+                          v-model="detailEditValue"
+                          :kind="detailTemporalEditorConfig.kind"
+                          :fraction-precision="detailTemporalEditorConfig.fractionPrecision"
+                          variant="inline"
+                          :commit-on-close="false"
+                          @cancel="cancelDetailEdit"
+                          @commit="commitDetailEdit"
+                        />
                         <div v-else ref="detailsEditorContainer" data-cell-detail-editor-root class="min-h-0 h-full w-full rounded border overflow-hidden" />
                       </div>
                       <div v-if="!cellDetailPanelIsBottom" class="flex shrink-0 gap-1 py-0.5">
@@ -10222,7 +10253,16 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
 
               <TabsContent v-if="activeCellDetailTabs.includes('valueEditor')" value="valueEditor" class="m-0 min-h-0 flex-1 flex flex-col p-3 text-xs">
                 <div class="flex min-h-0 flex-1 flex-col">
-                  <TemporalCellEditor v-if="detailTemporalEditorKind" v-model="detailEditValue" :kind="detailTemporalEditorKind" variant="inline" :commit-on-close="false" @cancel="cancelValueEditorEdit" @commit="commitValueEditorEdit" />
+                  <TemporalCellEditor
+                    v-if="detailTemporalEditorConfig"
+                    v-model="detailEditValue"
+                    :kind="detailTemporalEditorConfig.kind"
+                    :fraction-precision="detailTemporalEditorConfig.fractionPrecision"
+                    variant="inline"
+                    :commit-on-close="false"
+                    @cancel="cancelValueEditorEdit"
+                    @commit="commitValueEditorEdit"
+                  />
                   <div v-else ref="valueEditorContainer" data-cell-detail-editor-root class="min-h-0 flex-1 w-full rounded border overflow-auto" />
                 </div>
                 <div class="flex gap-1 mt-2 shrink-0">
