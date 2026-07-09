@@ -10,6 +10,12 @@ describe("dataGridTemporalEditor", () => {
     expect(temporalCellEditorConfig("DateTime64(3)")).toEqual({ kind: "datetime", fractionPrecision: 3 });
   });
 
+  it("uses column numeric scale for temporal fractional precision", () => {
+    expect(temporalCellEditorConfig({ data_type: "timestamp", numeric_scale: 6 })).toEqual({ kind: "datetime", fractionPrecision: 6 });
+    expect(temporalCellEditorConfig({ data_type: "time", numeric_scale: 3 })).toEqual({ kind: "time", fractionPrecision: 3 });
+    expect(temporalCellEditorConfig({ data_type: "timestamp(6)", numeric_scale: 2 })).toEqual({ kind: "datetime", fractionPrecision: 2 });
+  });
+
   it("keeps the legacy kind-only helper", () => {
     expect(temporalCellEditorKind("datetime(6)")).toBe("datetime");
     expect(temporalCellEditorKind("date")).toBe("date");

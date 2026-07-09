@@ -1,26 +1,29 @@
-import type { DatabaseType } from "@/types/database";
+import type { ColumnInfo, DatabaseType } from "@/types/database";
 
 export type TemporalCellEditorKind = "date" | "time" | "datetime";
+export type TemporalCellEditorColumn = Pick<ColumnInfo, "data_type" | "numeric_scale">;
 
 export interface TemporalCellEditorConfig {
   kind: TemporalCellEditorKind;
   fractionPrecision: number;
 }
 
-export function temporalCellEditorConfig(dataType: string | undefined, _databaseType?: DatabaseType): TemporalCellEditorConfig | undefined {
+export function temporalCellEditorConfig(columnOrDataType: string | TemporalCellEditorColumn | undefined, _databaseType?: DatabaseType): TemporalCellEditorConfig | undefined {
+  const dataType = temporalColumnDataType(columnOrDataType);
+  const numericScale = temporalColumnNumericScale(columnOrDataType);
   const normalized = normalizeTemporalType(dataType);
   if (!normalized) return undefined;
   if (/\b(?:datetime|datetime2|datetime64|smalldatetime|datetimeoffset|timestamp|timestamptz)\b/.test(normalized)) {
     return {
       kind: "datetime",
-      fractionPrecision: normalized.includes("smalldatetime") ? 0 : temporalFractionPrecision(dataType),
+      fractionPrecision: normalized.includes("smalldatetime") ? 0 : temporalFractionPrecision(dataType, numericScale),
     };
   }
   if (/\bdate(?:32)?\b/.test(normalized)) return { kind: "date", fractionPrecision: 0 };
   if (/\b(?:time|timetz|time64)\b/.test(normalized)) {
     return {
       kind: "time",
-      fractionPrecision: temporalFractionPrecision(dataType),
+      fractionPrecision: temporalFractionPrecision(dataType, numericScale),
     };
   }
   return undefined;
@@ -87,10 +90,24 @@ function normalizeTemporalType(dataType: string | undefined): string {
   return (dataType ?? "").toLowerCase().replace(/_/g, "").replace(/[(),]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function temporalFractionPrecision(dataType: string | undefined): number {
+function temporalColumnDataType(columnOrDataType: string | TemporalCellEditorColumn | undefined): string | undefined {
+  return typeof columnOrDataType === "string" ? columnOrDataType : columnOrDataType?.data_type;
+}
+
+function temporalColumnNumericScale(columnOrDataType: string | TemporalCellEditorColumn | undefined): number | null | undefined {
+  return typeof columnOrDataType === "string" ? undefined : columnOrDataType?.numeric_scale;
+}
+
+function temporalFractionPrecision(dataType: string | undefined, numericScale?: number | null): number {
+  if (numericScale !== null && numericScale !== undefined) return clampFractionPrecision(numericScale);
   const precision = dataType?.match(/\((\d{1,2})/)?.[1];
   if (!precision) return 0;
-  return Math.max(0, Math.min(9, Number(precision) || 0));
+  return clampFractionPrecision(Number(precision));
+}
+
+function clampFractionPrecision(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(9, Math.trunc(value)));
 }
 
 function normalizeTimeInput(text: string): string {
