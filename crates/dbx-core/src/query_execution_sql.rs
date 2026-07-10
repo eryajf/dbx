@@ -152,17 +152,52 @@ const SAFE_READ_PRAGMA_NAMES: &[&str] = &[
 ];
 
 /// Returns true if the SQL statement is a write operation (not a pure read).
+///
+/// Callers that know the connection database type should use
+/// [`is_write_sql_for_database`] so executable comments are interpreted using
+/// the correct dialect. This untyped helper deliberately remains conservative
+/// for executable comments.
 pub fn is_write_sql(sql: &str) -> bool {
-    crate::sql::split_sql_statements(sql).iter().any(|statement| is_write_sql_statement(statement))
+    is_write_sql_with_database_type(sql, None)
 }
 
-fn is_write_sql_statement(sql: &str) -> bool {
+/// Returns true if the SQL statement is a write operation for a database
+/// dialect. MySQL-compatible dialects execute the contents of `/*! ... */`
+/// and MariaDB `/*M! ... */` comments; other database types treat both as
+/// ordinary block comments.
+pub fn is_write_sql_for_database(sql: &str, database_type: DatabaseType) -> bool {
+    is_write_sql_with_database_type(sql, Some(database_type))
+}
+
+fn is_write_sql_with_database_type(sql: &str, database_type: Option<DatabaseType>) -> bool {
+    let mysql_compatible = database_type.map(is_mysql_compatible_database).unwrap_or(true);
+    let statements = match database_type {
+        Some(database_type) => crate::sql::split_sql_statements_for_database(sql, database_type),
+        None => crate::sql::split_sql_statements(sql),
+    };
+
+    statements.iter().any(|statement| is_write_sql_statement(statement, mysql_compatible))
+}
+
+fn is_mysql_compatible_database(database_type: DatabaseType) -> bool {
+    matches!(
+        database_type,
+        DatabaseType::Mysql
+            | DatabaseType::Doris
+            | DatabaseType::StarRocks
+            | DatabaseType::ManticoreSearch
+            | DatabaseType::Goldendb
+    )
+}
+
+fn is_write_sql_statement(sql: &str, detect_mysql_executable_comments: bool) -> bool {
     // 1. Strip comments and string literals
-    let (cleaned, has_mysql_executable_comment) = strip_sql_comments_and_literals_with_metadata(sql);
-    // MySQL executable comments may contain arbitrary SQL, including writes
-    // that are not represented by the outer statement (for example, INTO
-    // OUTFILE inside a SELECT). Treat them as writes rather than attempting
-    // to parse every supported MySQL dialect extension here.
+    let (cleaned, has_mysql_executable_comment) =
+        strip_sql_comments_and_literals_with_metadata(sql, detect_mysql_executable_comments);
+    // MySQL/MariaDB executable comments may contain arbitrary SQL, including
+    // writes that are not represented by the outer statement (for example,
+    // INTO OUTFILE inside a SELECT). Treat them as writes rather than
+    // attempting to parse every supported MySQL dialect extension here.
     if has_mysql_executable_comment {
         return true;
     }
@@ -243,8 +278,8 @@ fn starts_with_keyword(upper: &str, keyword: &str) -> bool {
 
 /// Check whether a SQL statement is allowed under read-only mode.
 /// Returns Err with a descriptive message if the statement is a write operation.
-pub fn check_read_only(sql: &str, connection_name: &str) -> Result<(), String> {
-    if is_write_sql(sql) {
+pub fn check_read_only(sql: &str, connection_name: &str, database_type: DatabaseType) -> Result<(), String> {
+    if is_write_sql_for_database(sql, database_type) {
         return Err(format!(
             "Read-only mode: connection '{}' has read-only protection enabled. Write operation (including stored procedure calls) blocked.",
             connection_name
@@ -328,10 +363,10 @@ fn strip_sql_comments(sql: &str) -> String {
 }
 
 pub fn strip_sql_comments_and_literals(sql: &str) -> String {
-    strip_sql_comments_and_literals_with_metadata(sql).0
+    strip_sql_comments_and_literals_with_metadata(sql, false).0
 }
 
-fn strip_sql_comments_and_literals_with_metadata(sql: &str) -> (String, bool) {
+fn strip_sql_comments_and_literals_with_metadata(sql: &str, detect_mysql_executable_comments: bool) -> (String, bool) {
     let mut output = String::with_capacity(sql.len());
     let mut chars = sql.chars().peekable();
     let mut in_line_comment = false;
@@ -406,7 +441,7 @@ fn strip_sql_comments_and_literals_with_metadata(sql: &str) -> (String, bool) {
         }
         if ch == '/' && chars.peek() == Some(&'*') {
             chars.next();
-            if chars.peek() == Some(&'!') {
+            if detect_mysql_executable_comments && is_mysql_executable_comment_start(&chars) {
                 has_mysql_executable_comment = true;
             }
             in_block_comment = true;
@@ -432,6 +467,17 @@ fn strip_sql_comments_and_literals_with_metadata(sql: &str) -> (String, bool) {
     }
 
     (output, has_mysql_executable_comment)
+}
+
+/// `/*! ... */` is executable in MySQL, while `/*M! ... */` (optionally
+/// followed by a version number) is executable in MariaDB.
+fn is_mysql_executable_comment_start(chars: &std::iter::Peekable<std::str::Chars<'_>>) -> bool {
+    let mut marker = chars.clone();
+    match marker.next() {
+        Some('!') => true,
+        Some('M') => marker.next() == Some('!'),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -675,12 +721,40 @@ mod tests {
     }
 
     #[test]
-    fn is_write_sql_blocks_mysql_executable_comments() {
-        assert!(is_write_sql("SELECT 3156 /*! INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */"));
-        assert!(is_write_sql("SELECT 3156 /*!50000 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */"));
+    fn is_write_sql_blocks_mysql_and_mariadb_executable_comments() {
+        for sql in [
+            "SELECT 3156 /*! INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */",
+            "SELECT 3156 /*!50000 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */",
+            "SELECT 3156 /*M! INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */",
+            "SELECT 3156 /*M!100100 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */",
+        ] {
+            assert!(is_write_sql_for_database(sql, DatabaseType::Mysql), "expected write SQL: {sql}");
+        }
 
-        assert!(!is_write_sql("SELECT 3156 /* INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */"));
-        assert!(!is_write_sql("SELECT '/*!50000 INTO OUTFILE \'/tmp/probe\' */' AS note"));
+        assert!(!is_write_sql_for_database(
+            "SELECT 3156 /* INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */",
+            DatabaseType::Mysql
+        ));
+        assert!(!is_write_sql_for_database(
+            "SELECT '/*!50000 INTO OUTFILE \'/tmp/probe\' */' AS note",
+            DatabaseType::Mysql
+        ));
+    }
+
+    #[test]
+    fn is_write_sql_treats_mysql_executable_comment_syntax_as_plain_for_other_dialects() {
+        for database_type in [DatabaseType::Postgres, DatabaseType::Sqlite] {
+            for sql in [
+                "SELECT 3156 /*!50000 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */",
+                "SELECT 3156 /*M!100100 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */",
+                "SELECT 3156 /* ordinary block comment */",
+            ] {
+                assert!(
+                    !is_write_sql_for_database(sql, database_type),
+                    "expected read-only SQL for {database_type:?}: {sql}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -761,25 +835,41 @@ mod tests {
 
     #[test]
     fn check_read_only_success_and_error() {
-        assert_eq!(check_read_only("SELECT * FROM users", "prod-db"), Ok(()));
-        assert_eq!(check_read_only("WITH cte AS (SELECT 1) SELECT * FROM cte", "prod-db"), Ok(()));
-        assert_eq!(check_read_only("SHOW CREATE TABLE users", "prod-db"), Ok(()));
-        assert_eq!(check_read_only("SELECT 1 AS `delete`", "prod-db"), Ok(()));
+        assert_eq!(check_read_only("SELECT * FROM users", "prod-db", DatabaseType::Mysql), Ok(()));
+        assert_eq!(check_read_only("WITH cte AS (SELECT 1) SELECT * FROM cte", "prod-db", DatabaseType::Mysql), Ok(()));
+        assert_eq!(check_read_only("SHOW CREATE TABLE users", "prod-db", DatabaseType::Mysql), Ok(()));
+        assert_eq!(check_read_only("SELECT 1 AS `delete`", "prod-db", DatabaseType::Mysql), Ok(()));
 
-        let err = check_read_only("DELETE FROM users", "prod-db");
+        let err = check_read_only("DELETE FROM users", "prod-db", DatabaseType::Mysql);
         assert!(err.is_err());
         assert_eq!(
             err.unwrap_err(),
             "Read-only mode: connection 'prod-db' has read-only protection enabled. Write operation (including stored procedure calls) blocked."
         );
 
-        let err2 = check_read_only("UPDATE users SET name = 'x'", "reporting-db");
+        let err2 = check_read_only("UPDATE users SET name = 'x'", "reporting-db", DatabaseType::Mysql);
         assert!(err2.is_err());
         assert!(err2.unwrap_err().contains("reporting-db"));
 
-        let show_create_err = check_read_only("SHOW CREATE TABLE users; DELETE FROM users", "prod-db");
+        let show_create_err =
+            check_read_only("SHOW CREATE TABLE users; DELETE FROM users", "prod-db", DatabaseType::Mysql);
         assert!(show_create_err.is_err());
         assert!(show_create_err.unwrap_err().contains("Write operation"));
+    }
+
+    #[test]
+    fn check_read_only_only_treats_executable_comments_as_writes_for_mysql_compatible_connections() {
+        let mysql_executable_comment = "SELECT 3156 /*!50000 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */";
+        let mariadb_executable_comment =
+            "SELECT 3156 /*M!100100 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */";
+
+        assert!(check_read_only(mysql_executable_comment, "mysql", DatabaseType::Mysql).is_err());
+        assert!(check_read_only(mariadb_executable_comment, "mariadb", DatabaseType::Mysql).is_err());
+
+        for database_type in [DatabaseType::Postgres, DatabaseType::Sqlite] {
+            assert_eq!(check_read_only(mysql_executable_comment, "readonly", database_type), Ok(()));
+            assert_eq!(check_read_only(mariadb_executable_comment, "readonly", database_type), Ok(()));
+        }
     }
 
     #[test]
