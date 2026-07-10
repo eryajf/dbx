@@ -459,6 +459,11 @@ export interface QueryResult {
    */
   column_sortables?: boolean[];
   rows: (string | number | boolean | null)[][];
+  /**
+   * Original MongoDB documents, kept in lockstep with `rows` for document
+   * preview. This is populated only for MongoDB document query results.
+   */
+  mongo_documents?: unknown[];
   affected_rows: number;
   execution_time_ms: number;
   truncated?: boolean;
@@ -484,6 +489,7 @@ export interface QueryResultRun {
   resultSortDirection?: "asc" | "desc";
   resultSortMode?: "database" | "local";
   resultLocalSortOriginalRows?: QueryResult["rows"];
+  resultLocalSortOriginalMongoDocuments?: QueryResult["mongo_documents"];
   orderByInput?: string;
   resultPageSql?: string;
   resultPageLimit?: number;
@@ -698,6 +704,7 @@ export interface QueryTab {
   resultSortDirection?: "asc" | "desc";
   resultSortMode?: "database" | "local";
   resultLocalSortOriginalRows?: QueryResult["rows"];
+  resultLocalSortOriginalMongoDocuments?: QueryResult["mongo_documents"];
   orderByInput?: string;
   resultPageSql?: string;
   resultPageLimit?: number;

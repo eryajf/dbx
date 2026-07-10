@@ -1202,6 +1202,7 @@ async function openData() {
     tab.resultSortDirection = undefined;
     tab.resultSortMode = undefined;
     tab.resultLocalSortOriginalRows = undefined;
+    tab.resultLocalSortOriginalMongoDocuments = undefined;
     tab.resultSortedSql = undefined;
     tab.resultPageSql = undefined;
     tab.resultPageLimit = undefined;

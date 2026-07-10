@@ -119,7 +119,18 @@ import { BINARY_CELL_DOWNLOAD_MODES, binaryCellDisplayText, binaryCellDownloadFi
 import { buildBinaryHexViewRows } from "@/lib/dataGrid/binaryHexViewer";
 import { canFormatCellDetailJson, cellDetailEditorText, compactJsonText, defaultCellDetailTab, formatJsonText, isGeometryColumnType, linkedCellDetailTarget, looksLikeJsonContainerText, valueEditorActions, visibleCellDetailTabs, type CellDetailTab } from "@/lib/dataGrid/cellDetailPresentation";
 import { renderWktOnCanvas, isHexGeometry } from "@/lib/dataGrid/geometryPreview";
-import { buildDataGridCellDetail, buildDataGridColumnDetail, buildDataGridRowDetail, dataGridColumnDetailJson, dataGridColumnDetailTsv, dataGridRowDetailJson, dataGridRowDetailTsv, filterDataGridDetailFields, type DataGridCellDetail } from "@/lib/dataGrid/dataGridDetail";
+import {
+  buildDataGridCellDetail,
+  buildDataGridColumnDetail,
+  buildDataGridRowDetail,
+  CELL_DETAIL_VALUE_PREVIEW_MAX_LENGTH,
+  dataGridColumnDetailJson,
+  dataGridColumnDetailTsv,
+  dataGridRowDetailJson,
+  dataGridRowDetailTsv,
+  filterDataGridDetailFields,
+  type DataGridCellDetail,
+} from "@/lib/dataGrid/dataGridDetail";
 import { applyColumnFormatter, buildColumnFormatterKey, normalizeColumnFormatter, resolveColumnFormatter, type ColumnFormatterConfig, type DateTimeFormatterUnit, DateTimePatterns } from "@/lib/dataGrid/columnFormatter";
 import { temporalCellEditorConfig, type TemporalCellEditorConfig } from "@/lib/dataGrid/dataGridTemporalEditor";
 import { isCancelSearchShortcut, isCopyCurrentRowShortcut, isDeleteCurrentRowShortcut, isFocusSearchShortcut, isModRShortcut, isSaveShortcut, isToggleTransposeShortcut } from "@/lib/editor/keyboardShortcuts";
@@ -485,6 +496,7 @@ const detailCell = ref<{ rowIndex: number; col: number } | null>(null);
 const hoveredDetailCell = ref<{ rowIndex: number; col: number } | null>(null);
 const quickDownloadMenuCell = ref<{ rowIndex: number; col: number } | null>(null);
 const showCellDetail = ref(false);
+const showMongoJsonPreview = ref(false);
 const activeCellDetailTab = ref<CellDetailTab>(defaultCellDetailTab());
 const cellDetailDialogOpen = ref(false);
 const cellDetailDialogTarget = ref<{ rowIndex: number; col: number } | null>(null);
@@ -4785,6 +4797,42 @@ const activeCellDetail = computed(() => {
   return cell ? cellDetailFor(cell.rowIndex, cell.col) : null;
 });
 
+const canShowMongoJsonPreview = computed(() => props.databaseType === "mongodb" && !!props.result.mongo_documents && props.result.mongo_documents.length === props.result.rows.length);
+const mongoJsonPreviewOpen = computed(() => showMongoJsonPreview.value && canShowMongoJsonPreview.value);
+const activeMongoJsonDocument = computed(() => {
+  if (!mongoJsonPreviewOpen.value) return undefined;
+  const selectedCell = currentSelectedCellPosition();
+  if (!selectedCell) return undefined;
+  const item = displayItemAt(selectedCell.rowIndex);
+  return item?.sourceIndex === undefined ? undefined : props.result.mongo_documents?.[item.sourceIndex];
+});
+const mongoJsonPreviewFullText = computed(() => {
+  const document = activeMongoJsonDocument.value;
+  if (document === undefined) return "";
+  try {
+    return JSON.stringify(document, null, 2) ?? "";
+  } catch {
+    return "";
+  }
+});
+const mongoJsonPreviewText = computed(() => mongoJsonPreviewFullText.value.slice(0, CELL_DETAIL_VALUE_PREVIEW_MAX_LENGTH));
+const mongoJsonPreviewTruncated = computed(() => mongoJsonPreviewText.value.length < mongoJsonPreviewFullText.value.length);
+const mongoJsonPreviewUsesCodeEditor = computed(() => !!mongoJsonPreviewText.value && !mongoJsonPreviewTruncated.value);
+
+watch(canShowMongoJsonPreview, (available) => {
+  if (!available) showMongoJsonPreview.value = false;
+});
+
+// Result-set switches remount the grid, but re-executing the same result set
+// keeps this component alive. Clear the ephemeral preview before fresh query
+// data arrives so it cannot retain a stale row selection or drawer state.
+watch(
+  () => props.loading,
+  (loading) => {
+    if (loading) showMongoJsonPreview.value = false;
+  },
+);
+
 const dialogCellDetail = computed(() => {
   const target = cellDetailDialogTarget.value;
   return target ? cellDetailFor(target.rowIndex, target.col) : null;
@@ -5039,10 +5087,12 @@ const detailsEditorContainer = ref<HTMLElement>();
 const valueEditorContainer = ref<HTMLElement>();
 const sideJsonPreviewContainer = ref<HTMLElement>();
 const dialogJsonPreviewContainer = ref<HTMLElement>();
+const mongoJsonPreviewContainer = ref<HTMLElement>();
 let detailsDetailEditor: UseCellDetailEditorReturn | null = null;
 let valueDetailEditor: UseCellDetailEditorReturn | null = null;
 let sideJsonPreviewEditor: UseCellDetailEditorReturn | null = null;
 let dialogJsonPreviewEditor: UseCellDetailEditorReturn | null = null;
+let mongoJsonPreviewEditor: UseCellDetailEditorReturn | null = null;
 
 const editorThemeAccessor = () => settingsStore.editorSettings.theme;
 const editorAppAppearance = () => (isDark.value ? "dark" : "light") as import("@/lib/app/appTheme").AppThemeAppearance;
@@ -5141,8 +5191,30 @@ watch(dialogJsonPreviewContainer, async (el) => {
   }
 });
 
+watch(mongoJsonPreviewContainer, async (el) => {
+  if (el && !mongoJsonPreviewEditor) {
+    mongoJsonPreviewEditor = useCellDetailEditor({
+      language: "json",
+      readOnly: true,
+      editorTheme: editorThemeAccessor,
+      appAppearance: editorAppAppearance,
+      appPalette: editorAppPalette,
+      fontSize: editorFontSize,
+      fontFamily: editorFontFamily,
+    });
+    await mongoJsonPreviewEditor.create(el, mongoJsonPreviewText.value, "json");
+  } else if (!el && mongoJsonPreviewEditor) {
+    mongoJsonPreviewEditor.destroy();
+    mongoJsonPreviewEditor = null;
+  }
+});
+
 watch(sideJsonPreviewText, (value) => {
   sideJsonPreviewEditor?.setValue(value, "json");
+});
+
+watch(mongoJsonPreviewText, (value) => {
+  mongoJsonPreviewEditor?.setValue(value, "json");
 });
 
 watch(
@@ -5161,6 +5233,20 @@ function closeCellDetails() {
   resetDetailEdit();
   showCellDetail.value = false;
   detailCell.value = null;
+}
+
+function toggleMongoJsonPreview() {
+  if (!canShowMongoJsonPreview.value) return;
+  showMongoJsonPreview.value = !showMongoJsonPreview.value;
+  if (showMongoJsonPreview.value) closeCellDetails();
+}
+
+function closeMongoJsonPreview() {
+  showMongoJsonPreview.value = false;
+}
+
+function copyMongoJsonPreview() {
+  if (mongoJsonPreviewFullText.value) copyText(mongoJsonPreviewFullText.value);
 }
 
 function cellDetailEditText(detail: DataGridCellDetail): string {
@@ -6318,6 +6404,7 @@ function selectExportMenuItem(value: string) {
 
 // --- Cell selection and detail ---
 function showCellDetails(rowIndex: number, colIndex: number) {
+  closeMongoJsonPreview();
   resetDetailEdit();
   detailCell.value = { rowIndex, col: colIndex };
   activeCellDetailTab.value = defaultCellDetailTab();
@@ -7702,6 +7789,7 @@ const CELL_DETAIL_TABLE_MIN_VISIBLE_ROWS = 1.5;
 const CELL_DETAIL_TABLE_HORIZONTAL_SCROLLBAR_HEIGHT = 10;
 const CELL_DETAIL_TABLE_MIN_VISIBLE_HEIGHT = Math.ceil(CELL_DETAIL_TABLE_HEADER_HEIGHT + CANVAS_DATA_GRID_ROW_HEIGHT * CELL_DETAIL_TABLE_MIN_VISIBLE_ROWS + CELL_DETAIL_TABLE_HORIZONTAL_SCROLLBAR_HEIGHT);
 const DRAWER_MAX_WIDTH = 900;
+const MONGO_JSON_PREVIEW_DEFAULT_WIDTH = 420;
 function clampCellDetailPanelSize(value: number, layout = cellDetailPanelLayout.value): number {
   const min = layout === "bottom" ? CELL_DETAIL_PANEL_MIN_HEIGHT : CELL_DETAIL_PANEL_MIN_WIDTH;
   const max = layout === "bottom" ? CELL_DETAIL_PANEL_MAX_HEIGHT : DRAWER_MAX_WIDTH;
@@ -7728,12 +7816,16 @@ function onDdlKeydown(e: KeyboardEvent) {
 const ddlLoading = ref(false);
 const ddlWidth = ref(settingsStore.editorSettings.tableInfoDrawerWidth);
 const detailPanelHeight = ref(settingsStore.editorSettings.cellDetailDrawerWidth);
+const mongoJsonPreviewWidth = ref(MONGO_JSON_PREVIEW_DEFAULT_WIDTH);
 const ddlWrap = ref(true);
 const isResizingDdl = ref(false);
+const isResizingMongoJsonPreview = ref(false);
 let ddlResizeStartX = 0;
 let ddlResizeStartWidth = 0;
 let detailResizeStartY = 0;
 let detailResizeStartHeight = 0;
+let mongoJsonPreviewResizeStartX = 0;
+let mongoJsonPreviewResizeStartWidth = 0;
 const indexes = ref<IndexInfo[]>([]);
 const indexesLoaded = ref(false);
 const indexesLoading = ref(false);
@@ -7804,6 +7896,10 @@ const detailPanelStyle = computed(() =>
       }
     : { width: `${detailPanelHeight.value}px` },
 );
+
+const mongoJsonPreviewStyle = computed(() => ({
+  width: `${mongoJsonPreviewWidth.value}px`,
+}));
 
 const contentGridStyle = computed(() =>
   cellDetailPanelIsBottom.value && showCellDetail.value && activeCellDetail.value
@@ -8095,6 +8191,27 @@ function onDetailResizeEnd() {
   window.removeEventListener("mouseup", onDetailResizeEnd);
 }
 
+function onMongoJsonPreviewResizeStart(event: MouseEvent) {
+  isResizingMongoJsonPreview.value = true;
+  mongoJsonPreviewResizeStartX = event.clientX;
+  mongoJsonPreviewResizeStartWidth = mongoJsonPreviewWidth.value;
+  document.body.classList.add("select-none", "cursor-col-resize");
+  window.addEventListener("mousemove", onMongoJsonPreviewResizeMove);
+  window.addEventListener("mouseup", onMongoJsonPreviewResizeEnd);
+}
+
+function onMongoJsonPreviewResizeMove(event: MouseEvent) {
+  if (!isResizingMongoJsonPreview.value) return;
+  mongoJsonPreviewWidth.value = clampCellDetailPanelSize(mongoJsonPreviewResizeStartWidth + mongoJsonPreviewResizeStartX - event.clientX, "right");
+}
+
+function onMongoJsonPreviewResizeEnd() {
+  isResizingMongoJsonPreview.value = false;
+  document.body.classList.remove("select-none", "cursor-col-resize");
+  window.removeEventListener("mousemove", onMongoJsonPreviewResizeMove);
+  window.removeEventListener("mouseup", onMongoJsonPreviewResizeEnd);
+}
+
 const loadingElapsed = ref(0);
 let _loadingFrame: number | undefined;
 let _loadingStart = 0;
@@ -8167,6 +8284,7 @@ onUnmounted(() => {
   onSearchSplitResizeEnd();
   onDdlResizeEnd();
   onDetailResizeEnd();
+  onMongoJsonPreviewResizeEnd();
   finishCellSelection();
   clearTimeout(highlightedColumnTimer);
   clearTimeout(_searchTimer);
@@ -9015,6 +9133,21 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
               <TooltipContent side="bottom" class="max-w-sm">
                 {{ t("grid.keylessEditWarningHint") }}
               </TooltipContent>
+            </Tooltip>
+            <Tooltip v-if="canShowMongoJsonPreview">
+              <TooltipTrigger as-child>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  :class="['data-grid-topbar-action-button h-5 shrink-0 text-xs px-1.5', compactDataGridToolbar ? 'data-grid-topbar-action-button--compact' : '', mongoJsonPreviewOpen ? 'text-primary bg-primary/10 hover:bg-primary/15' : '']"
+                  :aria-pressed="mongoJsonPreviewOpen"
+                  @click="toggleMongoJsonPreview"
+                >
+                  <Code2 class="data-grid-topbar-action-icon w-3 h-3" />
+                  <span class="data-grid-topbar-action-label" :class="{ 'data-grid-topbar-action-label--compact': compactDataGridToolbar }">{{ t("grid.mongoJsonPreview") }}</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{{ t("grid.mongoJsonPreview") }}</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger as-child>
@@ -10543,6 +10676,30 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                 </div>
               </TabsContent>
             </Tabs>
+          </div>
+          <!-- MongoDB document JSON preview -->
+          <div v-else-if="mongoJsonPreviewOpen" class="relative col-start-3 row-start-1 flex min-w-0 flex-col border-l bg-background" :class="{ 'detail-drawer-resizing': isResizingMongoJsonPreview }" :style="mongoJsonPreviewStyle" @contextmenu="onDrawerContextMenu">
+            <div class="absolute bottom-0 left-0 top-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize hover:bg-primary/30" @mousedown.prevent="onMongoJsonPreviewResizeStart" />
+            <div class="flex h-9 shrink-0 items-center gap-2 border-b bg-muted/20 px-3">
+              <Code2 class="h-3.5 w-3.5 text-muted-foreground" />
+              <span class="min-w-0 flex-1 truncate text-xs font-medium">{{ t("grid.mongoJsonPreview") }}</span>
+              <Button variant="ghost" size="icon" class="h-5 w-5" :disabled="!mongoJsonPreviewFullText" :title="t('grid.copyJson')" @click="copyMongoJsonPreview">
+                <Copy class="h-3 w-3" />
+              </Button>
+              <Button variant="ghost" size="icon" class="h-5 w-5" @click="closeMongoJsonPreview">
+                <X class="h-3 w-3" />
+              </Button>
+            </div>
+            <div v-if="mongoJsonPreviewText" class="flex min-h-0 flex-1 flex-col overflow-hidden p-2">
+              <div v-if="mongoJsonPreviewUsesCodeEditor" ref="mongoJsonPreviewContainer" data-cell-detail-editor-root class="min-h-0 flex-1 overflow-hidden" />
+              <template v-else>
+                <pre class="min-h-0 flex-1 overflow-auto rounded border bg-muted/20 p-3 font-mono text-xs whitespace-pre-wrap break-words">{{ mongoJsonPreviewText }}</pre>
+                <div class="mt-1 text-[11px] text-muted-foreground">{{ t("grid.largeValuePreviewHint", { count: mongoJsonPreviewText.length }) }}</div>
+              </template>
+            </div>
+            <div v-else class="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
+              {{ t("grid.mongoJsonPreviewEmpty") }}
+            </div>
           </div>
         </div>
       </div>

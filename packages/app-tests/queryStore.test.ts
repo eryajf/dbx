@@ -705,6 +705,11 @@ test("sortTabResultLocally sorts current rows and restores original order", () =
       [1, "Ada"],
       [3, "Linus"],
     ],
+    mongo_documents: [
+      { id: 2, name: "Grace", nested: { level: 2 } },
+      { id: 1, name: "Ada", nested: { level: 1 } },
+      { id: 3, name: "Linus", nested: { level: 3 } },
+    ],
     affected_rows: 0,
     execution_time_ms: 1,
   };
@@ -716,11 +721,21 @@ test("sortTabResultLocally sorts current rows and restores original order", () =
     [2, "Grace"],
     [3, "Linus"],
   ]);
+  assert.deepEqual(tab.result?.mongo_documents?.map((document) => (document as { id: number }).id), [1, 2, 3]);
   assert.equal(tab.resultSortColumn, "name");
   assert.equal(tab.resultSortColumnIndex, 1);
   assert.equal(tab.resultSortDirection, "asc");
   assert.equal(tab.resultSortMode, "local");
   assert.equal(tab.resultSortedSql, undefined);
+
+  store.sortTabResultLocally(tabId, "name", 1, "desc");
+
+  assert.deepEqual(tab.result?.rows, [
+    [3, "Linus"],
+    [2, "Grace"],
+    [1, "Ada"],
+  ]);
+  assert.deepEqual(tab.result?.mongo_documents?.map((document) => (document as { id: number }).id), [3, 2, 1]);
 
   store.sortTabResultLocally(tabId, "name", 1, null);
 
@@ -729,6 +744,7 @@ test("sortTabResultLocally sorts current rows and restores original order", () =
     [1, "Ada"],
     [3, "Linus"],
   ]);
+  assert.deepEqual(tab.result?.mongo_documents?.map((document) => (document as { id: number }).id), [2, 1, 3]);
   assert.equal(tab.resultSortColumn, undefined);
   assert.equal(tab.resultSortMode, undefined);
 });

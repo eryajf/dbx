@@ -38,7 +38,7 @@ import { quoteTableIdentifier } from "@/lib/table/tableSelectSql";
 import { connectionQueryExecutionSchema, effectiveDatabaseTypeForConnection, metadataSchemaForConnection } from "@/lib/database/jdbcDialect";
 import { frontendQueryTimeoutSecsForSql, queryTimeoutSecsForConnection } from "@/lib/sql/queryTimeout";
 import { queryResultSourceLabel } from "@/lib/sql/queryResultSource";
-import { sortDataGridRows, type DataGridSortDirection } from "@/lib/dataGrid/dataGridSort";
+import { sortDataGridRowIndexes, type DataGridSortDirection } from "@/lib/dataGrid/dataGridSort";
 import { normalizeResultPageSize } from "@/lib/dataGrid/paginationPageSize";
 import { splitSqlStatementRanges } from "@/lib/sql/sqlStatementRanges";
 import { clearDataGridPendingSnapshotsForTab } from "@/composables/useDataGridEditor";
@@ -102,6 +102,7 @@ function droppedTableObjectSchemaCandidates(target: DroppedTableObjectTarget): S
 
 function markQueryResultRowsRaw(result: QueryResult): QueryResult {
   markRaw(result.rows);
+  if (result.mongo_documents) markRaw(result.mongo_documents);
   return result;
 }
 
@@ -114,6 +115,8 @@ function markQueryResultRunsRowsRaw(resultRuns: NonNullable<QueryTab["resultRuns
   for (const run of resultRuns) {
     if (run.result) markQueryResultRowsRaw(run.result);
     if (run.results) markQueryResultsRowsRaw(run.results);
+    if (run.resultLocalSortOriginalRows) markRaw(run.resultLocalSortOriginalRows);
+    if (run.resultLocalSortOriginalMongoDocuments) markRaw(run.resultLocalSortOriginalMongoDocuments);
   }
   return resultRuns;
 }
@@ -387,6 +390,7 @@ export const useQueryStore = defineStore("query", () => {
     tab.results = undefined;
     tab.activeResultIndex = undefined;
     tab.resultLocalSortOriginalRows = undefined;
+    tab.resultLocalSortOriginalMongoDocuments = undefined;
     tab.resultSortMode = undefined;
     tab.resultSessionId = undefined;
     tab.resultAccessedAt = undefined;
@@ -413,6 +417,7 @@ export const useQueryStore = defineStore("query", () => {
     run.result = undefined;
     run.results = undefined;
     run.resultLocalSortOriginalRows = undefined;
+    run.resultLocalSortOriginalMongoDocuments = undefined;
     run.resultSessionId = undefined;
     run.queryAnalysis = undefined;
     run.querySourceColumns = undefined;
@@ -435,7 +440,8 @@ export const useQueryStore = defineStore("query", () => {
     tab.resultSortColumnIndex = run.resultSortColumnIndex;
     tab.resultSortDirection = run.resultSortDirection;
     tab.resultSortMode = run.resultSortMode;
-    tab.resultLocalSortOriginalRows = undefined;
+    tab.resultLocalSortOriginalRows = run.resultLocalSortOriginalRows;
+    tab.resultLocalSortOriginalMongoDocuments = run.resultLocalSortOriginalMongoDocuments;
     tab.orderByInput = run.orderByInput;
     tab.resultPageSql = run.resultPageSql;
     tab.resultPageLimit = run.resultPageLimit;
@@ -467,13 +473,15 @@ export const useQueryStore = defineStore("query", () => {
     const snapshotRun = snapshot?.resultRuns?.find((item) => item.id === runId);
     if (!snapshotRun) return run;
 
-    const restoredRun = {
-      ...run,
-      ...snapshotRun,
-      result: snapshotRun.result ? markQueryResultRowsRaw(snapshotRun.result) : undefined,
-      results: snapshotRun.results ? markQueryResultsRowsRaw(snapshotRun.results) : undefined,
-      resultCacheState: "memory" as const,
-    };
+    const restoredRun = markQueryResultRunsRowsRaw([
+      {
+        ...run,
+        ...snapshotRun,
+        result: snapshotRun.result ? markQueryResultRowsRaw(snapshotRun.result) : undefined,
+        results: snapshotRun.results ? markQueryResultsRowsRaw(snapshotRun.results) : undefined,
+        resultCacheState: "memory" as const,
+      },
+    ])[0]!;
     tab.resultRuns = tab.resultRuns?.map((item) => (item.id === runId ? restoredRun : item));
     return restoredRun;
   }
@@ -574,6 +582,8 @@ export const useQueryStore = defineStore("query", () => {
       resultSortColumnIndex: tab.resultSortColumnIndex,
       resultSortDirection: tab.resultSortDirection,
       resultSortMode: tab.resultSortMode,
+      resultLocalSortOriginalRows: tab.resultLocalSortOriginalRows,
+      resultLocalSortOriginalMongoDocuments: tab.resultLocalSortOriginalMongoDocuments,
       orderByInput: tab.orderByInput,
       resultPageSql: tab.resultPageSql,
       resultPageLimit: tab.resultPageLimit,
@@ -623,6 +633,8 @@ export const useQueryStore = defineStore("query", () => {
       resultSortColumnIndex: tab.resultSortColumnIndex,
       resultSortDirection: tab.resultSortDirection,
       resultSortMode: tab.resultSortMode,
+      resultLocalSortOriginalRows: tab.resultLocalSortOriginalRows,
+      resultLocalSortOriginalMongoDocuments: tab.resultLocalSortOriginalMongoDocuments,
       orderByInput: tab.orderByInput,
       resultPageSql: tab.resultPageSql,
       resultPageLimit: tab.resultPageLimit,
@@ -670,17 +682,25 @@ export const useQueryStore = defineStore("query", () => {
 
     if (!tab.resultLocalSortOriginalRows) {
       tab.resultLocalSortOriginalRows = tab.result.rows.slice();
+      tab.resultLocalSortOriginalMongoDocuments = tab.result.mongo_documents?.slice();
     }
 
-    const rows = direction ? sortDataGridRows(tab.resultLocalSortOriginalRows, columnIndex, direction) : tab.resultLocalSortOriginalRows;
-    assignDisplayedResult(tab, { ...tab.result, rows });
+    const originalRows = tab.resultLocalSortOriginalRows;
+    const rowIndexes = direction ? sortDataGridRowIndexes(originalRows, columnIndex, direction) : originalRows.map((_, index) => index);
+    const rows = rowIndexes.map((index) => originalRows[index]!);
+    const originalMongoDocuments = tab.resultLocalSortOriginalMongoDocuments;
+    const mongo_documents = originalMongoDocuments ? rowIndexes.map((index) => originalMongoDocuments[index]) : undefined;
+    assignDisplayedResult(tab, { ...tab.result, rows, mongo_documents });
 
     tab.resultSortColumn = direction ? column : undefined;
     tab.resultSortColumnIndex = direction ? columnIndex : undefined;
     tab.resultSortDirection = direction ?? undefined;
     tab.resultSortMode = direction ? "local" : undefined;
     tab.resultSortedSql = undefined;
-    if (!direction) tab.resultLocalSortOriginalRows = undefined;
+    if (!direction) {
+      tab.resultLocalSortOriginalRows = undefined;
+      tab.resultLocalSortOriginalMongoDocuments = undefined;
+    }
 
     touchResult(tab);
     syncDisplayedResultRun(tab, tab.resultBaseSql ?? tab.lastExecutedSql ?? tab.sql);
@@ -1402,6 +1422,7 @@ export const useQueryStore = defineStore("query", () => {
       resultSortDirection: undefined,
       resultSortMode: undefined,
       resultLocalSortOriginalRows: undefined,
+      resultLocalSortOriginalMongoDocuments: undefined,
       orderByInput: undefined,
       resultPageSql: undefined,
       resultPageLimit: undefined,
@@ -2289,6 +2310,7 @@ export const useQueryStore = defineStore("query", () => {
     tab.executionId = executionId;
     tab.lastExecutedSql = sql;
     tab.resultLocalSortOriginalRows = undefined;
+    tab.resultLocalSortOriginalMongoDocuments = undefined;
     const updateActiveResultRun = !!tab.activeResultRunId && options?.preserveResultDuringExecution === true;
     if (!updateActiveResultRun) {
       tab.activeResultRunId = undefined;
@@ -3033,6 +3055,7 @@ export const useQueryStore = defineStore("query", () => {
     tab.activeResultIndex = index;
     tab.result = tab.results[index];
     tab.resultLocalSortOriginalRows = undefined;
+    tab.resultLocalSortOriginalMongoDocuments = undefined;
     tab.resultSortColumn = undefined;
     tab.resultSortColumnIndex = undefined;
     tab.resultSortDirection = undefined;
@@ -3133,6 +3156,8 @@ export const useQueryStore = defineStore("query", () => {
     tab.results = results;
     tab.activeResultIndex = snapshot.activeResultIndex;
     tab.result = snapshot.result ? markQueryResultRowsRaw(snapshot.result) : results?.[activeIndex] ? markQueryResultRowsRaw(results[activeIndex]) : undefined;
+    tab.resultLocalSortOriginalRows = snapshot.resultLocalSortOriginalRows ? markRaw(snapshot.resultLocalSortOriginalRows) : undefined;
+    tab.resultLocalSortOriginalMongoDocuments = snapshot.resultLocalSortOriginalMongoDocuments ? markRaw(snapshot.resultLocalSortOriginalMongoDocuments) : undefined;
     tab.resultRuns = snapshot.resultRuns ? markQueryResultRunsRowsRaw(snapshot.resultRuns) : tab.resultRuns;
     tab.activeResultRunId = snapshot.activeResultRunId ?? tab.activeResultRunId;
     if (!tab.result && !tab.results && !tab.resultRuns) return false;
