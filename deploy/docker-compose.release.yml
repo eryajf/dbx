@@ -1,8 +1,9 @@
 services:
   dbx:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    # Docker Hub image. `latest` tracks the current release.
+    image: t8y2/dbx:latest
+    # For faster pulls in China, use the CNB image instead:
+    # image: docker.cnb.cool/dbxio.com/dbx:latest
     ports:
       - "4224:4224"
     environment:

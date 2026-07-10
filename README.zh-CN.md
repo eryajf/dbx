@@ -215,31 +215,36 @@ winget install t8y2.dbx
 
 ## 自托管 (Docker)
 
-DBX 提供 Web 版本，可通过 Docker 部署。建议固定使用明确的发布版本标签而非
-`latest`，以保证部署可复现。
+DBX 提供 Web 版本，可通过 Docker 部署。示例使用 `latest` 标签以拉取当前发布版本。
 
 ```bash
-docker run -d --name dbx -p 4224:4224 -v ./data:/app/data t8y2/dbx:0.5.52
+docker run -d --name dbx -p 4224:4224 -v dbx-data:/app/data t8y2/dbx:latest
 ```
 
-`./data` 会将 DBX 数据保存在当前目录下。中国大陆用户可选用 CNB 镜像
-`docker.cnb.cool/dbxio.com/dbx:0.5.52`，以获得更快的拉取速度。
+这里使用跨平台的 `dbx-data` 命名卷。中国大陆用户可选用 CNB 镜像
+`docker.cnb.cool/dbxio.com/dbx:latest`，以获得更快的拉取速度。
 
-或使用 Docker Compose，示例文件位于 `deploy/docker-compose.yml`；其中的
-`./data` 相对于该 Compose 文件所在目录：
+使用 Docker Compose 时，`deploy/docker-compose.yml` 保留为源码构建配置。
+如需部署已发布的镜像，请使用 `deploy/docker-compose.release.yml`：
+
+```bash
+docker compose -f deploy/docker-compose.release.yml up -d
+```
 
 ```yaml
 services:
   dbx:
-    container_name: dbx
-    image: t8y2/dbx:0.5.52
+    image: t8y2/dbx:latest
     # 中国大陆用户可改用 CNB 镜像，以加快拉取速度：
-    # image: docker.cnb.cool/dbxio.com/dbx:0.5.52
+    # image: docker.cnb.cool/dbxio.com/dbx:latest
     ports:
       - "4224:4224"
     volumes:
-      - ./data:/app/data
+      - dbx-data:/app/data
     restart: unless-stopped
+
+volumes:
+  dbx-data:
 ```
 
 如需通过 nginx 等反向代理发布到 `/dbx` 这类子路径下，设置运行时上下文路径，并将同一前缀代理到容器：
