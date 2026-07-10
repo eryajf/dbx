@@ -117,16 +117,6 @@ pub fn build_query_pagination_execution_plan(
         use_agent_result_session: false,
     };
 
-    // SQL Server requires every column exposed by a derived table to have a
-    // unique name. Do not generate either the count or pagination wrappers
-    // unless that is statically provable for both forms of the query.
-    if options.database_type == Some(DatabaseType::SqlServer)
-        && (!sql_server_derived_table_projection_safe(&options.query_base_sql)
-            || !sql_server_derived_table_projection_safe(&options.sql))
-    {
-        return plan;
-    }
-
     let counted = build_count_query_sql(CountQuerySqlOptions {
         original_sql: options.query_base_sql.clone(),
         database_type: options.database_type,
@@ -178,10 +168,6 @@ pub fn build_paginated_query_sql(options: PaginatedQuerySqlOptions) -> QuerySqlB
     if unsupported_pagination_type(options.database_type) {
         return err("unsupported");
     }
-    if options.database_type == Some(DatabaseType::SqlServer) && !sql_server_derived_table_projection_safe(&statement) {
-        return err("unsupported");
-    }
-
     let safe_limit = options.limit.max(1);
     let safe_offset = options.offset;
 
@@ -1376,12 +1362,38 @@ mod tests {
     }
 
     #[test]
-    fn rejects_sqlserver_pagination_for_unnamed_projection() {
+    fn uses_sqlserver_top_for_count_queries_without_derived_table() {
         let result = build_paginated_query_sql(PaginatedQuerySqlOptions {
             original_sql: "SELECT COUNT(*) FROM TicketInfo".to_string(),
             database_type: Some(DatabaseType::SqlServer),
             limit: 100,
             offset: 0,
+        });
+
+        assert!(result.ok);
+        assert_eq!(result.sql.unwrap(), "SELECT TOP (100) COUNT(*) FROM TicketInfo");
+    }
+
+    #[test]
+    fn uses_sqlserver_top_for_unnamed_expression_on_first_page() {
+        let result = build_paginated_query_sql(PaginatedQuerySqlOptions {
+            original_sql: "SELECT id + 1 FROM TicketInfo".to_string(),
+            database_type: Some(DatabaseType::SqlServer),
+            limit: 100,
+            offset: 0,
+        });
+
+        assert!(result.ok);
+        assert_eq!(result.sql.unwrap(), "SELECT TOP (100) id + 1 FROM TicketInfo");
+    }
+
+    #[test]
+    fn rejects_sqlserver_unnamed_expression_for_later_pages() {
+        let result = build_paginated_query_sql(PaginatedQuerySqlOptions {
+            original_sql: "SELECT id + 1 FROM TicketInfo".to_string(),
+            database_type: Some(DatabaseType::SqlServer),
+            limit: 100,
+            offset: 100,
         });
 
         assert_eq!(result, err("unsupported"));
@@ -1832,7 +1844,7 @@ WHERE u.id = picked.id;
     }
 
     #[test]
-    fn rejects_sqlserver_pagination_for_unnamed_column() {
+    fn wraps_sqlserver_select_with_unnamed_column() {
         let result = build_paginated_query_sql(PaginatedQuerySqlOptions {
             original_sql: "SELECT @@version".to_string(),
             database_type: Some(DatabaseType::SqlServer),
@@ -1840,7 +1852,8 @@ WHERE u.id = picked.id;
             offset: 0,
         });
 
-        assert_eq!(result, err("unsupported"));
+        assert!(result.ok);
+        assert_eq!(result.sql.unwrap(), "SELECT TOP (100) @@version");
     }
 
     #[test]
