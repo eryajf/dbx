@@ -67,9 +67,11 @@ This guide gets you through three things:
     docker run -d \
       --name dbx \
       -p 4224:4224 \
-      -v dbx-data:/app/data \
-      t8y2/dbx
+      -v ./data:/app/data \
+      t8y2/dbx:0.5.52
     ```
+
+    Pin a release tag instead of `latest` so deployments remain reproducible. The `./data` directory stores DBX data beside your current directory. For faster pulls in China, use `docker.cnb.cool/dbxio.com/dbx:0.5.52` instead.
 
     Then open `http://localhost:4224`.
 
@@ -78,16 +80,18 @@ This guide gets you through three things:
     ```yaml
     services:
       dbx:
-        image: t8y2/dbx
+        container_name: dbx
+        image: t8y2/dbx:0.5.52
+        # For faster pulls in China, use the CNB image instead:
+        # image: docker.cnb.cool/dbxio.com/dbx:0.5.52
         ports:
           - "4224:4224"
         volumes:
-          - dbx-data:/app/data
+          - ./data:/app/data
         restart: unless-stopped
-
-    volumes:
-      dbx-data:
     ```
+
+    In Docker Compose, `./data` is relative to the directory that contains the Compose file.
 
   </Tab>
 </Tabs>
@@ -97,7 +101,7 @@ This guide gets you through three things:
 | Mode         | Best For                                                              | Backend Path                           | Storage                                |
 | ------------ | --------------------------------------------------------------------- | -------------------------------------- | -------------------------------------- |
 | Desktop      | Daily local work, local files, native windows, DBX UI opened from MCP | Tauri commands calling the Rust core   | Local app data directory               |
-| Docker / Web | Self-hosted access from a server or browser                           | HTTP routes calling the same Rust core | Docker volume or server data directory |
+| Docker / Web | Self-hosted access from a server or browser                           | HTTP routes calling the same Rust core | `data` directory on the host           |
 
 <Callout type="info">The core database features are shared, but desktop-only integrations such as opening DBX windows from MCP require the desktop app to be running.</Callout>
 
