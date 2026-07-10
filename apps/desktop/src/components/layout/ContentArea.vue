@@ -68,7 +68,7 @@ import { formatShortcut } from "@/lib/editor/shortcutRegistry";
 import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import { chartableColumnIndexes } from "@/lib/dataGrid/chartData";
 import * as api from "@/lib/backend/api";
-import { buildMongoUpdateDocument, formatMongoShellLiteral, type MongoInputValue } from "@/lib/mongo/mongoDocumentValues";
+import { applyMongoGridChangesToDocument, buildMongoUpdateDocument, formatMongoShellLiteral, type MongoInputValue } from "@/lib/mongo/mongoDocumentValues";
 import type { SqlExecutionOverride } from "@/lib/sql/sqlExecutionTarget";
 import type { DataGridSortMode } from "@/lib/dataGrid/dataGridSort";
 import { useTabScroll } from "@/composables/useTabScroll";
@@ -451,7 +451,26 @@ const mongoQueryResultSaveHandler = computed<CustomSaveHandler | undefined>(() =
     return stmts;
   };
 
-  return { save, preview, canInsert: false, canDelete: false, supportsInsert: false, readonlyColumns: [target.idColumn], targetLabel: target.collection };
+  const applySavedChanges: NonNullable<CustomSaveHandler["applySavedChanges"]> = ({ dirtyRows, columns }) => {
+    const documents = tab.result?.mongo_documents;
+    if (!documents) return;
+
+    // Replace the raw array only after every backend update succeeds, keeping
+    // the grid and JSON preview atomic when a multi-row save partially fails.
+    const replacements = new Map<unknown, unknown>();
+    tab.result!.mongo_documents = documents.map((document, rowIdx) => {
+      const changes = dirtyRows.get(rowIdx);
+      if (!changes) return document;
+      const updated = applyMongoGridChangesToDocument(document, changes, columns);
+      replacements.set(document, updated);
+      return updated;
+    });
+    if (tab.resultLocalSortOriginalMongoDocuments) {
+      tab.resultLocalSortOriginalMongoDocuments = tab.resultLocalSortOriginalMongoDocuments.map((document) => replacements.get(document) ?? document);
+    }
+  };
+
+  return { save, preview, applySavedChanges, canInsert: false, canDelete: false, supportsInsert: false, readonlyColumns: [target.idColumn], targetLabel: target.collection };
 });
 const resultsPaneOpen = ref(false);
 const resultsPaneSize = ref(Number(safeLocalStorageGet("dbx-results-pane-size")) || DEFAULT_QUERY_RESULTS_PANE_SIZE);

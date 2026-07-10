@@ -53,6 +53,7 @@ type GridScrollerRef =
 
 export interface CustomSaveHandler {
   save: (changes: { dirtyRows: Map<number, Map<number, CellValue>>; newRows: CellValue[][]; deletedRows: Set<number>; columns: string[]; rows: CellValue[][] }) => Promise<void>;
+  applySavedChanges?: (changes: { dirtyRows: Map<number, Map<number, CellValue>>; columns: string[] }) => void;
   preview?: (changes: { dirtyRows: Map<number, Map<number, CellValue>>; newRows: CellValue[][]; deletedRows: Set<number>; columns: string[]; rows: CellValue[][] }) => Promise<string[]>;
   canInsert?: boolean;
   canDelete?: boolean;
@@ -1184,6 +1185,7 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
         return;
       }
       snapshot.newRowRefs.forEach((row) => savingNewRows.delete(row));
+      customHandler.applySavedChanges?.({ dirtyRows: snapshot.dirtyRows, columns: result.value.columns });
       applyDirtyRowsToResult(snapshot);
       clearSavedPendingChanges(snapshot);
       if (!hasPendingChanges.value) exitTransaction();
