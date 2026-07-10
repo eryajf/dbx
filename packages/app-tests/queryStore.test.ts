@@ -3903,12 +3903,12 @@ test("query results keep readable table source labels with active database conte
 
     await store.executeTabSql(tabId, "select u.id from users u join orders o on o.user_id = u.id");
     tab = store.tabs.find((item) => item.id === tabId);
-    assert.equal(tab?.result?.sourceLabel, undefined);
+    assert.equal(tab?.result?.sourceLabel, "db.users");
     assert.equal(tab?.result?.sourceStatement, "select u.id from users u join orders o on o.user_id = u.id");
 
     await store.executeTabSql(tabId, "update users set active = true; select * from users");
     tab = store.tabs.find((item) => item.id === tabId);
-    assert.equal(tab?.results?.[0]?.sourceLabel, undefined);
+    assert.equal(tab?.results?.[0]?.sourceLabel, "db.users");
     assert.equal(tab?.results?.[0]?.sourceStatement, "update users set active = true");
     assert.equal(tab?.results?.[1]?.sourceLabel, "db.users");
     assert.equal(tab?.results?.[1]?.sourceStatement, "select * from users");

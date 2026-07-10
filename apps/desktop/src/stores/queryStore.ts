@@ -6,7 +6,7 @@ import type { DatabaseType, ObjectBrowserViewport, QueryResult, QueryTab, TableI
 import { orderPinnedFirst } from "@/lib/app/pinnedItems";
 import { canCancelQueryExecution } from "@/lib/sql/queryExecutionState";
 import { buildExplainSql, parseExplainResult, parseDamengExplainText } from "@/lib/diagram/explainPlan";
-import { allEditableColumnsWriteable, allPrimaryKeysPresent, analyzeEditableQuery, sourceColumnsForResult, type EditableQueryInfo, type EditableQuerySource } from "@/lib/sql/sqlAnalysis";
+import { allEditableColumnsWriteable, allPrimaryKeysPresent, sourceColumnsForResult, type EditableQueryInfo, type EditableQuerySource } from "@/lib/sql/sqlAnalysis";
 import { ACTIVE_TAB_STORAGE_KEY, OPEN_TABS_STORAGE_KEY, restoreOpenTabsPayload, restoreOpenTabsState, serializeOpenTabs } from "@/lib/app/openTabsPersistence";
 import {
   evaluateMongoAggregateSafety,
@@ -35,6 +35,7 @@ import { loadTableMetadata } from "@/lib/metadata/tableMetadataCache";
 import { quoteTableIdentifier } from "@/lib/table/tableSelectSql";
 import { connectionUsesDatabaseObjectTreeMode, connectionUsesSchemaExecutionContext, effectiveDatabaseTypeForConnection, metadataSchemaForConnection } from "@/lib/database/jdbcDialect";
 import { frontendQueryTimeoutSecsForSql, queryTimeoutSecsForConnection } from "@/lib/sql/queryTimeout";
+import { queryResultSourceLabel } from "@/lib/sql/queryResultSource";
 import { sortDataGridRows, type DataGridSortDirection } from "@/lib/dataGrid/dataGridSort";
 import { normalizeResultPageSize } from "@/lib/dataGrid/paginationPageSize";
 import { splitSqlStatementRanges } from "@/lib/sql/sqlStatementRanges";
@@ -114,30 +115,20 @@ function markQueryResultRunsRowsRaw(resultRuns: NonNullable<QueryTab["resultRuns
   return resultRuns;
 }
 
-function queryResultSourceLabel(sql: string, database: string | undefined): string | undefined {
-  const analysis = analyzeEditableQuery(sql);
-  if (!analysis) return undefined;
-  // A joined result may still expose writable target-table columns, but its tab
-  // label must not imply that the whole result came from a single table.
-  if (analysis.multiSource || (analysis.sources?.length ?? 0) > 1) return undefined;
-  const qualifier = analysis.schema || database?.trim();
-  return qualifier ? `${qualifier}.${analysis.tableName}` : analysis.tableName;
-}
-
 function annotateQueryResultSources(results: QueryResult[], sql: string, database: string | undefined, databaseType?: DatabaseType): QueryResult[] {
   const statements = splitSqlStatementRanges(sql, databaseType);
   let statementIndex = 0;
   for (const result of results) {
     const statement = statements[statementIndex++];
     if (!statement) continue;
-    annotateQueryResultSource(result, statement.sql, database);
+    annotateQueryResultSource(result, statement.sql, database, databaseType);
   }
   return results;
 }
 
-function annotateQueryResultSource(result: QueryResult, sourceStatement: string, database?: string): QueryResult {
+function annotateQueryResultSource(result: QueryResult, sourceStatement: string, database?: string, databaseType?: DatabaseType): QueryResult {
   result.sourceStatement = sourceStatement;
-  const label = queryResultSourceLabel(sourceStatement, database);
+  const label = databaseType ? queryResultSourceLabel(sourceStatement, { database, databaseType }) : undefined;
   if (label) result.sourceLabel = label;
   return result;
 }
