@@ -218,7 +218,7 @@ winget install t8y2.dbx
 DBX 提供 Web 版本，可通过 Docker 部署。示例使用 `latest` 标签以拉取当前发布版本。
 
 ```bash
-docker run -d --name dbx -p 4224:4224 -v dbx-data:/app/data t8y2/dbx:latest
+docker run -d --pull=always --name dbx -p 4224:4224 -v dbx-data:/app/data t8y2/dbx:latest
 ```
 
 这里使用跨平台的 `dbx-data` 命名卷。中国大陆用户可选用 CNB 镜像
@@ -237,6 +237,7 @@ services:
     image: t8y2/dbx:latest
     # 中国大陆用户可改用 CNB 镜像，以加快拉取速度：
     # image: docker.cnb.cool/dbxio.com/dbx:latest
+    pull_policy: always
     ports:
       - "4224:4224"
     volumes:
