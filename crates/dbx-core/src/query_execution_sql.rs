@@ -153,6 +153,10 @@ const SAFE_READ_PRAGMA_NAMES: &[&str] = &[
 
 /// Returns true if the SQL statement is a write operation (not a pure read).
 pub fn is_write_sql(sql: &str) -> bool {
+    crate::sql::split_sql_statements(sql).iter().any(|statement| is_write_sql_statement(statement))
+}
+
+fn is_write_sql_statement(sql: &str) -> bool {
     // 1. Strip comments and string literals
     let cleaned = strip_sql_comments_and_literals(sql);
     let trimmed = cleaned.trim_start();
@@ -171,9 +175,24 @@ pub fn is_write_sql(sql: &str) -> bool {
         return !is_safe_read_pragma(&upper);
     }
 
+    // SHOW CREATE returns object metadata; CREATE is part of its read-only syntax.
+    if starts_with_show_create(&upper) {
+        return false;
+    }
+
     // A statement is a write if it doesn't start with a read keyword,
     // or if it contains embedded dangerous keywords (e.g. CTE-wrapped writes like WITH ... AS (DELETE FROM ...))
     !starts_with_read || contains_dangerous_sql_keyword(sql)
+}
+
+fn starts_with_show_create(upper: &str) -> bool {
+    let Some(after_show) = upper.strip_prefix("SHOW") else {
+        return false;
+    };
+    if !after_show.is_empty() && after_show.as_bytes()[0].is_ascii_alphanumeric() {
+        return false;
+    }
+    starts_with_keyword(after_show.trim_start(), "CREATE")
 }
 
 /// Check if a PRAGMA statement is a safe read-only form.
@@ -308,6 +327,7 @@ pub fn strip_sql_comments_and_literals(sql: &str) -> String {
     let mut in_block_comment = false;
     let mut in_single_quote = false;
     let mut in_double_quote = false;
+    let mut in_backtick_quote = false;
 
     while let Some(ch) = chars.next() {
         if in_line_comment {
@@ -351,6 +371,18 @@ pub fn strip_sql_comments_and_literals(sql: &str) -> String {
             continue;
         }
 
+        if in_backtick_quote {
+            if ch == '`' {
+                if chars.peek() == Some(&'`') {
+                    chars.next();
+                } else {
+                    in_backtick_quote = false;
+                }
+            }
+            output.push(' ');
+            continue;
+        }
+
         if ch == '-' && chars.peek() == Some(&'-') {
             chars.next();
             in_line_comment = true;
@@ -372,6 +404,11 @@ pub fn strip_sql_comments_and_literals(sql: &str) -> String {
         }
         if ch == '"' {
             in_double_quote = true;
+            output.push(' ');
+            continue;
+        }
+        if ch == '`' {
+            in_backtick_quote = true;
             output.push(' ');
             continue;
         }
@@ -527,6 +564,15 @@ mod tests {
     }
 
     #[test]
+    fn contains_dangerous_sql_keyword_ignores_backtick_identifiers() {
+        for keyword in ["drop", "delete", "truncate", "alter", "update", "merge", "replace", "insert", "create"] {
+            let sql = format!("SELECT 1 AS `{keyword}`");
+            assert!(!contains_dangerous_sql_keyword(&sql), "expected safe SQL: {sql}");
+        }
+        assert!(!contains_dangerous_sql_keyword("SELECT 1 AS `before``delete`"));
+    }
+
+    #[test]
     fn is_write_sql_detects_simple_writes() {
         assert!(is_write_sql("INSERT INTO users VALUES (1)"));
         assert!(is_write_sql("UPDATE users SET name = 'x'"));
@@ -552,6 +598,58 @@ mod tests {
         assert!(!is_write_sql("EXPLAIN SELECT * FROM users"));
         assert!(!is_write_sql("PRAGMA table_info(users)"));
         assert!(!is_write_sql("FROM users SELECT *"));
+    }
+
+    #[test]
+    fn is_write_sql_allows_backtick_identifiers_with_dangerous_keywords() {
+        for keyword in ["drop", "delete", "truncate", "alter", "update", "merge", "replace", "insert", "create"] {
+            let sql = format!("SELECT 1 AS `{keyword}`");
+            assert!(!is_write_sql(&sql), "expected read-only SQL: {sql}");
+        }
+        assert!(!is_write_sql("SHOW COLUMNS FROM `delete`"));
+        assert!(!is_write_sql("DESC `delete`"));
+        assert!(!is_write_sql("SELECT 1 AS `before``delete`"));
+        assert!(!is_write_sql("SELECT 1 AS `semi;delete`; SELECT 2"));
+    }
+
+    #[test]
+    fn is_write_sql_still_blocks_writes_with_backtick_identifiers() {
+        assert!(is_write_sql("DELETE FROM `users`"));
+        assert!(is_write_sql("DROP TABLE `users`"));
+        assert!(is_write_sql("UPDATE `users` SET name = 'Ada'"));
+    }
+
+    #[test]
+    fn is_write_sql_allows_show_create_statements() {
+        for sql in [
+            "SHOW CREATE TABLE users",
+            "show create view active_users",
+            "SHOW CREATE PROCEDURE refresh_users",
+            "SHOW CREATE FUNCTION user_count",
+            "  /* metadata */\nSHOW\nCREATE TABLE users;",
+            "SHOW CREATE TABLE users; SELECT ';' AS separator",
+            "SHOW CREATE TABLE users /* ; DELETE FROM users */",
+        ] {
+            assert!(!is_write_sql(sql), "expected read-only SQL: {sql}");
+        }
+    }
+
+    #[test]
+    fn is_write_sql_blocks_writes_after_show_create() {
+        for write_sql in [
+            "DROP TABLE users",
+            "DELETE FROM users",
+            "TRUNCATE TABLE users",
+            "ALTER TABLE users ADD COLUMN active BOOLEAN",
+            "UPDATE users SET active = true",
+            "MERGE INTO users USING source ON users.id = source.id WHEN MATCHED THEN UPDATE SET active = true",
+            "REPLACE INTO users VALUES (1)",
+            "INSERT INTO users VALUES (1)",
+            "CREATE TABLE audit (id INT)",
+        ] {
+            let sql = format!("SHOW CREATE TABLE users; {write_sql}");
+            assert!(is_write_sql(&sql), "expected write SQL: {sql}");
+        }
     }
 
     #[test]
@@ -641,6 +739,8 @@ mod tests {
     fn check_read_only_success_and_error() {
         assert_eq!(check_read_only("SELECT * FROM users", "prod-db"), Ok(()));
         assert_eq!(check_read_only("WITH cte AS (SELECT 1) SELECT * FROM cte", "prod-db"), Ok(()));
+        assert_eq!(check_read_only("SHOW CREATE TABLE users", "prod-db"), Ok(()));
+        assert_eq!(check_read_only("SELECT 1 AS `delete`", "prod-db"), Ok(()));
 
         let err = check_read_only("DELETE FROM users", "prod-db");
         assert!(err.is_err());
@@ -652,6 +752,10 @@ mod tests {
         let err2 = check_read_only("UPDATE users SET name = 'x'", "reporting-db");
         assert!(err2.is_err());
         assert!(err2.unwrap_err().contains("reporting-db"));
+
+        let show_create_err = check_read_only("SHOW CREATE TABLE users; DELETE FROM users", "prod-db");
+        assert!(show_create_err.is_err());
+        assert!(show_create_err.unwrap_err().contains("Write operation"));
     }
 
     #[test]
