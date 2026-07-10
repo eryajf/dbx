@@ -1,10 +1,8 @@
 services:
   dbx:
-    container_name: dbx
-    # Docker Hub image. Pin the version so deployments stay reproducible.
-    image: t8y2/dbx:0.5.52
-    # For faster pulls in China, use the CNB image instead:
-    # image: docker.cnb.cool/dbxio.com/dbx:0.5.52
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     ports:
       - "4224:4224"
     environment:
@@ -12,5 +10,8 @@ services:
       # Uncomment when publishing DBX under a reverse-proxy subpath, e.g. https://example.com/dbx/
       # - DBX_PUBLIC_BASE_PATH=/dbx
     volumes:
-      - ./data:/app/data
+      - dbx-data:/app/data
     restart: unless-stopped
+
+volumes:
+  dbx-data:

@@ -215,32 +215,38 @@ winget install t8y2.dbx
 
 ## Self-Hosted (Docker)
 
-DBX provides a web version that can be deployed via Docker. Pin an explicit
-release tag rather than `latest` so your deployment remains reproducible.
+DBX provides a web version that can be deployed via Docker. The examples use
+the `latest` tag to pull the current release.
 
 ```bash
-docker run -d --name dbx -p 4224:4224 -v ./data:/app/data t8y2/dbx:0.5.52
+docker run -d --name dbx -p 4224:4224 -v dbx-data:/app/data t8y2/dbx:latest
 ```
 
-The `./data` directory keeps DBX data beside your current directory. Users in
-China can use the CNB image, `docker.cnb.cool/dbxio.com/dbx:0.5.52`, for faster
-pulls.
+This uses the cross-platform `dbx-data` named volume. Users in China can use
+the CNB image, `docker.cnb.cool/dbxio.com/dbx:latest`, for faster pulls.
 
-Or with Docker Compose. A ready-to-use example lives at `deploy/docker-compose.yml`;
-its `./data` directory is relative to that Compose file:
+For Docker Compose, `deploy/docker-compose.yml` remains the source-build
+configuration. To deploy a published image, use
+`deploy/docker-compose.release.yml`:
+
+```bash
+docker compose -f deploy/docker-compose.release.yml up -d
+```
 
 ```yaml
 services:
   dbx:
-    container_name: dbx
-    image: t8y2/dbx:0.5.52
+    image: t8y2/dbx:latest
     # For faster pulls in China, use the CNB image instead:
-    # image: docker.cnb.cool/dbxio.com/dbx:0.5.52
+    # image: docker.cnb.cool/dbxio.com/dbx:latest
     ports:
       - "4224:4224"
     volumes:
-      - ./data:/app/data
+      - dbx-data:/app/data
     restart: unless-stopped
+
+volumes:
+  dbx-data:
 ```
 
 Open `http://localhost:4224` in your browser. Multi-arch images (amd64 / arm64) are available.
