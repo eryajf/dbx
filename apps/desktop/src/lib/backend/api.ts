@@ -241,6 +241,12 @@ export const saveWebdavSyncSecretsPreference = forward("saveWebdavSyncSecretsPre
 export const forgetWebdavSyncSecretsPassphrase = forward("forgetWebdavSyncSecretsPassphrase");
 export const webdavSyncUpload = forward("webdavSyncUpload");
 export const webdavSyncDownload = forward("webdavSyncDownload");
+export const snippetSyncTest = forward("snippetSyncTest");
+export const snippetTokenStatus = forward("snippetTokenStatus");
+export const saveSnippetSavedToken = forward("saveSnippetSavedToken");
+export const forgetSnippetSavedToken = forward("forgetSnippetSavedToken");
+export const snippetSyncUpload = forward("snippetSyncUpload");
+export const snippetSyncDownload = forward("snippetSyncDownload");
 export const saveAiConversation = forward("saveAiConversation");
 export const loadAiConversations = forward("loadAiConversations");
 export const deleteAiConversation = forward("deleteAiConversation");
@@ -476,6 +482,11 @@ export type {
   WebDavPasswordStatus,
   WebDavSyncSummary,
   WebDavDownloadResult,
+  SnippetProvider,
+  SnippetSyncConfig,
+  SnippetSyncSummary,
+  SnippetDownloadResult,
+  SnippetTokenStatus,
   McpServerStatus,
   UpdateInfo,
   RedisBlob,

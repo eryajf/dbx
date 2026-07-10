@@ -201,6 +201,7 @@ interface DataGridProps {
   databaseType?: DatabaseType;
   connectionId?: string;
   database?: string;
+  executionDatabase?: string;
   schema?: string;
   context?: "results" | "table-data";
   sourceColumns?: Array<string | undefined>;
@@ -1353,7 +1354,7 @@ async function loadServerFilterValues(columnIndex: number, searchValue: string) 
       limit: SERVER_COLUMN_FILTER_LIMIT,
       includeCounts: true,
     });
-    const result = await api.executeQuery(props.connectionId, props.database ?? "", sql, tableMeta.schema ?? props.schema, undefined, {
+    const result = await api.executeQuery(props.connectionId, props.executionDatabase ?? props.database ?? "", sql, tableMeta.schema ?? props.schema, undefined, {
       maxRows: SERVER_COLUMN_FILTER_LIMIT,
       fetchSize: SERVER_COLUMN_FILTER_LIMIT,
       pageSize: SERVER_COLUMN_FILTER_LIMIT,
@@ -3775,7 +3776,7 @@ async function lastPage() {
   const sql = countTarget?.sql;
   if (!sql) return;
   try {
-    const result = await api.executeQuery(props.connectionId, props.database ?? "", sql, countTarget.schema);
+    const result = await api.executeQuery(props.connectionId, props.executionDatabase ?? props.database ?? "", sql, countTarget.schema);
     const total = Number(result.rows?.[0]?.[0] ?? 0);
     if (total <= 0) return;
     const lastPageNum = Math.ceil(total / pageSize.value);
@@ -3809,7 +3810,7 @@ async function calculateTotalRowCount() {
   try {
     const countTarget = await buildCurrentCountTarget();
     if (!countTarget?.sql) return;
-    const result = await api.executeQuery(props.connectionId, props.database ?? "", countTarget.sql, countTarget.schema);
+    const result = await api.executeQuery(props.connectionId, props.executionDatabase ?? props.database ?? "", countTarget.sql, countTarget.schema);
     const total = Number(result.rows?.[0]?.[0] ?? 0);
     if (Number.isFinite(total) && total >= 0) {
       manualTotalRowCount.value = total;
@@ -3867,7 +3868,7 @@ const editor = useDataGridEditor({
   editable: computed(() => props.editable),
   databaseType: computed(() => props.databaseType),
   connectionId: computed(() => props.connectionId),
-  database: computed(() => props.database),
+  database: computed(() => props.executionDatabase ?? props.database),
   tableMeta: computed(() => props.tableMeta),
   sourceColumns: computed(() => props.sourceColumns),
   canEditExistingRows,
@@ -6188,7 +6189,7 @@ const {
   copyInsertTargetLabel: computed(() => props.tableMeta?.tableName ?? props.customSaveHandler?.targetLabel),
   databaseType: computed(() => props.databaseType),
   connectionId: computed(() => props.connectionId),
-  database: computed(() => props.database),
+  database: computed(() => props.executionDatabase ?? props.database),
   context: computed(() => props.context),
   sourceColumns: visibleSourceColumns,
   columnTypes: visibleColumnTypes,

@@ -571,7 +571,13 @@ async fn main() {
             post(routes::cloud_sync::forget_webdav_sync_secrets_passphrase),
         )
         .route("/cloud-sync/webdav/upload", post(routes::cloud_sync::webdav_sync_upload))
-        .route("/cloud-sync/webdav/download", post(routes::cloud_sync::webdav_sync_download));
+        .route("/cloud-sync/webdav/download", post(routes::cloud_sync::webdav_sync_download))
+        .route("/cloud-sync/snippet/test", post(routes::cloud_sync::snippet_sync_test))
+        .route("/cloud-sync/snippet/token-status", post(routes::cloud_sync::snippet_token_status))
+        .route("/cloud-sync/snippet/save-token", post(routes::cloud_sync::save_snippet_saved_token))
+        .route("/cloud-sync/snippet/forget-token", post(routes::cloud_sync::forget_snippet_saved_token))
+        .route("/cloud-sync/snippet/upload", post(routes::cloud_sync::snippet_sync_upload))
+        .route("/cloud-sync/snippet/download", post(routes::cloud_sync::snippet_sync_download));
 
     let api = add_mq_routes(api)
         .layer(middleware::from_fn_with_state(web_state.clone(), auth::auth_middleware))

@@ -886,7 +886,9 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
 
   async function exportFullTableDataViaBackend(format: "csv" | "xlsx" | "json" | "markdown" | "sql", rowIds?: number[]): Promise<boolean> {
     const meta = tableMeta.value;
-    if (rowIds !== undefined || context.value !== "table-data" || !meta || !connectionId.value || !database.value) {
+    // The backend table exporter currently builds two-part table names. External
+    // Doris/StarRocks catalogs need the data-tab paginator's three-part SQL.
+    if (rowIds !== undefined || context.value !== "table-data" || !meta || meta.catalog || !connectionId.value || !database.value) {
       return false;
     }
 

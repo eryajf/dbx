@@ -55,12 +55,18 @@ import {
   aiTestConnection,
   checkMcpServerStatus,
   installMcpServer,
+  forgetSnippetSavedToken,
   forgetWebdavSyncSecretsPassphrase,
   forgetWebdavSavedPassword,
   getAppSupportInfo,
   listSystemFonts,
   saveWebdavSyncSecretsPreference,
   saveWebdavSavedPassword,
+  saveSnippetSavedToken,
+  snippetSyncDownload,
+  snippetSyncTest,
+  snippetSyncUpload,
+  snippetTokenStatus,
   webdavPasswordStatus,
   webdavSyncDownload,
   webdavSyncSecretsStatus,
@@ -69,6 +75,8 @@ import {
   type AppSupportInfo,
   type AiModelInfo,
   type McpServerStatus,
+  type SnippetProvider,
+  type SnippetSyncConfig,
   type WebDavConfig,
 } from "@/lib/backend/api";
 import { eventToShortcut } from "@/lib/editor/keyboardShortcuts";
@@ -1301,8 +1309,10 @@ const mcpStatusLoading = ref(false);
 const mcpStatusError = ref("");
 const mcpCopied = ref<"" | McpCopyKind>("");
 const mcpConfigTab = ref<McpConfigTab>("claude");
-const mcpReadonlyMode = ref(false);
-const mcpAllowDangerous = ref(false);
+const MCP_READONLY_STORAGE_KEY = "dbx-mcp-config-readonly";
+const MCP_ALLOW_DANGEROUS_STORAGE_KEY = "dbx-mcp-config-allow-dangerous";
+const mcpReadonlyMode = ref(localStorage.getItem(MCP_READONLY_STORAGE_KEY) === "true");
+const mcpAllowDangerous = ref(localStorage.getItem(MCP_ALLOW_DANGEROUS_STORAGE_KEY) === "true");
 const mcpInstalling = ref(false);
 const mcpInstallMessage = ref("");
 const mcpInstallError = ref(false);
@@ -1355,7 +1365,12 @@ const mcpCommand = computed(() => {
 });
 
 watch(mcpReadonlyMode, (value) => {
+  localStorage.setItem(MCP_READONLY_STORAGE_KEY, String(value));
   if (value) mcpAllowDangerous.value = false;
+});
+
+watch(mcpAllowDangerous, (value) => {
+  localStorage.setItem(MCP_ALLOW_DANGEROUS_STORAGE_KEY, String(value));
 });
 
 async function refreshMcpStatus() {
@@ -1423,8 +1438,104 @@ const webdavAutoUploadIntervalMinutes = ref(Number(localStorage.getItem("dbx-web
 const webdavBusy = ref<"" | "test" | "upload" | "download">("");
 const webdavMessage = ref("");
 const webdavError = ref(false);
+const syncMethodTab = ref<"webdav" | "snippet">("webdav");
+
+const snippetProvider = ref<SnippetProvider>((localStorage.getItem("dbx-snippet-provider") as SnippetProvider) || "github");
+const snippetId = ref(localStorage.getItem(`dbx-snippet-id-${snippetProvider.value}`) || "");
+const snippetToken = ref("");
+const snippetRememberToken = ref(localStorage.getItem(`dbx-snippet-remember-token-${snippetProvider.value}`) === "true");
+const snippetHasSavedToken = ref(false);
+const snippetBusy = ref<"" | "test" | "upload" | "download">("");
+const snippetMessage = ref("");
+const snippetError = ref(false);
 
 const webdavReady = computed(() => !!webdavEndpoint.value.trim() && !webdavBusy.value && (!webdavSyncSecrets.value || !!webdavSecretsPassphrase.value.trim() || webdavHasSavedSecretsPassphrase.value));
+const snippetReady = computed(() => !snippetBusy.value && (!!snippetToken.value.trim() || snippetHasSavedToken.value));
+
+function currentSnippetConfig(): SnippetSyncConfig {
+  return {
+    provider: snippetProvider.value,
+    token: snippetToken.value.trim() || undefined,
+    snippetId: snippetId.value.trim() || undefined,
+  };
+}
+
+function currentSnippetAccountConfig(): SnippetSyncConfig {
+  return { ...currentSnippetConfig(), token: undefined };
+}
+
+async function refreshSnippetTokenStatus() {
+  try {
+    const status = await snippetTokenStatus(currentSnippetAccountConfig());
+    snippetHasSavedToken.value = status.hasSavedToken;
+    if (status.hasSavedToken) snippetRememberToken.value = true;
+  } catch {
+    snippetHasSavedToken.value = false;
+  }
+}
+
+async function applySnippetTokenPreference() {
+  const token = snippetToken.value.trim();
+  if (snippetRememberToken.value && token) {
+    await saveSnippetSavedToken(currentSnippetAccountConfig(), token);
+    snippetHasSavedToken.value = true;
+    return;
+  }
+  if (!snippetRememberToken.value && snippetHasSavedToken.value) {
+    await forgetSnippetSavedToken(currentSnippetAccountConfig());
+    snippetHasSavedToken.value = false;
+  }
+}
+
+async function runSnippetAction(kind: "test" | "upload" | "download", action: () => Promise<string>) {
+  snippetBusy.value = kind;
+  snippetMessage.value = "";
+  snippetError.value = false;
+  try {
+    localStorage.setItem("dbx-snippet-provider", snippetProvider.value);
+    localStorage.setItem(`dbx-snippet-id-${snippetProvider.value}`, snippetId.value.trim());
+    localStorage.setItem(`dbx-snippet-remember-token-${snippetProvider.value}`, String(snippetRememberToken.value));
+    await applySnippetTokenPreference();
+    await applyWebDavSyncSecretsPreference();
+    snippetMessage.value = await action();
+  } catch (e: any) {
+    snippetMessage.value = e?.message || String(e);
+    snippetError.value = true;
+  } finally {
+    snippetBusy.value = "";
+  }
+}
+
+async function testSnippetSync() {
+  await runSnippetAction("test", async () => {
+    await snippetSyncTest(currentSnippetConfig());
+    return t("settings.syncSnippetTestSuccess");
+  });
+}
+
+async function uploadSnippetSnapshot() {
+  await runSnippetAction("upload", async () => {
+    const summary = await snippetSyncUpload(currentSnippetConfig(), settingsStore.editorSettings, webdavSyncSecrets.value ? webdavSecretsPassphrase.value : undefined);
+    snippetId.value = summary.snippetId;
+    localStorage.setItem(`dbx-snippet-id-${snippetProvider.value}`, summary.snippetId);
+    return t("settings.syncSnippetUploadSuccess", { bytes: summary.bytes, id: summary.snippetId });
+  });
+}
+
+async function downloadSnippetSnapshot() {
+  if (!snippetId.value.trim() || !window.confirm(t("settings.syncDownloadConfirm"))) return;
+  await runSnippetAction("download", async () => {
+    const result = await snippetSyncDownload(currentSnippetConfig(), webdavSyncSecrets.value ? webdavSecretsPassphrase.value : undefined);
+    if (result.editorSettings && typeof result.editorSettings === "object") settingsStore.updateEditorSettings(result.editorSettings as any);
+    await settingsStore.updateDesktopSettings(result.desktopSettings);
+    await connectionStore.initFromDisk();
+    await savedSqlStore.initFromStorage();
+    let message = t("settings.syncSnippetDownloadSuccess", { bytes: result.summary.bytes, id: result.summary.snippetId });
+    if (result.applySummary.encryptedSecretsPresent && !result.applySummary.secretsApplied) message += ` ${t("settings.syncSecretsSkipped")}`;
+    if (result.applySummary.secretsApplied) message += ` ${t("settings.syncSecretsApplied")}`;
+    return message;
+  });
+}
 
 function currentWebDavConfig(): WebDavConfig {
   return {
@@ -1607,9 +1718,11 @@ watch(
       }
       editSidebarTablePageSize.value = settingsStore.desktopSettings.sidebar_table_page_size ?? DEFAULT_SIDEBAR_TABLE_PAGE_SIZE;
       webdavPassword.value = "";
+      snippetToken.value = "";
       webdavSecretsPassphrase.value = "";
       await refreshWebDavPasswordStatus();
       await refreshWebDavSyncSecretsStatus();
+      await refreshSnippetTokenStatus();
       syncAiEditState();
       if (!isWeb && activeSettingsTab.value === "mcp") void refreshMcpStatus();
       if (!isWeb && activeSettingsTab.value === "ai" && aiIsCodexCli.value) void ensureCodexMcpStatus();
@@ -1645,6 +1758,13 @@ watch(webdavRememberPassword, (val) => {
 watch([webdavAutoUploadEnabled, webdavAutoUploadIntervalMinutes], () => {
   webdavAutoUploadIntervalMinutes.value = normalizedWebDavAutoUploadInterval(webdavAutoUploadIntervalMinutes.value);
   rememberWebDavFields();
+});
+watch(snippetProvider, (provider) => {
+  localStorage.setItem("dbx-snippet-provider", provider);
+  snippetId.value = localStorage.getItem(`dbx-snippet-id-${provider}`) || "";
+  snippetRememberToken.value = localStorage.getItem(`dbx-snippet-remember-token-${provider}`) === "true";
+  snippetToken.value = "";
+  void refreshSnippetTokenStatus();
 });
 
 watch(activeSettingsTab, (tab) => {
@@ -3611,91 +3731,199 @@ onUnmounted(cleanupPreviewEditor);
               </div>
             </section>
 
-            <section v-else-if="activeSettingsTab === 'sync'" class="flex flex-col gap-5 py-2">
-              <div class="space-y-1">
-                <div class="flex items-center gap-2 text-sm font-medium">
-                  <Cloud class="h-4 w-4 text-muted-foreground" />
-                  {{ t("settings.syncWebDavTitle") }}
-                </div>
-                <p class="text-xs text-muted-foreground">{{ t("settings.syncWebDavDescription") }}</p>
-              </div>
+            <section v-else-if="activeSettingsTab === 'sync'" class="py-2">
+              <Tabs v-model="syncMethodTab" class="w-full">
+                <TabsList class="grid w-full grid-cols-2">
+                  <TabsTrigger value="webdav">WebDAV</TabsTrigger>
+                  <TabsTrigger value="snippet">GitHub / Gitee</TabsTrigger>
+                </TabsList>
 
-              <div class="grid gap-4 md:grid-cols-2">
-                <div class="space-y-2 md:col-span-2">
-                  <Label for="webdav-endpoint">{{ t("settings.syncEndpoint") }}</Label>
-                  <Input id="webdav-endpoint" v-model="webdavEndpoint" autocomplete="off" placeholder="https://example.com/remote.php/dav/files/user/" />
-                </div>
-                <div class="space-y-2">
-                  <Label for="webdav-username">{{ t("settings.syncUsername") }}</Label>
-                  <Input id="webdav-username" v-model="webdavUsername" autocomplete="username" />
-                </div>
-                <div class="space-y-2">
-                  <Label for="webdav-password">{{ t("settings.syncPassword") }}</Label>
-                  <div class="relative">
-                    <PasswordInput id="webdav-password" v-model="webdavPassword" :placeholder="webdavHasSavedPassword ? '••••••••' : t('settings.syncPasswordPlaceholder')" :disabled="webdavHasSavedPassword" :show-toggle="!webdavHasSavedPassword" autocomplete="current-password" />
-                    <button
-                      v-if="webdavHasSavedPassword"
-                      type="button"
-                      class="absolute right-1 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
-                      :title="t('settings.syncClearSavedPassword')"
-                      @click="
-                        webdavRememberPassword = false;
-                        forgetWebdavSavedPassword(currentWebDavAccountConfig());
-                        webdavHasSavedPassword = false;
-                        webdavPassword = '';
-                      "
-                    >
-                      <X class="size-3.5" />
-                    </button>
+                <TabsContent value="webdav" class="mt-5 space-y-5">
+                  <div class="space-y-1">
+                    <div class="flex items-center gap-2 text-sm font-medium">
+                      <Cloud class="h-4 w-4 text-muted-foreground" />
+                      {{ t("settings.syncWebDavTitle") }}
+                    </div>
+                    <p class="text-xs text-muted-foreground">{{ t("settings.syncWebDavDescription") }}</p>
                   </div>
-                  <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                    <label class="flex items-center gap-2">
-                      <input v-model="webdavRememberPassword" type="checkbox" class="h-4 w-4 shrink-0 accent-primary" />
-                      <span>
-                        {{ t("settings.syncRememberWebDavPassword") }}
-                        <span v-if="webdavHasSavedPassword">{{ t("settings.syncSavedPassword") }}</span>
-                      </span>
-                    </label>
-                    <HelpTooltip :label="t('settings.syncRememberWebDavPassword')">
-                      {{ t("settings.syncRememberWebDavPasswordDescription") }}
-                    </HelpTooltip>
-                  </div>
-                </div>
-                <div class="space-y-2 md:col-span-2">
-                  <Label for="webdav-remote-path">{{ t("settings.syncRemotePath") }}</Label>
-                  <Input id="webdav-remote-path" v-model="webdavRemotePath" autocomplete="off" />
-                  <p class="text-xs text-muted-foreground">{{ t("settings.syncRemotePathDescription") }}</p>
-                </div>
-                <div class="space-y-2 md:col-span-2 rounded-md border bg-muted/20 px-3 py-3">
-                  <label class="flex items-center gap-2 text-xs">
-                    <input v-model="webdavAutoUploadEnabled" type="checkbox" class="h-4 w-4 shrink-0 accent-primary" />
-                    <span class="font-medium">{{ t("settings.syncAutoUpload") }}</span>
-                  </label>
-                  <div class="flex items-center gap-2">
-                    <Label for="webdav-auto-upload-interval" class="text-xs text-muted-foreground">{{ t("settings.syncAutoUploadInterval") }}</Label>
-                    <Input id="webdav-auto-upload-interval" v-model.number="webdavAutoUploadIntervalMinutes" type="number" min="1" max="1440" step="1" class="h-7 w-24 text-xs" :disabled="!webdavAutoUploadEnabled" />
-                    <span class="text-xs text-muted-foreground">{{ t("settings.syncAutoUploadMinutes") }}</span>
-                  </div>
-                  <p class="text-xs text-muted-foreground">{{ t("settings.syncAutoUploadDescription") }}</p>
-                </div>
-              </div>
 
-              <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                {{ t("settings.syncSecretNotice") }}
-              </div>
+                  <div class="grid gap-4 md:grid-cols-2">
+                    <div class="space-y-2 md:col-span-2">
+                      <Label for="webdav-endpoint">{{ t("settings.syncEndpoint") }}</Label>
+                      <Input id="webdav-endpoint" v-model="webdavEndpoint" autocomplete="off" placeholder="https://example.com/remote.php/dav/files/user/" />
+                    </div>
+                    <div class="space-y-2">
+                      <Label for="webdav-username">{{ t("settings.syncUsername") }}</Label>
+                      <Input id="webdav-username" v-model="webdavUsername" autocomplete="username" />
+                    </div>
+                    <div class="space-y-2">
+                      <Label for="webdav-password">{{ t("settings.syncPassword") }}</Label>
+                      <div class="relative">
+                        <PasswordInput id="webdav-password" v-model="webdavPassword" :placeholder="webdavHasSavedPassword ? '••••••••' : t('settings.syncPasswordPlaceholder')" :disabled="webdavHasSavedPassword" :show-toggle="!webdavHasSavedPassword" autocomplete="current-password" />
+                        <button
+                          v-if="webdavHasSavedPassword"
+                          type="button"
+                          class="absolute right-1 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
+                          :title="t('settings.syncClearSavedPassword')"
+                          @click="
+                            webdavRememberPassword = false;
+                            forgetWebdavSavedPassword(currentWebDavAccountConfig());
+                            webdavHasSavedPassword = false;
+                            webdavPassword = '';
+                          "
+                        >
+                          <X class="size-3.5" />
+                        </button>
+                      </div>
+                      <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                        <label class="flex items-center gap-2">
+                          <input v-model="webdavRememberPassword" type="checkbox" class="h-4 w-4 shrink-0 accent-primary" />
+                          <span>
+                            {{ t("settings.syncRememberWebDavPassword") }}
+                            <span v-if="webdavHasSavedPassword">{{ t("settings.syncSavedPassword") }}</span>
+                          </span>
+                        </label>
+                        <HelpTooltip :label="t('settings.syncRememberWebDavPassword')">
+                          {{ t("settings.syncRememberWebDavPasswordDescription") }}
+                        </HelpTooltip>
+                      </div>
+                    </div>
+                    <div class="space-y-2 md:col-span-2">
+                      <Label for="webdav-remote-path">{{ t("settings.syncRemotePath") }}</Label>
+                      <Input id="webdav-remote-path" v-model="webdavRemotePath" autocomplete="off" />
+                      <p class="text-xs text-muted-foreground">{{ t("settings.syncRemotePathDescription") }}</p>
+                    </div>
+                    <div class="space-y-2 md:col-span-2 rounded-md border bg-muted/20 px-3 py-3">
+                      <label class="flex items-center gap-2 text-xs">
+                        <input v-model="webdavAutoUploadEnabled" type="checkbox" class="h-4 w-4 shrink-0 accent-primary" />
+                        <span class="font-medium">{{ t("settings.syncAutoUpload") }}</span>
+                      </label>
+                      <div class="flex items-center gap-2">
+                        <Label for="webdav-auto-upload-interval" class="text-xs text-muted-foreground">{{ t("settings.syncAutoUploadInterval") }}</Label>
+                        <Input id="webdav-auto-upload-interval" v-model.number="webdavAutoUploadIntervalMinutes" type="number" min="1" max="1440" step="1" class="h-7 w-24 text-xs" :disabled="!webdavAutoUploadEnabled" />
+                        <span class="text-xs text-muted-foreground">{{ t("settings.syncAutoUploadMinutes") }}</span>
+                      </div>
+                      <p class="text-xs text-muted-foreground">{{ t("settings.syncAutoUploadDescription") }}</p>
+                    </div>
+                  </div>
 
-              <div class="space-y-3 rounded-md border bg-muted/20 px-3 py-3">
+                  <div v-if="webdavMessage" class="text-xs" :class="webdavError ? 'text-destructive' : 'text-green-600 dark:text-green-400'">
+                    {{ webdavMessage }}
+                  </div>
+                  <div class="flex flex-wrap justify-end gap-2">
+                    <Button variant="outline" size="sm" :disabled="!webdavReady" @click="testWebDav">
+                      <Loader2 v-if="webdavBusy === 'test'" class="mr-1 h-3 w-3 animate-spin" />
+                      {{ t("settings.syncTest") }}
+                    </Button>
+                    <Button variant="outline" size="sm" :disabled="!webdavReady" @click="downloadWebDavSnapshot">
+                      <Loader2 v-if="webdavBusy === 'download'" class="mr-1 h-3 w-3 animate-spin" />
+                      <Download v-else class="mr-1 h-3 w-3" />
+                      {{ t("settings.syncDownload") }}
+                    </Button>
+                    <Button size="sm" :disabled="!webdavReady" @click="uploadWebDavSnapshot">
+                      <Loader2 v-if="webdavBusy === 'upload'" class="mr-1 h-3 w-3 animate-spin" />
+                      <Upload v-else class="mr-1 h-3 w-3" />
+                      {{ t("settings.syncUpload") }}
+                    </Button>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="snippet" class="mt-5 space-y-5">
+                  <div class="space-y-1">
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="flex items-center gap-2 text-sm font-medium">
+                        <Cloud class="h-4 w-4 text-muted-foreground" />
+                        {{ t("settings.syncSnippetTitle") }}
+                      </div>
+                      <Button type="button" variant="ghost" size="sm" class="h-7 px-2 text-xs" @click="openExternalUrl(`https://dbxio.com/${currentLocale() === 'zh-CN' ? 'cn' : 'en'}/docs/cloud-sync`)">
+                        <ExternalLink class="mr-1 h-3 w-3" />
+                        {{ t("settings.syncSnippetGuide") }}
+                      </Button>
+                    </div>
+                    <p class="text-xs text-muted-foreground">{{ t("settings.syncSnippetDescription") }}</p>
+                  </div>
+
+                  <div class="grid gap-4 rounded-md border p-4 md:grid-cols-2">
+                    <div class="space-y-2">
+                      <Label>{{ t("settings.syncSnippetProvider") }}</Label>
+                      <Select v-model="snippetProvider">
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="github">GitHub Gist</SelectItem>
+                          <SelectItem value="gitee">Gitee 代码片段</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div class="space-y-2">
+                      <Label for="snippet-sync-id">{{ t("settings.syncSnippetId") }}</Label>
+                      <Input id="snippet-sync-id" v-model="snippetId" autocomplete="off" :placeholder="t('settings.syncSnippetIdPlaceholder')" />
+                    </div>
+                    <div class="space-y-2 md:col-span-2">
+                      <Label for="snippet-sync-token">{{ t("settings.syncSnippetToken") }}</Label>
+                      <div class="relative">
+                        <PasswordInput id="snippet-sync-token" v-model="snippetToken" :placeholder="snippetHasSavedToken ? '••••••••' : ''" :disabled="snippetHasSavedToken" :show-toggle="!snippetHasSavedToken" autocomplete="off" />
+                        <button
+                          v-if="snippetHasSavedToken"
+                          type="button"
+                          class="absolute right-1 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                          :title="t('settings.syncClearSavedPassword')"
+                          @click="
+                            snippetRememberToken = false;
+                            forgetSnippetSavedToken(currentSnippetAccountConfig());
+                            snippetHasSavedToken = false;
+                            snippetToken = '';
+                          "
+                        >
+                          <X class="size-3.5" />
+                        </button>
+                      </div>
+                      <label class="flex items-center gap-2 text-xs text-muted-foreground">
+                        <input v-model="snippetRememberToken" type="checkbox" class="h-4 w-4 shrink-0 accent-primary" />
+                        <span>{{ t("settings.syncSnippetRememberToken") }}</span>
+                      </label>
+                      <p class="text-xs text-muted-foreground">{{ t("settings.syncSnippetTokenDescription") }}</p>
+                    </div>
+                    <div class="flex flex-wrap items-center justify-between gap-3 md:col-span-2">
+                      <div v-if="snippetMessage" class="min-w-0 flex-1 text-xs" :class="snippetError ? 'text-destructive' : 'text-green-600 dark:text-green-400'">
+                        {{ snippetMessage }}
+                      </div>
+                      <div v-else class="flex-1" />
+                      <div class="flex shrink-0 flex-wrap justify-end gap-2">
+                        <Button variant="outline" size="sm" :disabled="!snippetReady" @click="testSnippetSync">
+                          <Loader2 v-if="snippetBusy === 'test'" class="mr-1 h-3 w-3 animate-spin" />
+                          {{ t("settings.syncTest") }}
+                        </Button>
+                        <Button variant="outline" size="sm" :disabled="!snippetReady || !snippetId.trim()" @click="downloadSnippetSnapshot">
+                          <Loader2 v-if="snippetBusy === 'download'" class="mr-1 h-3 w-3 animate-spin" />
+                          <Download v-else class="mr-1 h-3 w-3" />
+                          {{ t("settings.syncDownload") }}
+                        </Button>
+                        <Button size="sm" :disabled="!snippetReady" @click="uploadSnippetSnapshot">
+                          <Loader2 v-if="snippetBusy === 'upload'" class="mr-1 h-3 w-3 animate-spin" />
+                          <Upload v-else class="mr-1 h-3 w-3" />
+                          {{ t("settings.syncUpload") }}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </TabsContent>
+              </Tabs>
+
+              <div class="mt-5 space-y-3 rounded-md border bg-muted/20 px-3 py-3">
                 <div class="flex items-center justify-between gap-4">
                   <div class="space-y-1">
-                    <Label for="webdav-sync-secrets">{{ t("settings.syncSecrets") }}</Label>
-                    <p class="text-xs text-muted-foreground">{{ t("settings.syncSecretsDescription") }}</p>
+                    <Label for="sync-secrets">{{ t("settings.syncSecrets") }}</Label>
+                    <p class="text-xs text-muted-foreground">{{ t("settings.syncSecretsSharedDescription") }}</p>
                   </div>
-                  <Switch id="webdav-sync-secrets" v-model="webdavSyncSecrets" />
+                  <Switch id="sync-secrets" v-model="webdavSyncSecrets" />
+                </div>
+                <div class="rounded-md border bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+                  {{ t("settings.syncSecretNotice") }}
                 </div>
                 <div v-if="webdavSyncSecrets" class="space-y-2">
-                  <Label for="webdav-secrets-passphrase">{{ t("settings.syncSecretsPassphrase") }}</Label>
+                  <Label for="sync-secrets-passphrase">{{ t("settings.syncSecretsPassphrase") }}</Label>
                   <div class="flex items-center gap-2">
-                    <PasswordInput id="webdav-secrets-passphrase" v-model="webdavSecretsPassphrase" class="min-w-0 flex-1" :placeholder="webdavHasSavedSecretsPassphrase ? '••••••••' : ''" :show-toggle="!webdavHasSavedSecretsPassphrase || !!webdavSecretsPassphrase" autocomplete="new-password" />
+                    <PasswordInput id="sync-secrets-passphrase" v-model="webdavSecretsPassphrase" class="min-w-0 flex-1" :placeholder="webdavHasSavedSecretsPassphrase ? '••••••••' : ''" :show-toggle="!webdavHasSavedSecretsPassphrase || !!webdavSecretsPassphrase" autocomplete="new-password" />
                     <Button
                       v-if="webdavHasSavedSecretsPassphrase"
                       type="button"
@@ -4025,6 +4253,7 @@ onUnmounted(cleanupPreviewEditor);
               </div>
 
               <div class="space-y-2">
+                <p class="text-xs text-muted-foreground">{{ t("settings.mcpConfigOptionsHint") }}</p>
                 <div class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
                   <div class="space-y-1">
                     <Label for="mcp-readonly-mode">{{ t("settings.mcpReadonlyMode") }}</Label>
@@ -4344,24 +4573,6 @@ onUnmounted(cleanupPreviewEditor);
           <DialogFooter v-else-if="activeSettingsTab === 'sync'" class="mx-0 mb-0 flex-row flex-wrap items-center justify-end gap-2 rounded-none border-t border-border/60 bg-transparent px-0 pb-0 pt-3 sm:flex-row sm:gap-2 [&>button]:w-auto [&>button]:shrink-0">
             <Button variant="outline" @click="closeSettings">
               {{ t("common.close") }}
-            </Button>
-            <p v-if="webdavMessage" class="text-xs self-center truncate max-w-[280px]" :class="webdavError ? 'text-destructive' : 'text-green-500'">
-              {{ webdavMessage }}
-            </p>
-            <div class="flex-1" />
-            <Button variant="outline" :disabled="!webdavReady" @click="testWebDav">
-              <Loader2 v-if="webdavBusy === 'test'" class="mr-1 h-3 w-3 animate-spin" />
-              {{ t("settings.syncTest") }}
-            </Button>
-            <Button variant="outline" :disabled="!webdavReady" @click="downloadWebDavSnapshot">
-              <Loader2 v-if="webdavBusy === 'download'" class="mr-1 h-3 w-3 animate-spin" />
-              <Download v-else class="mr-1 h-3 w-3" />
-              {{ t("settings.syncDownload") }}
-            </Button>
-            <Button :disabled="!webdavReady" @click="uploadWebDavSnapshot">
-              <Loader2 v-if="webdavBusy === 'upload'" class="mr-1 h-3 w-3 animate-spin" />
-              <Upload v-else class="mr-1 h-3 w-3" />
-              {{ t("settings.syncUpload") }}
             </Button>
           </DialogFooter>
 

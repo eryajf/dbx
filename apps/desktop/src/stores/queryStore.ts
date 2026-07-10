@@ -30,6 +30,7 @@ import { usesAgentCursorForQuery } from "@/lib/database/databaseDriverManifest";
 import { canUseKeylessRowPredicate } from "@/lib/table/tableEditing";
 import { TABLE_DATA_EXPORT_PAGE_SIZE } from "@/lib/table/tableDataExport";
 import { tableMetaForDataTab } from "@/lib/table/tableDataTabMeta";
+import { dataTabExecutionDatabase } from "@/lib/table/dataTabExecutionDatabase";
 import { tableOpenPageLimit } from "@/lib/table/tableOpenPageLimit";
 import { loadTableMetadata } from "@/lib/metadata/tableMetadataCache";
 import { quoteTableIdentifier } from "@/lib/table/tableSelectSql";
@@ -340,7 +341,10 @@ export const useQueryStore = defineStore("query", () => {
     const sessionId = tab?.resultSessionId ?? tab?.result?.session_id;
     if (!tab || !sessionId || sessionId === preserveSessionId) return;
     try {
-      await api.closeQuerySession(tab.connectionId, tab.database, sessionId, tab.id);
+      const catalog = tab.mode === "data" ? tab.tableMeta?.catalog : undefined;
+      const connection = catalog ? useConnectionStore().getConfig(tab.connectionId) : undefined;
+      const executionDatabase = dataTabExecutionDatabase(connection, tab.database, catalog);
+      await api.closeQuerySession(tab.connectionId, executionDatabase, sessionId, tab.id);
     } catch (error) {
       console.warn("[DBX][query-session:close:error]", { tabId: tab.id, sessionId, error });
     } finally {
@@ -359,9 +363,12 @@ export const useQueryStore = defineStore("query", () => {
 
   async function closeClientConnectionSession(tab: QueryTab | undefined) {
     if (!tab?.connectionId) return;
+    const catalog = tab.mode === "data" ? tab.tableMeta?.catalog : undefined;
+    const connection = catalog ? useConnectionStore().getConfig(tab.connectionId) : undefined;
+    const executionDatabase = dataTabExecutionDatabase(connection, tab.database, catalog);
     const clientSessionIds = [tabClientSessionId(tab), ...BACKGROUND_CLIENT_SESSION_SUFFIXES.map((suffix) => tabClientSessionId(tab, suffix))];
     for (const clientSessionId of clientSessionIds) {
-      await closeClientSessionId(tab.connectionId, tab.database, clientSessionId, { tabId: tab.id });
+      await closeClientSessionId(tab.connectionId, executionDatabase, clientSessionId, { tabId: tab.id });
     }
   }
 
@@ -2222,6 +2229,7 @@ export const useQueryStore = defineStore("query", () => {
         mongoCommands = splitMongoCommandRanges(sql);
       }
       const effectiveDbType = effectiveDatabaseTypeForConnection(conn);
+      const executionDatabase = dataTabExecutionDatabase(conn, tab.database, tab.mode === "data" ? tab.tableMeta?.catalog : undefined);
       const useAgentCursor = usesAgentCursorForQuery(conn?.db_type);
       const queryTimeoutSecs = queryTimeoutSecsForConnection(conn);
       const settingsStore = useSettingsStore();
@@ -2539,11 +2547,11 @@ export const useQueryStore = defineStore("query", () => {
       if (tab.autoCommit === false) {
         if (!tab.txnSessionId) {
           console.info("[DBX][executeTabSql:begin-manual-txn:start]", { traceId, elapsed: elapsed() });
-          tab.txnSessionId = await api.beginManualTransaction(tab.connectionId, tab.database, executionSchema);
+          tab.txnSessionId = await api.beginManualTransaction(tab.connectionId, executionDatabase, executionSchema);
           console.info("[DBX][executeTabSql:begin-manual-txn:done]", { traceId, txnSessionId: tab.txnSessionId, elapsed: elapsed() });
         }
         console.info("[DBX][executeTabSql:execute-in-txn:invoke]", { traceId, txnSessionId: tab.txnSessionId, elapsed: elapsed() });
-        executionPromise = api.executeInManualTransaction(tab.txnSessionId, sqlToExecute, tab.database, executionSchema, pageLimit);
+        executionPromise = api.executeInManualTransaction(tab.txnSessionId, sqlToExecute, executionDatabase, executionSchema, pageLimit);
       } else {
         console.info("[DBX][executeTabSql:execute-multi:start]", { traceId, elapsed: elapsed() });
         // Query and data tabs use a tab-scoped pool so repeated executions keep
@@ -2569,7 +2577,7 @@ export const useQueryStore = defineStore("query", () => {
           optionKeys: Object.keys(executionOptions),
           clientSession: Boolean(clientSessionId),
         });
-        executionPromise = api.executeMulti(tab.connectionId, tab.database, sqlToExecute, executionSchema, executionId, executionOptions);
+        executionPromise = api.executeMulti(tab.connectionId, executionDatabase, sqlToExecute, executionSchema, executionId, executionOptions);
       }
       const results = annotateQueryResultSources(markQueryResultsRowsRaw(await withFrontendQueryTimeout(executionPromise, frontendTimeoutSecs, t("editor.queryTimeoutError", { seconds: frontendTimeoutSecs }))), queryBaseSql, sourceLabelDatabase, effectiveDbType);
       console.info("[DBX][executeTabSql:execute-multi:done]", {
@@ -3089,6 +3097,7 @@ export const useQueryStore = defineStore("query", () => {
       const sortOrder = tab.resultSortColumn && tab.resultSortDirection ? `${quoteTableIdentifier(effectiveDbType, tab.resultSortColumn)} ${tab.resultSortDirection.toUpperCase()}` : undefined;
       const orderBy = tab.orderByInput?.trim() || sortOrder;
       const queryTimeoutSecs = queryTimeoutSecsForConnection(conn);
+      const executionDatabase = dataTabExecutionDatabase(conn, tab.database, tableMeta.catalog);
       const rows: QueryResult["rows"] = [];
       let columns: string[] = [];
       let executionTimeMs = 0;
@@ -3111,7 +3120,7 @@ export const useQueryStore = defineStore("query", () => {
             limit: pageLimit,
             offset,
           });
-          const results = await api.executeMulti(tab.connectionId, tab.database, sql, undefined, exportExecutionId, {
+          const results = await api.executeMulti(tab.connectionId, executionDatabase, sql, undefined, exportExecutionId, {
             maxRows: pageLimit,
             fetchSize: pageLimit,
             clientSessionId,
@@ -3127,7 +3136,7 @@ export const useQueryStore = defineStore("query", () => {
           offset += result.rows.length;
         }
       } finally {
-        void closeClientSessionId(tab.connectionId, tab.database, clientSessionId, { tabId: tab.id });
+        void closeClientSessionId(tab.connectionId, executionDatabase, clientSessionId, { tabId: tab.id });
       }
 
       return {

@@ -614,6 +614,8 @@ export function createColumnDrafts(columns: ColumnInfo[], databaseType?: Databas
       defaultValue,
       comment: column.comment ?? "",
       isPrimaryKey: column.is_primary_key,
+      characterSet: column.character_set ?? "",
+      collation: column.collation ?? "",
       extra: parseExtraToColumnExtra(column.extra, databaseType),
       original: { ...column, column_default: column.column_default === null ? null : defaultValue },
       originalPosition: index,
@@ -807,6 +809,14 @@ export function splitDataType(raw: string): { baseType: string; params: string }
     .replace(/\s+/g, " ");
   const baseType = /^(?:signed|unsigned|zerofill)(?:\s+(?:signed|unsigned|zerofill))*$/i.test(suffix) ? `${baseTypePrefix} ${suffix}`.trim() : baseTypePrefix;
   return { baseType, params };
+}
+
+/** MySQL character/text types that accept `CHARACTER SET` and `COLLATE`. */
+const MYSQL_CHARACTER_DATA_TYPES = new Set(["char", "varchar", "tinytext", "text", "mediumtext", "longtext", "enum", "set"]);
+
+export function isMysqlCharacterDataType(dataType: string): boolean {
+  const { baseType } = splitDataType(dataType);
+  return MYSQL_CHARACTER_DATA_TYPES.has(baseType.trim().replace(/\s+/g, " ").toLowerCase());
 }
 
 export function isSqlServerIdentityCompatibleDataType(rawDataType: string): boolean {
