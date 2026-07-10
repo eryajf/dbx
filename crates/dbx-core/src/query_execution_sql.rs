@@ -158,7 +158,14 @@ pub fn is_write_sql(sql: &str) -> bool {
 
 fn is_write_sql_statement(sql: &str) -> bool {
     // 1. Strip comments and string literals
-    let cleaned = strip_sql_comments_and_literals(sql);
+    let (cleaned, has_mysql_executable_comment) = strip_sql_comments_and_literals_with_metadata(sql);
+    // MySQL executable comments may contain arbitrary SQL, including writes
+    // that are not represented by the outer statement (for example, INTO
+    // OUTFILE inside a SELECT). Treat them as writes rather than attempting
+    // to parse every supported MySQL dialect extension here.
+    if has_mysql_executable_comment {
+        return true;
+    }
     let trimmed = cleaned.trim_start();
     if trimmed.is_empty() {
         return false;
@@ -321,6 +328,10 @@ fn strip_sql_comments(sql: &str) -> String {
 }
 
 pub fn strip_sql_comments_and_literals(sql: &str) -> String {
+    strip_sql_comments_and_literals_with_metadata(sql).0
+}
+
+fn strip_sql_comments_and_literals_with_metadata(sql: &str) -> (String, bool) {
     let mut output = String::with_capacity(sql.len());
     let mut chars = sql.chars().peekable();
     let mut in_line_comment = false;
@@ -328,6 +339,7 @@ pub fn strip_sql_comments_and_literals(sql: &str) -> String {
     let mut in_single_quote = false;
     let mut in_double_quote = false;
     let mut in_backtick_quote = false;
+    let mut has_mysql_executable_comment = false;
 
     while let Some(ch) = chars.next() {
         if in_line_comment {
@@ -394,6 +406,9 @@ pub fn strip_sql_comments_and_literals(sql: &str) -> String {
         }
         if ch == '/' && chars.peek() == Some(&'*') {
             chars.next();
+            if chars.peek() == Some(&'!') {
+                has_mysql_executable_comment = true;
+            }
             in_block_comment = true;
             continue;
         }
@@ -416,7 +431,7 @@ pub fn strip_sql_comments_and_literals(sql: &str) -> String {
         output.push(ch);
     }
 
-    output
+    (output, has_mysql_executable_comment)
 }
 
 #[cfg(test)]
@@ -657,6 +672,15 @@ mod tests {
         assert!(!is_write_sql("   /* comment */ SELECT * FROM users"));
         assert!(!is_write_sql("-- comment\nSELECT * FROM users"));
         assert!(is_write_sql("   /* comment */ INSERT INTO users VALUES (1)"));
+    }
+
+    #[test]
+    fn is_write_sql_blocks_mysql_executable_comments() {
+        assert!(is_write_sql("SELECT 3156 /*! INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */"));
+        assert!(is_write_sql("SELECT 3156 /*!50000 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */"));
+
+        assert!(!is_write_sql("SELECT 3156 /* INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */"));
+        assert!(!is_write_sql("SELECT '/*!50000 INTO OUTFILE \'/tmp/probe\' */' AS note"));
     }
 
     #[test]
