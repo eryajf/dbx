@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use sqlparser::dialect::{MsSqlDialect, PostgreSqlDialect};
+use sqlparser::tokenizer::{Token, Tokenizer};
 
 use crate::models::connection::DatabaseType;
 
@@ -162,21 +164,27 @@ pub fn is_write_sql(sql: &str) -> bool {
 }
 
 /// Returns true if the SQL statement is a write operation for a database
-/// dialect. MySQL-compatible dialects execute the contents of `/*! ... */`
-/// and MariaDB `/*M! ... */` comments; other database types treat both as
-/// ordinary block comments.
+/// dialect. In addition to ordinary write statements, this recognizes MySQL
+/// executable comments and file exports, plus PostgreSQL/SQL Server
+/// `SELECT ... INTO` table creation.
 pub fn is_write_sql_for_database(sql: &str, database_type: DatabaseType) -> bool {
     is_write_sql_with_database_type(sql, Some(database_type))
 }
 
 fn is_write_sql_with_database_type(sql: &str, database_type: Option<DatabaseType>) -> bool {
-    let mysql_compatible = database_type.map(is_mysql_compatible_database).unwrap_or(true);
+    if database_type.is_some_and(|database_type| has_dialect_specific_write(sql, database_type)) {
+        return true;
+    }
+
+    // The untyped helper remains conservative for MySQL executable comments.
+    // Typed callers handle those comments in has_dialect_specific_write above.
+    let detect_mysql_executable_comments = database_type.is_none();
     let statements = match database_type {
         Some(database_type) => crate::sql::split_sql_statements_for_database(sql, database_type),
         None => crate::sql::split_sql_statements(sql),
     };
 
-    statements.iter().any(|statement| is_write_sql_statement(statement, mysql_compatible))
+    statements.iter().any(|statement| is_write_sql_statement(statement, detect_mysql_executable_comments))
 }
 
 fn is_mysql_compatible_database(database_type: DatabaseType) -> bool {
@@ -188,6 +196,49 @@ fn is_mysql_compatible_database(database_type: DatabaseType) -> bool {
             | DatabaseType::ManticoreSearch
             | DatabaseType::Goldendb
     )
+}
+
+/// Detects write-capable syntax that otherwise looks like a read query and is
+/// interpreted differently depending on the database dialect.
+pub(crate) fn has_dialect_specific_write(sql: &str, database_type: DatabaseType) -> bool {
+    let statements = crate::sql::split_sql_statements_for_database(sql, database_type);
+    statements.iter().any(|statement| has_dialect_specific_write_statement(statement, database_type))
+}
+
+fn has_dialect_specific_write_statement(sql: &str, database_type: DatabaseType) -> bool {
+    if is_mysql_compatible_database(database_type) {
+        let (cleaned, has_executable_comment) = strip_sql_comments_and_literals_with_metadata(sql, true);
+        return has_executable_comment
+            || contains_keyword_sequence(&cleaned, "INTO", "OUTFILE")
+            || contains_keyword_sequence(&cleaned, "INTO", "DUMPFILE");
+    }
+
+    match database_type {
+        DatabaseType::Postgres => contains_unquoted_keyword(sql, &PostgreSqlDialect {}, "INTO"),
+        DatabaseType::SqlServer => contains_unquoted_keyword(sql, &MsSqlDialect {}, "INTO"),
+        _ => false,
+    }
+}
+
+fn contains_keyword_sequence(sql: &str, first: &str, second: &str) -> bool {
+    let words = sql.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_').filter(|word| !word.is_empty());
+
+    let mut previous_matches = false;
+    for word in words {
+        if previous_matches && word.eq_ignore_ascii_case(second) {
+            return true;
+        }
+        previous_matches = word.eq_ignore_ascii_case(first);
+    }
+    false
+}
+
+fn contains_unquoted_keyword(sql: &str, dialect: &dyn sqlparser::dialect::Dialect, keyword: &str) -> bool {
+    Tokenizer::new(dialect, sql).tokenize().is_ok_and(|tokens| {
+        tokens.into_iter().any(|token| {
+            matches!(token, Token::Word(word) if word.quote_style.is_none() && word.value.eq_ignore_ascii_case(keyword))
+        })
+    })
 }
 
 fn is_write_sql_statement(sql: &str, detect_mysql_executable_comments: bool) -> bool {
@@ -758,6 +809,52 @@ mod tests {
     }
 
     #[test]
+    fn is_write_sql_blocks_dialect_specific_select_into_writes() {
+        for sql in [
+            "SELECT 3156 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt'",
+            "SELECT 3156 INTO DUMPFILE '/var/lib/mysql-files/dbx_ro_probe.bin'",
+            "WITH probe AS (SELECT 3156) SELECT * FROM probe INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt'",
+        ] {
+            assert!(is_write_sql_for_database(sql, DatabaseType::Mysql), "expected write SQL: {sql}");
+        }
+
+        for sql in [
+            "SELECT * INTO copied_users FROM users",
+            "WITH active AS (SELECT * FROM users WHERE active) SELECT * INTO active_users FROM active",
+        ] {
+            assert!(is_write_sql_for_database(sql, DatabaseType::Postgres), "expected write SQL: {sql}");
+        }
+
+        for sql in [
+            "SELECT * INTO dbo.copied_users FROM dbo.users",
+            "WITH active AS (SELECT * FROM users WHERE active = 1) SELECT * INTO #active_users FROM active",
+        ] {
+            assert!(is_write_sql_for_database(sql, DatabaseType::SqlServer), "expected write SQL: {sql}");
+        }
+    }
+
+    #[test]
+    fn is_write_sql_does_not_globally_block_into() {
+        for sql in [
+            "SELECT 3156 INTO @probe",
+            "SELECT 'INTO OUTFILE /tmp/probe' AS note",
+            "SELECT 3156 /* INTO OUTFILE '/tmp/probe' */",
+            "SELECT 1 AS `into`, 2 AS `outfile`",
+        ] {
+            assert!(!is_write_sql_for_database(sql, DatabaseType::Mysql), "expected read-only SQL: {sql}");
+        }
+
+        for sql in
+            ["SELECT 'INTO copied_users' AS note", "SELECT $$INTO copied_users$$ AS note", "SELECT 1 AS \"into\""]
+        {
+            assert!(!is_write_sql_for_database(sql, DatabaseType::Postgres), "expected read-only SQL: {sql}");
+        }
+
+        assert!(!is_write_sql_for_database("SELECT 1 AS [into]", DatabaseType::SqlServer));
+        assert!(!is_write_sql_for_database("SELECT 1 INTO unsupported", DatabaseType::Sqlite));
+    }
+
+    #[test]
     fn is_write_sql_cte_with_nested_write() {
         // CTE starting with WITH but containing a write operation inside
         assert!(is_write_sql("WITH deleted AS (DELETE FROM users RETURNING id) SELECT * FROM deleted"));
@@ -869,6 +966,17 @@ mod tests {
         for database_type in [DatabaseType::Postgres, DatabaseType::Sqlite] {
             assert_eq!(check_read_only(mysql_executable_comment, "readonly", database_type), Ok(()));
             assert_eq!(check_read_only(mariadb_executable_comment, "readonly", database_type), Ok(()));
+        }
+    }
+
+    #[test]
+    fn check_read_only_blocks_dialect_specific_select_into_writes() {
+        for (sql, database_type) in [
+            ("SELECT 3156 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt'", DatabaseType::Mysql),
+            ("SELECT * INTO copied_users FROM users", DatabaseType::Postgres),
+            ("SELECT * INTO #copied_users FROM users", DatabaseType::SqlServer),
+        ] {
+            assert!(check_read_only(sql, "readonly", database_type).is_err(), "expected blocked SQL: {sql}");
         }
     }
 

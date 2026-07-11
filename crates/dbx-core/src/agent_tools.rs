@@ -453,9 +453,8 @@ async fn execute_execute_query(
         .map(|l| (l as usize).min(MAX_ALLOWED_ROWS))
         .unwrap_or(EXECUTE_QUERY_LIMIT);
 
-    // Classify SQL risk using sqlparser AST
-    let db_type_str = format!("{:?}", db_type).to_lowercase();
-    let risk = crate::sql_risk::classify_sql_risk(sql, &db_type_str)?;
+    // Classify SQL risk using the concrete database dialect.
+    let risk = crate::sql_risk::classify_sql_risk_for_database(sql, *db_type)?;
     if !sql_risk_allowed(risk, sql_permissions) {
         if risk == SqlRisk::Transaction {
             return Err("Blocked: transaction control statements are not available to the AI agent.".to_string());
@@ -580,8 +579,7 @@ async fn execute_explain_query(
     }
 
     // Classify SQL risk – only ReadOnly queries can be explained
-    let db_type_str = format!("{:?}", db_type).to_lowercase();
-    let risk = match crate::sql_risk::classify_sql_risk(sql, &db_type_str) {
+    let risk = match crate::sql_risk::classify_sql_risk_for_database(sql, *db_type) {
         Ok(r) => r,
         Err(e) => return (Err(e), None),
     };

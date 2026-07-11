@@ -1,9 +1,11 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use sqlparser::ast::Statement;
 use sqlparser::dialect::{
     ClickHouseDialect, DuckDbDialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
+
+use crate::models::connection::DatabaseType;
 
 /// SQL risk level for agent tool safety classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,7 +122,25 @@ fn classify_statement(stmt: &Statement) -> SqlRisk {
 /// Multi-statement input: returns the highest risk level across all statements.
 pub fn classify_sql_risk(sql: &str, dialect: &str) -> Result<SqlRisk, String> {
     let normalized = normalize_dialect(dialect);
-    let parser_dialect = resolve_dialect(normalized);
+    classify_sql_risk_with_database(sql, normalized, None)
+}
+
+/// Classify SQL risk using both the parser dialect and the concrete database
+/// type so dialect-specific write forms cannot be mistaken for read queries.
+pub fn classify_sql_risk_for_database(sql: &str, database_type: DatabaseType) -> Result<SqlRisk, String> {
+    let database_type_name = format!("{database_type:?}");
+    let normalized = normalize_dialect(&database_type_name);
+    classify_sql_risk_with_database(sql, normalized, Some(database_type))
+}
+
+fn classify_sql_risk_with_database(
+    sql: &str,
+    normalized_dialect: &str,
+    database_type: Option<DatabaseType>,
+) -> Result<SqlRisk, String> {
+    let parser_dialect = resolve_dialect(normalized_dialect);
+    let has_dialect_specific_write = database_type
+        .is_some_and(|database_type| crate::query_execution_sql::has_dialect_specific_write(sql, database_type));
 
     match Parser::parse_sql(parser_dialect.as_ref(), sql) {
         Ok(stmts) if !stmts.is_empty() => {
@@ -131,11 +151,19 @@ pub fn classify_sql_risk(sql: &str, dialect: &str) -> Result<SqlRisk, String> {
                     max_risk = risk;
                 }
             }
-            Ok(max_risk)
+            if max_risk == SqlRisk::ReadOnly && has_dialect_specific_write {
+                Ok(SqlRisk::Write)
+            } else {
+                Ok(max_risk)
+            }
         }
         _ => {
             // Fallback: keyword-based classification
-            if crate::query_execution_sql::is_write_sql(sql) {
+            let is_write = database_type.map_or_else(
+                || crate::query_execution_sql::is_write_sql(sql),
+                |database_type| crate::query_execution_sql::is_write_sql_for_database(sql, database_type),
+            );
+            if is_write {
                 Ok(SqlRisk::Write)
             } else {
                 Ok(SqlRisk::ReadOnly)
@@ -173,6 +201,45 @@ mod tests {
         assert_eq!(classify_sql_risk("INSERT INTO users VALUES (1)", "postgres").unwrap(), SqlRisk::Write);
         assert_eq!(classify_sql_risk("UPDATE users SET name = 'x'", "postgres").unwrap(), SqlRisk::Write);
         assert_eq!(classify_sql_risk("DELETE FROM users", "postgres").unwrap(), SqlRisk::Write);
+    }
+
+    #[test]
+    fn classify_dialect_specific_select_into_as_write() {
+        for sql in [
+            "SELECT 3156 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt'",
+            "SELECT 3156 INTO DUMPFILE '/var/lib/mysql-files/dbx_ro_probe.bin'",
+        ] {
+            assert_eq!(classify_sql_risk_for_database(sql, DatabaseType::Mysql).unwrap(), SqlRisk::Write);
+        }
+
+        assert_eq!(
+            classify_sql_risk_for_database("SELECT * INTO copied_users FROM users", DatabaseType::Postgres).unwrap(),
+            SqlRisk::Write
+        );
+        assert_eq!(
+            classify_sql_risk_for_database("SELECT * INTO #copied_users FROM users", DatabaseType::SqlServer).unwrap(),
+            SqlRisk::Write
+        );
+        assert_eq!(
+            classify_sql_risk_for_database(
+                "SELECT 3156 /*!50000 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt' */",
+                DatabaseType::Mysql,
+            )
+            .unwrap(),
+            SqlRisk::Write
+        );
+    }
+
+    #[test]
+    fn typed_classification_preserves_existing_risk_levels() {
+        assert_eq!(
+            classify_sql_risk_for_database("SELECT * FROM users", DatabaseType::Postgres).unwrap(),
+            SqlRisk::ReadOnly
+        );
+        assert_eq!(
+            classify_sql_risk_for_database("CREATE TABLE users (id INT)", DatabaseType::Postgres).unwrap(),
+            SqlRisk::Ddl
+        );
     }
 
     #[test]
