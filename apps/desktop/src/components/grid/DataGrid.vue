@@ -3485,10 +3485,17 @@ let scrollingTimer = 0;
 const isScrolling = ref(false);
 let infiniteScrollPositions = new WeakMap<HTMLElement, DataGridScrollPosition>();
 
+function updateDomGridVisibleItemsDuringScroll(scroller: HTMLElement) {
+  if (useCanvasGridRows.value || scroller !== gridScrollerElement()) return;
+  (scrollerRef.value as { updateVisibleItems?: (itemsChanged: boolean, checkPositionDiff?: boolean) => void } | null)?.updateVisibleItems?.(false, true);
+}
+
 function markGridScrolling() {
   if (!isScrolling.value) isScrolling.value = true;
   clearTimeout(scrollingTimer);
   scrollingTimer = window.setTimeout(() => {
+    const scroller = gridScrollerElement();
+    if (scroller) updateDomGridVisibleItemsDuringScroll(scroller);
     isScrolling.value = false;
   }, 120);
 }
@@ -3506,12 +3513,25 @@ function maybeCheckInfiniteScroll(scroller: HTMLElement) {
   }
 }
 
+function clampGridScrollerBounds(scroller: HTMLElement) {
+  const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+  const nextTop = Math.max(0, Math.min(maxTop, scroller.scrollTop));
+  const nextLeft = Math.max(0, Math.min(maxLeft, scroller.scrollLeft));
+  if (nextTop !== scroller.scrollTop) scroller.scrollTop = nextTop;
+  if (nextLeft !== scroller.scrollLeft) scroller.scrollLeft = nextLeft;
+}
+
 function onScrollerScroll(e: Event) {
-  syncHeaderScroll(e);
   const target = e.target;
   if (target instanceof HTMLElement) {
+    clampGridScrollerBounds(target);
+    updateDomGridVisibleItemsDuringScroll(target);
+    syncHeaderScroll(e);
     recordScrollPosition({ top: target.scrollTop, left: target.scrollLeft });
     maybeCheckInfiniteScroll(target);
+  } else {
+    syncHeaderScroll(e);
   }
   markGridScrolling();
 }
@@ -5715,6 +5735,58 @@ function rowCellsUseSelectionVisual(rowId: number): boolean {
   return hasRowSelection.value && isRowSelected(rowId) && !hasCellSelection.value;
 }
 
+function dataGridRowStyle(item: RowItem): CSSProperties {
+  const dark = isDark.value || (typeof document !== "undefined" && document.documentElement.classList.contains("dark"));
+  const rowBg = item.isDeleted
+    ? dark
+      ? "rgb(55, 31, 32)"
+      : "rgb(255, 244, 244)"
+    : item.isNew
+      ? dark
+        ? "rgb(51, 51, 55)"
+        : "rgb(243, 243, 243)"
+      : item.isDraft
+        ? dark
+          ? "rgb(51, 51, 55)"
+          : "rgb(243, 243, 243)"
+        : item.displayIndex % 2 === 1
+          ? dark
+            ? "rgb(32, 32, 34)"
+            : "rgb(248, 248, 248)"
+          : dark
+            ? "rgb(19, 20, 22)"
+            : "rgb(255, 255, 255)";
+  const rowNumberBg =
+    item.status === "new"
+      ? dark
+        ? "rgb(33, 45, 40)"
+        : "rgb(219, 244, 233)"
+      : item.status === "edited"
+        ? dark
+          ? "rgb(48, 41, 28)"
+          : "rgb(253, 241, 219)"
+        : item.status === "deleted"
+          ? dark
+            ? "rgb(55, 31, 32)"
+            : "rgb(255, 244, 244)"
+          : isRowActive(item.displayIndex) && !item.isDeleted
+            ? dark
+              ? "rgb(66, 67, 70)"
+              : "rgb(226, 226, 226)"
+            : dark
+              ? "rgb(35, 37, 42)"
+              : "rgb(255, 255, 255)";
+  return {
+    "--data-grid-cell-bg": rowBg,
+    "--data-grid-row-number-bg": rowNumberBg,
+    "--data-grid-cell-selected-bg": dark ? "rgb(66, 67, 70)" : "rgb(226, 226, 226)",
+    "--data-grid-cell-selected-dirty-bg": dark ? "rgb(94, 75, 26)" : "rgb(244, 229, 186)",
+    "--data-grid-cell-selected-border": dark ? "rgb(170, 170, 175)" : "rgb(90, 90, 90)",
+    "--data-grid-row-number-active-bg": dark ? "rgb(66, 67, 70)" : "rgb(232, 232, 232)",
+    "--data-grid-row-number-selected-bg": dark ? "rgb(66, 67, 70)" : "rgb(226, 226, 226)",
+  } as CSSProperties;
+}
+
 const canvasRef = ref<HTMLCanvasElement>();
 const canvasOverlayRef = ref<HTMLElement>();
 const canvasViewportWidth = ref(0);
@@ -5965,6 +6037,32 @@ function onCanvasWheel(event: WheelEvent) {
   scroller.scrollTop = nextTop;
   scroller.scrollLeft = nextLeft;
   onCanvasScroll({ target: scroller } as unknown as Event);
+}
+
+function onDomGridWheel(event: WheelEvent) {
+  if (event.ctrlKey || event.metaKey) return;
+  const scroller = event.currentTarget instanceof HTMLElement ? event.currentTarget : gridScrollerElement();
+  if (!scroller) return;
+
+  const verticalDelta = canvasWheelDeltaToPixels(event.deltaY, event.deltaMode, scroller.clientHeight);
+  const horizontalDelta = canvasWheelDeltaToPixels(event.deltaX, event.deltaMode, scroller.clientWidth);
+  const shiftedHorizontalDelta = event.shiftKey && Math.abs(verticalDelta) > Math.abs(horizontalDelta) ? verticalDelta : 0;
+  const effectiveVerticalDelta = shiftedHorizontalDelta === 0 ? verticalDelta : 0;
+  const effectiveHorizontalDelta = horizontalDelta + shiftedHorizontalDelta;
+  if (effectiveVerticalDelta === 0 && effectiveHorizontalDelta === 0) return;
+
+  const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+  const nextTop = Math.max(0, Math.min(maxTop, scroller.scrollTop + effectiveVerticalDelta));
+  const nextLeft = Math.max(0, Math.min(maxLeft, scroller.scrollLeft + effectiveHorizontalDelta));
+  // Let an outer scroll container handle wheel input once the grid reaches its boundary.
+  if (nextTop === scroller.scrollTop && nextLeft === scroller.scrollLeft) return;
+  event.preventDefault();
+  event.stopPropagation();
+
+  scroller.scrollTop = nextTop;
+  scroller.scrollLeft = nextLeft;
+  onScrollerScroll({ target: scroller } as unknown as Event);
 }
 
 function onCanvasMouseMove(event: MouseEvent) {
@@ -8775,7 +8873,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
 </script>
 
 <template>
-  <div ref="gridRef" data-grid-root class="h-full flex flex-col overflow-hidden outline-none" :class="{ 'data-grid--editing-cell': !!editingCell }" :style="gridStyle" tabindex="0" @keydown="onGridKeydown" @paste="onGridPaste">
+  <div ref="gridRef" data-grid-root class="h-full flex flex-col overflow-hidden outline-none" :class="{ 'data-grid--editing-cell': !!editingCell, 'data-grid--dark': isDark }" :style="gridStyle" tabindex="0" @keydown="onGridKeydown" @paste="onGridPaste">
     <CustomContextMenu :items="gridContextMenuItems" v-slot="{ onContextMenu }">
       <div v-if="hasData || canShowWhereSearch" class="flex-1 flex flex-col overflow-hidden" @contextmenu="onContextMenu">
         <!-- Search bar -->
@@ -9634,7 +9732,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                 <div class="data-grid-header-row flex w-(--header-total-w) font-semibold text-foreground">
                   <div
                     class="data-grid-header-cell shrink-0 px-2 py-1.5 border-r w-(--row-num-w) border-border text-center text-muted-foreground select-none cursor-default hover:bg-gray-200 dark:hover:bg-gray-800 sticky left-0 z-20"
-                    :class="{ '!bg-gray-300 dark:!bg-gray-900 outline outline-primary -outline-offset-1': isSelectingAll }"
+                    :class="{ 'data-grid-header-cell--selected outline outline-primary -outline-offset-1': isSelectingAll }"
                     @click="selectAllCells"
                   >
                     #
@@ -9644,7 +9742,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                     <div
                       class="data-grid-header-cell shrink-0 px-2 py-1.5 border-r border-border whitespace-nowrap hover:bg-gray-200 dark:hover:bg-gray-800 select-none relative overflow-hidden"
                       :class="{
-                        '!bg-gray-300 dark:!bg-gray-900 outline outline-primary -outline-offset-1': highlightedColumnIndex === col.actualColIdx || columnIsSelected(col.visibleColIdx),
+                        'data-grid-header-cell--selected outline outline-primary -outline-offset-1': highlightedColumnIndex === col.actualColIdx || columnIsSelected(col.visibleColIdx),
                         'bg-amber-500/20 ring-1 ring-inset ring-amber-500/40': currentSearchMatch?.kind === 'column' && currentSearchMatch.col === col.actualColIdx,
                         ...columnHeaderDragClass(col.visibleColIdx),
                       }"
@@ -10007,7 +10105,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
               </div>
 
               <div v-if="!hasVisibleRows" class="relative min-h-0 flex-1">
-                <div class="data-grid-scroller h-full overflow-x-auto overflow-y-hidden overscroll-none" :class="{ 'is-scrolling': isScrolling }" @scroll="onScrollerScroll">
+                <div class="data-grid-scroller h-full overflow-x-auto overflow-y-hidden overscroll-none" :class="{ 'is-scrolling': isScrolling }" @scroll="onScrollerScroll" @wheel="onDomGridWheel">
                   <div class="h-full min-h-[220px]" :style="{ width: 'max(100%, var(--total-w))' }" />
                 </div>
                 <div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">
@@ -10022,7 +10120,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
               <div
                 v-else-if="useCanvasGridRows"
                 ref="scrollerRef"
-                class="data-grid-scroller canvas-grid-scroller flex-1 overflow-auto overscroll-none bg-background relative"
+                class="data-grid-scroller canvas-grid-scroller flex-1 overflow-auto overscroll-none relative"
                 :class="{ 'is-scrolling': isScrolling, 'has-horizontal-scrollbar': hasGridHorizontalOverflow }"
                 @scroll="onCanvasScroll"
                 @wheel="onCanvasWheel"
@@ -10136,6 +10234,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                 :skip-hover="true"
                 key-field="id"
                 @scroll="onScrollerScroll"
+                @wheel="onDomGridWheel"
               >
                 <template #default="{ item }">
                   <div
@@ -10148,10 +10247,11 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                       'active-row': isRowActive(item.displayIndex) && !item.isDeleted,
                       'relative z-20 overflow-visible': editingCell?.rowId === item.id,
                     }"
+                    :style="dataGridRowStyle(item)"
                     :data-row-index="item.displayIndex"
                   >
                     <div
-                      class="data-grid-row-number w-(--row-num-w) shrink-0 px-2 py-1 border-r text-center select-none cursor-default sticky left-0 z-10 bg-background"
+                      class="data-grid-row-number w-(--row-num-w) shrink-0 px-2 py-1 border-r text-center select-none cursor-default sticky left-0 z-10"
                       :class="rowNumberStatusClass(item)"
                       @click="handleRowClick(item.displayIndex, item.id, $event)"
                       @dblclick.stop="toggleTranspose(item.displayIndex)"
@@ -10172,6 +10272,8 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                         'cell-selected-dirty': cellIsSelected(item.displayIndex, col.visibleColIdx) && item.isDirtyCol[col.actualColIdx],
                         'row-cell-selected': rowCellsUseSelectionVisual(item.id) && !cellIsSelected(item.displayIndex, col.visibleColIdx) && !item.isDirtyCol[col.actualColIdx],
                         'row-cell-selected-dirty': rowCellsUseSelectionVisual(item.id) && !cellIsSelected(item.displayIndex, col.visibleColIdx) && item.isDirtyCol[col.actualColIdx],
+                        'cell-search-match': cellIsSearchMatch(item.displayIndex, col.actualColIdx),
+                        'cell-current-search-match': cellIsCurrentMatch(item.displayIndex, col.actualColIdx),
                         'bg-yellow-200/60 dark:bg-yellow-500/20': cellIsSearchMatch(item.displayIndex, col.actualColIdx),
                         'ring-2 ring-inset ring-yellow-500 bg-yellow-300/60 dark:bg-yellow-500/40': cellIsCurrentMatch(item.displayIndex, col.actualColIdx),
                         'tabular-nums': typeof item.data[col.actualColIdx] === 'number',
@@ -11260,8 +11362,10 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
   --data-grid-scrollbar-thumb: color-mix(in oklch, var(--foreground) 30%, transparent);
   --data-grid-scrollbar-thumb-hover: color-mix(in oklch, var(--foreground) 48%, transparent);
   --data-grid-scrollbar-track: transparent;
+  background-color: rgb(255, 255, 255);
 }
 
+[data-grid-root].data-grid--dark,
 :global(.dark) [data-grid-root] {
   --data-grid-row-muted-bg: rgb(32, 32, 34);
   --data-grid-row-new-bg: rgb(51, 51, 55);
@@ -11281,6 +11385,10 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
   --data-grid-row-number-deleted-bg: rgb(55, 31, 32);
   --data-grid-row-number-active-bg: rgb(64, 64, 64);
   --data-grid-row-number-selected-bg: rgb(66, 67, 70);
+  --data-grid-scrollbar-thumb: rgb(82, 82, 91);
+  --data-grid-scrollbar-thumb-hover: rgb(113, 113, 122);
+  --data-grid-scrollbar-track: rgb(24, 24, 27);
+  background-color: rgb(19, 20, 22);
 }
 
 @supports (background: color-mix(in oklab, white 50%, transparent)) {
@@ -11307,43 +11415,84 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
   background-color: rgb(239, 239, 239);
 }
 
+[data-grid-root].data-grid--dark .data-grid-header-shell,
+[data-grid-root].data-grid--dark .data-grid-header-cell,
 :global(.dark) [data-grid-root] .data-grid-header-shell,
 :global(.dark) [data-grid-root] .data-grid-header-cell {
   background-color: rgb(32, 32, 34) !important;
 }
 
+[data-grid-root].data-grid--dark .data-grid-header-row,
 :global(.dark) [data-grid-root] .data-grid-header-row {
   color: rgb(215, 215, 219);
 }
 
+[data-grid-root].data-grid--dark .data-grid-header-cell:hover,
 :global(.dark) [data-grid-root] .data-grid-header-cell:hover {
   background-color: rgb(46, 47, 51) !important;
 }
 
+.data-grid-header-cell--selected {
+  background-color: rgb(209, 213, 219) !important;
+}
+
+:global(.dark) [data-grid-root] {
+  --data-grid-cell-selected-bg: rgb(66, 67, 70);
+  --data-grid-cell-selected-dirty-bg: rgb(94, 75, 26);
+  --data-grid-cell-selected-border: rgb(170, 170, 175);
+  --data-grid-row-number-selected-bg: rgb(66, 67, 70);
+}
+
+[data-grid-root].data-grid--dark .data-grid-header-cell--selected,
+[data-grid-root].data-grid--dark .transpose-record-header-selected,
+[data-grid-root].data-grid--dark .transpose-record-header-active,
+:global(.dark) [data-grid-root] .data-grid-header-cell--selected,
+:global(.dark) [data-grid-root] .transpose-record-header-selected,
+:global(.dark) [data-grid-root] .transpose-record-header-active {
+  background-color: rgb(66, 67, 70) !important;
+  color: rgb(244, 244, 245) !important;
+}
+
+.data-grid-row {
+  background-color: var(--data-grid-cell-bg);
+}
+
+.data-grid-cell {
+  background-color: var(--data-grid-cell-bg);
+}
+
+.data-grid-row-number {
+  background-color: var(--data-grid-row-number-bg);
+}
+
 .data-grid-row--striped {
-  background-color: rgb(248, 248, 248);
+  background-color: var(--data-grid-cell-bg);
 }
 
 .data-grid-row--draft,
 .data-grid-row--new {
-  background-color: rgb(243, 243, 243);
+  background-color: var(--data-grid-cell-bg);
 }
 
 .data-grid-row--deleted {
-  background-color: rgb(255, 244, 244);
+  background-color: var(--data-grid-cell-bg);
 }
 
-:global(.dark) .data-grid-row--striped {
-  background-color: rgb(32, 32, 34);
+:global(.dark) [data-grid-root] .data-grid-row {
+  background-color: var(--data-grid-cell-bg) !important;
 }
 
-:global(.dark) .data-grid-row--draft,
-:global(.dark) .data-grid-row--new {
-  background-color: rgb(51, 51, 55);
+:global(.dark) [data-grid-root] .data-grid-row--striped {
+  background-color: var(--data-grid-cell-bg) !important;
 }
 
-:global(.dark) .data-grid-row--deleted {
-  background-color: rgb(55, 31, 32);
+:global(.dark) [data-grid-root] .data-grid-row--draft,
+:global(.dark) [data-grid-root] .data-grid-row--new {
+  background-color: var(--data-grid-cell-bg) !important;
+}
+
+:global(.dark) [data-grid-root] .data-grid-row--deleted {
+  background-color: var(--data-grid-cell-bg) !important;
 }
 
 .data-grid-topbar {
@@ -11353,6 +11502,28 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
   width: 100%;
   min-width: 0;
   transition: min-width var(--data-grid-topbar-transition-duration) var(--data-grid-topbar-transition-easing);
+}
+
+.data-grid-topbar-shell {
+  background-color: color-mix(in oklab, var(--muted) 20%, transparent);
+}
+
+[data-grid-root].data-grid--dark .data-grid-topbar-shell {
+  background-color: rgb(24, 24, 27) !important;
+}
+
+[data-grid-root].data-grid--dark .data-grid-topbar,
+[data-grid-root].data-grid--dark .data-grid-topbar-scroll {
+  background-color: rgb(24, 24, 27) !important;
+}
+
+[data-grid-root].data-grid--dark .data-grid-topbar [class*="bg-muted/"],
+[data-grid-root].data-grid--dark .data-grid-topbar [class*="bg-background/"] {
+  background-color: rgb(31, 31, 35) !important;
+}
+
+[data-grid-root].data-grid--dark .data-grid-topbar [class*="hover:bg-accent"]:hover {
+  background-color: rgb(46, 47, 51) !important;
 }
 
 .data-grid-topbar--compact {
@@ -11426,6 +11597,11 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
   scrollbar-width: none;
 }
 
+[data-grid-root].data-grid--dark .data-grid-topbar-condition-input {
+  color: rgb(244, 244, 245);
+  background-color: transparent !important;
+}
+
 .data-grid-topbar-condition-input::-webkit-scrollbar {
   display: none;
 }
@@ -11461,6 +11637,14 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
   --data-grid-condition-input-top: 0.125rem;
   --data-grid-condition-prefix-indent: 0px;
   --data-grid-condition-suffix-width: 0px;
+}
+
+[data-grid-root].data-grid--dark .data-grid-topbar-condition-pane--expanded {
+  background: rgb(24, 24, 27) !important;
+  color: rgb(244, 244, 245);
+  box-shadow:
+    inset 0 -1px 0 rgb(63, 63, 70),
+    0 8px 16px rgb(0 0 0 / 32%);
 }
 
 .data-grid-topbar-condition-input--expanded {
@@ -11597,6 +11781,9 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
 
 .data-grid-scroller {
   overflow-anchor: none;
+  overscroll-behavior: none;
+  overscroll-behavior-x: none;
+  overscroll-behavior-y: none;
   scrollbar-gutter: stable;
   will-change: scroll-position;
   contain: layout style paint;
@@ -11609,15 +11796,56 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
 
 .canvas-grid-scroller.has-horizontal-scrollbar {
   margin-bottom: 10px;
+  box-shadow: 0 10px 0 0 rgb(255, 255, 255);
+}
+
+.canvas-grid-scroller {
+  background-color: rgb(255, 255, 255);
+}
+
+[data-grid-root].data-grid--dark .canvas-grid-scroller,
+:global(.dark) [data-grid-root] .canvas-grid-scroller {
+  background-color: rgb(19, 20, 22) !important;
+}
+
+[data-grid-root].data-grid--dark .canvas-grid-scroller.has-horizontal-scrollbar,
+:global(.dark) [data-grid-root] .canvas-grid-scroller.has-horizontal-scrollbar {
+  box-shadow: 0 10px 0 0 rgb(19, 20, 22);
 }
 
 .data-grid-scroller.has-horizontal-scrollbar:not(.canvas-grid-scroller) {
   padding-bottom: 10px;
 }
 
+.data-grid-scroller:not(.canvas-grid-scroller) {
+  background-color: rgb(255, 255, 255);
+}
+
+[data-grid-root].data-grid--dark .data-grid-scroller:not(.canvas-grid-scroller),
+:global(.dark) [data-grid-root] .data-grid-scroller:not(.canvas-grid-scroller) {
+  background-color: rgb(19, 20, 22) !important;
+}
+
+.data-grid-scroller:not(.canvas-grid-scroller) :deep(.vue-recycle-scroller__item-wrapper),
+.data-grid-scroller:not(.canvas-grid-scroller) :deep(.vue-recycle-scroller__item-view) {
+  background-color: rgb(255, 255, 255);
+}
+
+[data-grid-root].data-grid--dark .data-grid-scroller:not(.canvas-grid-scroller) :deep(.vue-recycle-scroller__item-wrapper),
+[data-grid-root].data-grid--dark .data-grid-scroller:not(.canvas-grid-scroller) :deep(.vue-recycle-scroller__item-view),
+:global(.dark) [data-grid-root] .data-grid-scroller:not(.canvas-grid-scroller) :deep(.vue-recycle-scroller__item-wrapper),
+:global(.dark) [data-grid-root] .data-grid-scroller:not(.canvas-grid-scroller) :deep(.vue-recycle-scroller__item-view) {
+  background-color: rgb(19, 20, 22) !important;
+}
+
 .data-grid-scroller :deep(.vue-recycle-scroller__item-wrapper) {
   min-width: var(--total-w);
   overflow: visible;
+}
+
+[data-grid-root].data-grid--dark .data-grid-scroller :deep(.vue-recycle-scroller__item-wrapper),
+[data-grid-root].data-grid--dark .data-grid-scroller :deep(.vue-recycle-scroller__item-view) {
+  background-color: rgb(19, 20, 22) !important;
 }
 
 .data-grid-scroller :deep(.vue-recycle-scroller__item-view) {
@@ -11648,6 +11876,12 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
   height: 10px;
   cursor: pointer;
   touch-action: none;
+  background-color: rgb(255, 255, 255);
+}
+
+[data-grid-root].data-grid--dark .data-grid-horizontal-scrollbar,
+:global(.dark) [data-grid-root] .data-grid-horizontal-scrollbar {
+  background-color: rgb(19, 20, 22) !important;
 }
 
 .data-grid-horizontal-scrollbar::before {
@@ -11689,6 +11923,10 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
   width: 10px;
   cursor: pointer;
   touch-action: none;
+}
+
+:global(.dark) [data-grid-root] .data-grid-vertical-scrollbar {
+  background-color: rgb(19, 20, 22);
 }
 
 .data-grid-vertical-scrollbar__thumb {
@@ -11846,9 +12084,22 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
 }
 
 .row-cell-selected {
-  background-color: var(--data-grid-cell-selected-bg);
+  background-color: var(--data-grid-cell-selected-bg) !important;
   outline: 1px solid var(--data-grid-cell-selected-border);
   outline-offset: -1px;
+}
+
+.cell-dirty {
+  background-color: var(--data-grid-cell-dirty-bg) !important;
+}
+
+.cell-search-match {
+  background-color: var(--data-grid-cell-search-bg) !important;
+}
+
+.cell-current-search-match {
+  background-color: var(--data-grid-cell-current-search-bg) !important;
+  box-shadow: inset 0 0 0 2px var(--data-grid-cell-current-search-border);
 }
 
 .transpose-record-header-selected {
@@ -11862,13 +12113,13 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
 }
 
 .cell-selected-dirty {
-  background-color: var(--data-grid-cell-selected-dirty-bg);
+  background-color: var(--data-grid-cell-selected-dirty-bg) !important;
   outline: 1px solid var(--data-grid-cell-selected-border);
   outline-offset: -1px;
 }
 
 .row-cell-selected-dirty {
-  background-color: var(--data-grid-cell-selected-dirty-bg);
+  background-color: var(--data-grid-cell-selected-dirty-bg) !important;
   outline: 1px solid var(--data-grid-cell-selected-border);
   outline-offset: -1px;
 }
@@ -11885,13 +12136,35 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
   background-color: var(--data-grid-row-number-deleted-bg);
 }
 
-.cell-selected,
-.active-row > div:not(.cell-dirty):not(.data-grid-row-number) {
-  @apply text-foreground bg-gray-300 dark:bg-gray-900;
+.active-row > .data-grid-row-number {
+  background-color: var(--data-grid-row-number-active-bg) !important;
+}
+
+.cell-selected {
+  color: hsl(var(--foreground));
+  background-color: var(--data-grid-cell-selected-bg) !important;
 }
 
 .cell-selected {
   @apply outline outline-primary -outline-offset-1;
+}
+
+:global(.dark) [data-grid-root] .cell-selected,
+:global(.dark) [data-grid-root] .row-cell-selected {
+  color: rgb(244, 244, 245) !important;
+  background-color: rgb(66, 67, 70) !important;
+}
+
+:global(.dark) [data-grid-root] .cell-selected-dirty,
+:global(.dark) [data-grid-root] .row-cell-selected-dirty {
+  background-color: rgb(94, 75, 26) !important;
+}
+
+:global(.dark) [data-grid-root] .cell-selected,
+:global(.dark) [data-grid-root] .row-cell-selected,
+:global(.dark) [data-grid-root] .cell-selected-dirty,
+:global(.dark) [data-grid-root] .row-cell-selected-dirty {
+  outline-color: rgb(170, 170, 175) !important;
 }
 
 .ddl-code :deep(.ddl-kw) {

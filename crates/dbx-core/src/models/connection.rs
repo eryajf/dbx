@@ -108,11 +108,70 @@ pub enum TransportLayerConfig {
 }
 
 impl TransportLayerConfig {
+    pub fn same_type_as(&self, other: &TransportLayerConfig) -> bool {
+        matches!(
+            (self, other),
+            (TransportLayerConfig::Ssh(_), TransportLayerConfig::Ssh(_))
+                | (TransportLayerConfig::Proxy(_), TransportLayerConfig::Proxy(_))
+                | (TransportLayerConfig::HttpTunnel(_), TransportLayerConfig::HttpTunnel(_))
+        )
+    }
+
     pub fn id(&self) -> &str {
         match self {
             TransportLayerConfig::Ssh(layer) => &layer.id,
             TransportLayerConfig::Proxy(layer) => &layer.id,
             TransportLayerConfig::HttpTunnel(layer) => &layer.id,
+        }
+    }
+
+    pub fn profile_id(&self) -> &str {
+        match self {
+            TransportLayerConfig::Ssh(layer) => &layer.profile_id,
+            TransportLayerConfig::Proxy(layer) => &layer.profile_id,
+            TransportLayerConfig::HttpTunnel(layer) => &layer.profile_id,
+        }
+    }
+
+    /// Builds the concrete layer used at connect time for a layer that
+    /// references a shared tunnel profile: the profile supplies the whole
+    /// configuration while the referencing layer keeps its own identity,
+    /// enabled flag, and profile reference.
+    pub fn resolved_from_profile(&self, profile: &TransportLayerConfig) -> TransportLayerConfig {
+        let mut resolved = profile.clone();
+        let (id, enabled, profile_id) = (self.id().to_string(), self.enabled(), self.profile_id().to_string());
+        match &mut resolved {
+            TransportLayerConfig::Ssh(layer) => {
+                layer.id = id;
+                layer.enabled = enabled;
+                layer.profile_id = profile_id;
+            }
+            TransportLayerConfig::Proxy(layer) => {
+                layer.id = id;
+                layer.enabled = enabled;
+                layer.profile_id = profile_id;
+            }
+            TransportLayerConfig::HttpTunnel(layer) => {
+                layer.id = id;
+                layer.enabled = enabled;
+                layer.profile_id = profile_id;
+            }
+        }
+        resolved
+    }
+
+    pub fn scrub_secrets(&mut self) {
+        match self {
+            TransportLayerConfig::Ssh(layer) => {
+                layer.password = String::new();
+                layer.key_passphrase = String::new();
+            }
+            TransportLayerConfig::Proxy(layer) => {
+                layer.password = String::new();
+            }
+            TransportLayerConfig::HttpTunnel(layer) => {
+                layer.token = String::new();
+            }
         }
     }
 
@@ -181,6 +240,12 @@ pub struct SshTunnelConfig {
     /// only tries that method (after the standard `none` probe).
     #[serde(default)]
     pub auth_method: String,
+    /// When non-empty, this layer references a shared tunnel profile
+    /// (Settings > Tunnels). The profile's configuration replaces this
+    /// layer's own fields at connect time; only `id` and `enabled` are
+    /// kept from the referencing layer.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub profile_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -201,6 +266,9 @@ pub struct ProxyTunnelConfig {
     pub username: String,
     #[serde(default)]
     pub password: String,
+    /// See [`SshTunnelConfig::profile_id`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub profile_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -217,6 +285,9 @@ pub struct HttpTunnelConfig {
     pub token: String,
     #[serde(default = "default_http_tunnel_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
+    /// See [`SshTunnelConfig::profile_id`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub profile_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -368,6 +439,8 @@ pub enum DatabaseType {
     Iris,
     #[serde(rename = "turso")]
     Turso,
+    #[serde(rename = "cloudflare-d1")]
+    CloudflareD1,
     #[serde(rename = "influxdb")]
     InfluxDb,
     #[serde(rename = "questdb")]
@@ -690,7 +763,7 @@ impl ConnectionConfig {
             },
             DatabaseType::Redshift => Some("dev"),
             DatabaseType::ClickHouse => Some("default"),
-            DatabaseType::Rqlite | DatabaseType::Turso => Some("main"),
+            DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => Some("main"),
             DatabaseType::Gaussdb | DatabaseType::OpenGauss => Some("postgres"),
             DatabaseType::Kwdb => Some("defaultdb"),
             DatabaseType::Vastbase => Some("postgres"),
@@ -801,6 +874,7 @@ impl ConnectionConfig {
             DatabaseType::ClickHouse => clickhouse_http_url(self, raw_host, port),
             DatabaseType::Rqlite => rqlite_http_url(self, raw_host, port),
             DatabaseType::Turso => turso_http_url(self, raw_host, port),
+            DatabaseType::CloudflareD1 => cloudflare_d1_api_url(self),
             DatabaseType::SqlServer => {
                 format!("server=tcp:{host},{port};database={}", self.database.as_deref().unwrap_or("master"))
             }
@@ -938,6 +1012,7 @@ impl ConnectionConfig {
             DatabaseType::ClickHouse => clickhouse_http_url(self, raw_host, port),
             DatabaseType::Rqlite => rqlite_http_url(self, raw_host, port),
             DatabaseType::Turso => turso_http_url(self, raw_host, port),
+            DatabaseType::CloudflareD1 => cloudflare_d1_api_url(self),
             DatabaseType::SqlServer => format!(
                 "server=tcp:{host},{port};user={};password={};database={}",
                 self.username,
@@ -1624,6 +1699,12 @@ fn turso_http_url(config: &ConnectionConfig, host: &str, port: u16) -> String {
     format!("{scheme}://{}:{port}", bracket_ipv6(trimmed))
 }
 
+fn cloudflare_d1_api_url(config: &ConnectionConfig) -> String {
+    let account_id = config.host.trim();
+    let database_id = config.database.as_deref().unwrap_or_default().trim();
+    format!("https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}")
+}
+
 fn trim_http_host_port(value: &str, default_port: u16) -> String {
     let authority = value.trim_end_matches('/').split('/').next().unwrap_or(value).split('?').next().unwrap_or(value);
     if authority.starts_with('[') && !authority.contains("]:") {
@@ -1865,6 +1946,22 @@ mod tests {
     }
 
     #[test]
+    fn cloudflare_d1_database_type_and_api_url_are_stable() {
+        assert_eq!(serde_json::to_string(&DatabaseType::CloudflareD1).unwrap(), "\"cloudflare-d1\"");
+        assert_eq!(serde_json::from_str::<DatabaseType>("\"cloudflare-d1\"").unwrap(), DatabaseType::CloudflareD1);
+
+        let mut config = mysql_config("", "secret-token", Some("database-id"));
+        config.db_type = DatabaseType::CloudflareD1;
+        config.host = "account-id".to_string();
+        config.port = 443;
+        assert_eq!(
+            config.connection_url(),
+            "https://api.cloudflare.com/client/v4/accounts/account-id/d1/database/database-id"
+        );
+        assert!(!config.connection_url().contains("secret-token"));
+    }
+
+    #[test]
     fn connection_config_defaults_missing_agent_java_options_to_empty() {
         let config: ConnectionConfig = serde_json::from_value(serde_json::json!({
             "id": "id",
@@ -2028,6 +2125,7 @@ mod tests {
     fn serialized_connection_config_omits_legacy_transport_fields() {
         let mut config = mysql_config("root", "", None);
         config.transport_layers = vec![TransportLayerConfig::Proxy(ProxyTunnelConfig {
+            profile_id: String::new(),
             id: "proxy".to_string(),
             name: String::new(),
             enabled: true,

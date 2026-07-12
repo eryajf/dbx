@@ -808,6 +808,7 @@ async fn list_databases_once(state: &AppState, connection_id: &str) -> Result<Ve
             drop(connections);
             client.list_databases().await
         }
+        PoolKind::CloudflareD1(client) => db::cloudflare_d1_driver::list_databases(client).await,
         _ => Ok(vec![]),
     }
 }
@@ -1907,6 +1908,9 @@ async fn list_tables_once(
         PoolKind::VectorDb(client) => db::vector_driver::list_collections(client)
             .await
             .map(|infos| collection_names_to_tables(infos.into_iter().map(|i| i.name).collect(), "COLLECTION"))
+            .map(|tables| filter_table_infos(tables, filter, limit, offset, object_types)),
+        PoolKind::CloudflareD1(client) => db::cloudflare_d1_driver::list_tables(client, schema)
+            .await
             .map(|tables| filter_table_infos(tables, filter, limit, offset, object_types)),
         _ => Ok(vec![]),
     }
@@ -4197,6 +4201,9 @@ pub async fn get_columns_core(
             PoolKind::Rqlite(client) => {
                 db::rqlite_driver::get_columns(client, schema, table).await.map(deduplicate_column_infos)
             }
+            PoolKind::CloudflareD1(client) => db::cloudflare_d1_driver::get_columns(client, schema, table)
+                .await
+                .map(deduplicate_column_infos),
             _ => Ok(vec![]),
         }
     })
@@ -4293,6 +4300,7 @@ pub async fn list_indexes_core(
             PoolKind::Sqlite(p) => db::sqlite::list_indexes(p, schema, table).await,
             PoolKind::Rqlite(client) => db::rqlite_driver::list_indexes(client, schema, table).await,
             PoolKind::MongoDb(client) => db::mongo_driver::list_indexes(client, database, table).await,
+            PoolKind::CloudflareD1(client) => db::cloudflare_d1_driver::list_indexes(client, schema, table).await,
             _ => Ok(vec![]),
         }
     })
@@ -4339,6 +4347,7 @@ pub async fn list_foreign_keys_core(
             PoolKind::Postgres(p) => db::postgres::list_foreign_keys(p, schema, table).await,
             PoolKind::Sqlite(p) => db::sqlite::list_foreign_keys(p, schema, table).await,
             PoolKind::Rqlite(client) => db::rqlite_driver::list_foreign_keys(client, schema, table).await,
+            PoolKind::CloudflareD1(client) => db::cloudflare_d1_driver::list_foreign_keys(client, schema, table).await,
             _ => Ok(vec![]),
         }
     })
@@ -4383,6 +4392,7 @@ pub async fn list_triggers_core(
             PoolKind::Postgres(p) => db::postgres::list_triggers(p, schema, table).await,
             PoolKind::Sqlite(p) => db::sqlite::list_triggers(p, schema, table).await,
             PoolKind::Rqlite(client) => db::rqlite_driver::list_triggers(client, schema, table).await,
+            PoolKind::CloudflareD1(client) => db::cloudflare_d1_driver::list_triggers(client, schema, table).await,
             _ => Ok(vec![]),
         }
     })
@@ -4655,6 +4665,7 @@ pub async fn get_table_ddl_core(
         PoolKind::Postgres(p) => pg_ddl(p, schema, table).await,
         PoolKind::Sqlite(p) => sqlite_ddl(p, table).await,
         PoolKind::Rqlite(client) => db::rqlite_driver::table_ddl(client, table).await,
+        PoolKind::CloudflareD1(client) => db::cloudflare_d1_driver::table_ddl(client, table).await,
         _ => Err("DDL not supported for this database type".to_string()),
     }
 }
@@ -5073,6 +5084,9 @@ async fn get_object_source_once(
                     )
                     .await?;
                     first_string_cell(result)?
+                }
+                PoolKind::CloudflareD1(client) => {
+                    return db::cloudflare_d1_driver::object_source(client, name, &object_type).await;
                 }
                 _ => return Err("Object source is not supported for this database type".to_string()),
             }

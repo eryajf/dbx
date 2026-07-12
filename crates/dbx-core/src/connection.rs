@@ -23,6 +23,7 @@ use crate::db::proxy_tunnel::ProxyTunnelManager;
 use crate::db::ssh_tunnel::TunnelManager;
 use crate::models::connection::{
     parse_jdbc_host_port, parse_mongo_first_host, rewrite_jdbc_url_host, ConnectionConfig, DatabaseType,
+    TransportLayerConfig,
 };
 use crate::path_utils::expand_tilde;
 use crate::plugins::{PluginDriverSession, PluginRegistry, PluginRuntimeEnv};
@@ -85,6 +86,7 @@ pub enum PoolKind {
     Sqlite(db::sqlite::SqliteHandle),
     Rqlite(db::rqlite_driver::RqliteClient),
     Turso(db::turso_driver::TursoClient),
+    CloudflareD1(db::cloudflare_d1_driver::CloudflareD1Client),
     Redis(db::redis_driver::RedisConnection),
     DuckDb(DuckDbHandle),
     DuckDbWorker(DuckDbWorkerHandle),
@@ -243,7 +245,11 @@ pub fn database_connection_config(config: &ConnectionConfig, database: Option<&s
     if let Some(db) = database {
         if !matches!(
             db_config.db_type,
-            DatabaseType::Oracle | DatabaseType::Dameng | DatabaseType::MongoDb | DatabaseType::OceanbaseOracle
+            DatabaseType::Oracle
+                | DatabaseType::Dameng
+                | DatabaseType::MongoDb
+                | DatabaseType::OceanbaseOracle
+                | DatabaseType::CloudflareD1
         ) {
             db_config.database = Some(db.to_string());
         }
@@ -1082,6 +1088,9 @@ impl AppState {
                 db::turso_driver::test_connection(&client, connect_timeout).await?;
                 PoolKind::Turso(client)
             }
+            DatabaseType::CloudflareD1 => {
+                PoolKind::CloudflareD1(db::cloudflare_d1_driver::connect(&db_config, connect_timeout).await?)
+            }
             DatabaseType::Redis => {
                 let con = if db_config.uses_redis_cluster() {
                     db::redis_driver::RedisConnection::Cluster(
@@ -1376,12 +1385,61 @@ impl AppState {
         Ok(pool_key)
     }
 
+    /// Returns the enabled transport layers for a connection with tunnel
+    /// profile references resolved: a layer carrying a `profile_id` is
+    /// replaced by the shared profile from storage (Settings > Tunnels), so
+    /// edits to a profile take effect for every connection referencing it.
+    /// Fails when a referenced profile no longer exists — connecting without
+    /// the intended tunnel would silently bypass it.
+    pub async fn resolved_transport_layers(
+        &self,
+        config: &ConnectionConfig,
+    ) -> Result<Vec<TransportLayerConfig>, String> {
+        let layers = config.effective_transport_layers();
+        if layers.iter().all(|layer| layer.profile_id().is_empty()) {
+            return Ok(layers);
+        }
+
+        let profiles: HashMap<String, TransportLayerConfig> = self
+            .storage
+            .load_tunnel_profiles()
+            .await?
+            .into_iter()
+            .map(|profile| (profile.id().to_string(), profile))
+            .collect();
+
+        layers
+            .into_iter()
+            .map(|layer| {
+                let profile_id = layer.profile_id();
+                if profile_id.is_empty() {
+                    return Ok(layer);
+                }
+                let Some(profile) = profiles.get(profile_id) else {
+                    let label = if layer.name().is_empty() { profile_id } else { layer.name() };
+                    return Err(format!(
+                        "Tunnel profile '{label}' referenced by this connection no longer exists. Re-create it in Settings > Tunnels or edit the connection's tunnel settings."
+                    ));
+                };
+                // Validate the stored reference again at connect time because synced or
+                // externally supplied configs may bypass the editor's type constraints.
+                if !layer.same_type_as(profile) {
+                    return Err(format!(
+                        "Tunnel profile '{}' has a different type than the referencing transport layer.",
+                        if layer.name().is_empty() { profile_id } else { layer.name() }
+                    ));
+                }
+                Ok(layer.resolved_from_profile(profile))
+            })
+            .collect()
+    }
+
     pub async fn connection_host_port(
         &self,
         connection_id: &str,
         config: &ConnectionConfig,
     ) -> Result<(String, u16), String> {
-        let transport_layers = config.effective_transport_layers();
+        let transport_layers = self.resolved_transport_layers(config).await?;
         if transport_layers.is_empty() {
             return Ok((config.host.clone(), config.port));
         }
@@ -1406,7 +1464,7 @@ impl AppState {
         connection_id: &str,
         config: &ConnectionConfig,
     ) -> Result<redis::aio::MultiplexedConnection, String> {
-        let transport_layers = config.effective_transport_layers();
+        let transport_layers = self.resolved_transport_layers(config).await?;
         if transport_layers.is_empty() {
             return db::redis_driver::connect_sentinel(config).await;
         }
@@ -1536,7 +1594,7 @@ impl AppState {
         connection_id: &str,
         config: &ConnectionConfig,
     ) -> Result<db::redis_driver::RedisClusterPool, String> {
-        let transport_layers = config.effective_transport_layers();
+        let transport_layers = self.resolved_transport_layers(config).await?;
         if transport_layers.is_empty() {
             return db::redis_driver::connect_cluster(config).await;
         }
@@ -1794,6 +1852,18 @@ impl AppState {
                         Ok(()) => false,
                         Err(err) => {
                             log::warn!("Turso connection pool '{pool_key}' is stale: {err}");
+                            true
+                        }
+                    }
+                }
+                PoolKind::CloudflareD1(client) => {
+                    let client = client.clone();
+                    drop(connections);
+                    let timeout = crate::db::connection_timeout();
+                    match db::cloudflare_d1_driver::test_connection(&client, timeout).await {
+                        Ok(()) => false,
+                        Err(err) => {
+                            log::warn!("Cloudflare D1 connection pool '{pool_key}' is stale: {err}");
                             true
                         }
                     }
@@ -2310,6 +2380,15 @@ impl AppState {
                         false
                     }
                 },
+                PoolKind::CloudflareD1(client) => {
+                    match db::cloudflare_d1_driver::test_connection(client, timeout).await {
+                        Ok(()) => true,
+                        Err(e) => {
+                            log::warn!("Cloudflare D1 connection pool '{key}' is unhealthy: {e}");
+                            false
+                        }
+                    }
+                }
                 PoolKind::Agent(client) => {
                     let mut agent = client.lock().await;
                     match agent.test_connection(serde_json::json!({})).await {
@@ -2719,12 +2798,13 @@ fn session_scoped_pool_key_for(
     client_session_id: Option<&str>,
 ) -> String {
     let shares_base_pool = config.is_some_and(|config| {
-        config.db_type == DatabaseType::DuckDb
+        matches!(config.db_type, DatabaseType::DuckDb | DatabaseType::CloudflareD1)
             || (config.db_type == DatabaseType::Sqlite && db::sqlite::is_memory_database_path(&config.host))
     });
     if shares_base_pool {
-        // In-memory SQLite databases only exist inside one connection. A session-scoped
-        // handle would silently point query/data tabs at a different empty database.
+        // DuckDB and D1 already use connection-scoped handles. In-memory SQLite databases
+        // only exist inside one connection, so a session-scoped handle would point tabs at
+        // a different empty database.
         return base_pool_key;
     }
     session_scoped_pool_key(base_pool_key, client_session_id)
@@ -2737,6 +2817,7 @@ fn clone_pool_kind(pool: &PoolKind) -> PoolKind {
         PoolKind::Sqlite(p) => PoolKind::Sqlite(p.clone()),
         PoolKind::Rqlite(client) => PoolKind::Rqlite(client.clone()),
         PoolKind::Turso(client) => PoolKind::Turso(client.clone()),
+        PoolKind::CloudflareD1(client) => PoolKind::CloudflareD1(client.clone()),
         #[cfg(feature = "duckdb-bundled")]
         PoolKind::DuckDb(con) => PoolKind::DuckDb(con.clone()),
         #[cfg(feature = "duckdb-bundled")]
@@ -2771,6 +2852,7 @@ pub async fn close_pool_kind(pool: PoolKind) {
         PoolKind::Sqlite(_) => {}
         PoolKind::Rqlite(_) => {}
         PoolKind::Turso(_) => {}
+        PoolKind::CloudflareD1(_) => {}
         PoolKind::Redis(conn) => {
             drop(conn);
         }
@@ -3098,8 +3180,8 @@ mod tests {
     use crate::database_capabilities;
     use crate::db;
     use crate::models::connection::{
-        default_connect_timeout_secs, default_redis_key_separator, ConnectionConfig, DatabaseType, ProxyTunnelConfig,
-        ProxyType, TransportLayerConfig,
+        default_connect_timeout_secs, default_redis_key_separator, ConnectionConfig, DatabaseType, HttpTunnelConfig,
+        ProxyTunnelConfig, ProxyType, SshTunnelConfig, TransportLayerConfig,
     };
     use crate::query;
     use crate::schema;
@@ -3890,6 +3972,20 @@ mod tests {
     }
 
     #[test]
+    fn cloudflare_d1_query_namespace_does_not_replace_database_id() {
+        let mut config = mysql_config(Some("database-uuid"));
+        config.db_type = DatabaseType::CloudflareD1;
+
+        let scoped = database_connection_config(&config, Some("main"));
+
+        assert_eq!(scoped.database.as_deref(), Some("database-uuid"));
+        assert_eq!(
+            super::base_pool_key_for(Some(DatabaseType::CloudflareD1), "d1-conn", Some("main"), false),
+            "d1-conn"
+        );
+    }
+
+    #[test]
     fn oracle_database_connection_ignores_requested_database() {
         let mut config = mysql_config(Some("ORCL"));
         config.db_type = DatabaseType::Oracle;
@@ -3951,7 +4047,6 @@ mod tests {
             super::session_scoped_pool_key_for(Some(&duckdb), "duckdb-conn".to_string(), Some("tab-1")),
             "duckdb-conn"
         );
-
         let mut sqlite_memory = mysql_config(None);
         sqlite_memory.db_type = DatabaseType::Sqlite;
         sqlite_memory.host = " :MeMoRy: ".to_string();
@@ -3964,6 +4059,13 @@ mod tests {
         assert_eq!(
             super::session_scoped_pool_key_for(Some(&sqlite_memory), "sqlite-file".to_string(), Some("tab-1")),
             "sqlite-file:session:tab-1"
+        );
+
+        let mut cloudflare_d1 = mysql_config(None);
+        cloudflare_d1.db_type = DatabaseType::CloudflareD1;
+        assert_eq!(
+            super::session_scoped_pool_key_for(Some(&cloudflare_d1), "d1-conn".to_string(), Some("tab-1")),
+            "d1-conn"
         );
     }
 
@@ -4352,11 +4454,141 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    fn ssh_layer(id: &str, profile_id: &str) -> SshTunnelConfig {
+        SshTunnelConfig {
+            id: id.to_string(),
+            name: String::new(),
+            enabled: true,
+            host: String::new(),
+            port: 22,
+            user: String::new(),
+            password: String::new(),
+            key_path: String::new(),
+            key_passphrase: String::new(),
+            connect_timeout_secs: 5,
+            expose_lan: false,
+            use_ssh_agent: false,
+            ssh_agent_sock_path: String::new(),
+            auth_method: String::new(),
+            profile_id: profile_id.to_string(),
+        }
+    }
+
+    fn proxy_layer(id: &str, profile_id: &str) -> ProxyTunnelConfig {
+        ProxyTunnelConfig {
+            id: id.to_string(),
+            name: String::new(),
+            enabled: true,
+            proxy_type: ProxyType::Socks5,
+            host: String::new(),
+            port: 1080,
+            username: String::new(),
+            password: String::new(),
+            profile_id: profile_id.to_string(),
+        }
+    }
+
+    fn http_tunnel_layer(id: &str, profile_id: &str) -> HttpTunnelConfig {
+        HttpTunnelConfig {
+            id: id.to_string(),
+            name: String::new(),
+            enabled: true,
+            url: String::new(),
+            token: String::new(),
+            connect_timeout_secs: 10,
+            profile_id: profile_id.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolved_transport_layers_substitutes_shared_profiles() {
+        let (state, dir) = test_app_state().await;
+
+        let mut profile = ssh_layer("shared-bastion", "");
+        profile.name = "Bastion".to_string();
+        profile.host = "bastion.example.com".to_string();
+        profile.user = "deploy".to_string();
+        profile.password = "s3cret".to_string();
+        profile.auth_method = "password".to_string();
+        state.storage.save_tunnel_profiles(&[TransportLayerConfig::Ssh(profile)]).await.unwrap();
+
+        let mut config = mysql_config(Some("app"));
+        config.transport_layers = vec![TransportLayerConfig::Ssh(ssh_layer("layer-1", "shared-bastion"))];
+
+        let resolved = state.resolved_transport_layers(&config).await.unwrap();
+        assert_eq!(resolved.len(), 1);
+        match &resolved[0] {
+            TransportLayerConfig::Ssh(ssh) => {
+                // Profile supplies the configuration; the layer keeps its identity.
+                assert_eq!(ssh.id, "layer-1");
+                assert_eq!(ssh.profile_id, "shared-bastion");
+                assert_eq!(ssh.host, "bastion.example.com");
+                assert_eq!(ssh.user, "deploy");
+                assert_eq!(ssh.password, "s3cret");
+            }
+            other => panic!("expected ssh layer, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn resolved_transport_layers_fails_closed_on_missing_profile() {
+        let (state, dir) = test_app_state().await;
+
+        let mut config = mysql_config(Some("app"));
+        config.transport_layers = vec![TransportLayerConfig::Ssh(ssh_layer("layer-1", "deleted-profile"))];
+
+        let err = state.resolved_transport_layers(&config).await.unwrap_err();
+        assert!(err.contains("no longer exists"), "unexpected error: {err}");
+
+        // Disabled reference layers are filtered out before resolution, so a
+        // dangling reference on a disabled layer must not block connecting.
+        let mut disabled = ssh_layer("layer-1", "deleted-profile");
+        disabled.enabled = false;
+        config.transport_layers = vec![TransportLayerConfig::Ssh(disabled)];
+        assert!(state.resolved_transport_layers(&config).await.unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn resolved_transport_layers_rejects_mismatched_profile_types() {
+        let (state, dir) = test_app_state().await;
+
+        let mismatches = [
+            (
+                TransportLayerConfig::Ssh(ssh_layer("layer", "shared")),
+                TransportLayerConfig::Proxy(proxy_layer("shared", "")),
+            ),
+            (
+                TransportLayerConfig::Proxy(proxy_layer("layer", "shared")),
+                TransportLayerConfig::HttpTunnel(http_tunnel_layer("shared", "")),
+            ),
+            (
+                TransportLayerConfig::HttpTunnel(http_tunnel_layer("layer", "shared")),
+                TransportLayerConfig::Ssh(ssh_layer("shared", "")),
+            ),
+        ];
+
+        for (layer, profile) in mismatches {
+            state.storage.save_tunnel_profiles(&[profile]).await.unwrap();
+            let mut config = mysql_config(Some("app"));
+            config.transport_layers = vec![layer];
+
+            let error = state.resolved_transport_layers(&config).await.unwrap_err();
+            assert!(error.contains("different type"));
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[tokio::test]
     async fn proxy_connection_uses_local_forward_endpoint() {
         let (state, dir) = test_app_state().await;
         let mut config = mysql_config(Some("app"));
         config.transport_layers = vec![TransportLayerConfig::Proxy(ProxyTunnelConfig {
+            profile_id: String::new(),
             id: "proxy".to_string(),
             name: String::new(),
             enabled: true,
@@ -4405,6 +4637,7 @@ mod tests {
             "auth": { "kind": "none" }
         }));
         config.transport_layers = vec![TransportLayerConfig::Proxy(ProxyTunnelConfig {
+            profile_id: String::new(),
             id: "proxy".to_string(),
             name: String::new(),
             enabled: true,
@@ -4462,6 +4695,7 @@ mod tests {
             "auth": { "kind": "none" }
         }));
         config.transport_layers = vec![TransportLayerConfig::Proxy(ProxyTunnelConfig {
+            profile_id: String::new(),
             id: "proxy".to_string(),
             name: String::new(),
             enabled: true,

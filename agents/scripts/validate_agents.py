@@ -17,6 +17,7 @@ NATIVE_ONLY_AGENT_MODULES = {
     "xugu": "drivers/xugu",
 }
 JDBC_ARCHITECTURE_ALLOWLIST = {
+    "h2-legacy": "reuses the H2 agent implementation with an isolated legacy driver version",
     "access": "custom Access metadata and URL behavior pending migration",
     "dameng": "custom Dameng metadata and DDL pending migration",
     "db2": "custom DB2 metadata pending migration",

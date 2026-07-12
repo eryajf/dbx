@@ -474,6 +474,8 @@ function connectionTooltipScheme(config: Pick<ConnectionConfig, "db_type" | "ssl
     case "turso":
     case "mq":
       return config.ssl ? "https" : "http";
+    case "cloudflare-d1":
+      return "https";
     case "dameng":
       return "dm";
     default:
@@ -4825,7 +4827,7 @@ function treeItemMenuItems(): ContextMenuItem[] {
     items.push({ label: t("contextMenu.newQuery"), action: newQuery, icon: TerminalSquare });
     const sqlHistoryMenu = savedSqlHistorySubmenu();
     if (sqlHistoryMenu) items.push(sqlHistoryMenu);
-    if (node.type === "database") {
+    if (node.type === "database" && currentDatabaseType() !== "cloudflare-d1") {
       if (!isNodeDefaultDatabase.value) {
         items.push({ label: t("contextMenu.setDefaultDatabase"), action: setNodeAsDefaultDatabase, icon: Database });
       } else {

@@ -91,7 +91,7 @@ function formatRedisCommandToolResult(result: RedisCommandResult) {
 }
 
 export const DBX_CONNECTION_TYPE_DESCRIPTION =
-  "Database type: postgres, mysql, sqlite, rqlite, redis, duckdb, clickhouse, sqlserver, mongodb, oracle, elasticsearch, etcd, doris, starrocks, manticoresearch, milvus, qdrant, weaviate, chromadb, redshift, dameng, kingbase, highgo, vastbase, goldendb, databend, gaussdb, kwdb, yashandb, databricks, saphana, teradata, vertica, firebird, exasol, opengauss, oceanbase-oracle, questdb, gbase, h2, snowflake, trino, prestosql, hive, spark, db2, informix, influxdb, iris, neo4j, cassandra, bigquery, kylin, sundb, oscar, tdengine, iotdb, xugu, zookeeper, jdbc, access, mq";
+  "Database type: postgres, mysql, sqlite, rqlite, cloudflare-d1, redis, duckdb, clickhouse, sqlserver, mongodb, oracle, elasticsearch, etcd, doris, starrocks, manticoresearch, milvus, qdrant, weaviate, chromadb, redshift, dameng, kingbase, highgo, vastbase, goldendb, databend, gaussdb, kwdb, yashandb, databricks, saphana, teradata, vertica, firebird, exasol, opengauss, oceanbase-oracle, questdb, gbase, h2, snowflake, trino, prestosql, hive, spark, db2, informix, influxdb, iris, neo4j, cassandra, bigquery, kylin, sundb, oscar, tdengine, iotdb, xugu, zookeeper, jdbc, access, mq";
 const FILE_CAPABLE_CONNECTION_TYPES = new Set(["sqlite", "duckdb", "access", "h2"]);
 
 interface McpScope {
@@ -127,12 +127,7 @@ async function loadScopedConnections(backend: Backend, scope: McpScope): Promise
   return connections.filter((config) => connectionMatchesScope(config, scope));
 }
 
-async function resolveConnection(
-  backend: Backend,
-  scope: McpScope,
-  requestedId?: string,
-  requestedName?: string,
-): Promise<{ config?: ConnectionConfig; error?: ReturnType<typeof toolError> }> {
+async function resolveConnection(backend: Backend, scope: McpScope, requestedId?: string, requestedName?: string): Promise<{ config?: ConnectionConfig; error?: ReturnType<typeof toolError> }> {
   // connection_id takes priority over connection_name when both are provided.
   if (requestedId?.trim()) {
     const connections = await backend.loadConnections();
@@ -153,10 +148,7 @@ async function resolveConnection(
     if (matching.length > 1) {
       const lines = matching.map((c) => `- ${c.id}: ${c.db_type} @ ${c.host}:${c.port}`);
       return {
-        error: toolError(
-          "AMBIGUOUS_CONNECTION",
-          `Multiple connections found with name "${requestedName}". Please specify connection_id:\n${lines.join("\n")}`,
-        ),
+        error: toolError("AMBIGUOUS_CONNECTION", `Multiple connections found with name "${requestedName}". Please specify connection_id:\n${lines.join("\n")}`),
       };
     }
     return { config: matching[0] };
@@ -340,11 +332,11 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
       {
         name: z.string().describe("Connection name"),
         db_type: z.string().describe(DBX_CONNECTION_TYPE_DESCRIPTION),
-        host: z.string().describe("Database host"),
+        host: z.string().describe("Database host; for cloudflare-d1, use the Cloudflare Account ID"),
         port: z.number().optional().describe("Database port (TDengine defaults to 6041, IoTDB defaults to 6667, XuguDB defaults to 5138)"),
         username: z.string().default("").describe("Username"),
-        password: z.string().default("").describe("Password"),
-        database: z.string().optional().describe("Default database name"),
+        password: z.string().default("").describe("Password; for cloudflare-d1, use the API Token"),
+        database: z.string().optional().describe("Default database name; for cloudflare-d1, use the D1 Database ID"),
         ssl: z.boolean().default(false).describe("Enable SSL"),
         driver_profile: z.string().optional().describe("Driver profile (e.g. 'gbase8a', 'gbase8s')"),
       },
@@ -354,6 +346,7 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
         const DEFAULT_PORTS: Record<string, number> = {
           kwdb: 26257,
           rqlite: 4001,
+          "cloudflare-d1": 443,
           tdengine: 6041,
           oscar: 2003,
           iotdb: 6667,

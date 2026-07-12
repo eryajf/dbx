@@ -18,6 +18,8 @@ import type { InfluxDbExternalConfig, InfluxDbVersion } from "@/types/influxdb";
 import type { MqAdminConfig, MqAuth, MqSystemKind } from "@/types/mq";
 import type { NacosAdminConfig, NacosAuthConfig } from "@/types/nacos";
 import { CONNECTION_ATTEMPT_CANCELLED_MESSAGE, useConnectionStore } from "@/stores/connectionStore";
+import { useTunnelProfileStore } from "@/stores/tunnelProfileStore";
+import { detachTunnelProfileLayer, tunnelProfileReferenceLayer, tunnelProfileSummary } from "@/lib/connection/tunnelProfiles";
 import { REDIS_SCAN_PAGE_SIZE_DEFAULT, REDIS_SCAN_PAGE_SIZE_MIN, REDIS_SCAN_PAGE_SIZE_MAX, REDIS_SCAN_PAGE_SIZE_OPTIONS } from "@/lib/redis/redisKeyPattern";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useToast } from "@/composables/useToast";
@@ -48,9 +50,11 @@ import { buildDraftVisibleDatabasesConnectionId, connectionCanChooseVisibleDatab
 import { canSaveVisibleDatabaseSelection, connectionUsesVisibleSchemaFilter, filterDatabaseNamesForVisiblePicker, isSystemDatabaseName, normalizeVisibleDatabaseSelection, buildDraftVisibleSchemasConnectionId, normalizeVisibleSchemaSelection } from "@/lib/database/visibleDatabases";
 import { isSchemaAware, isSingleDatabase } from "@/lib/database/databaseFeatureSupport";
 import VisibleSchemasDialog from "@/components/sidebar/VisibleSchemasDialog.vue";
+import CloudflareD1ConnectionFields from "@/components/connection/CloudflareD1ConnectionFields.vue";
 import { oceanbaseModeConnectionPatch, oceanbaseSubModeFromConfig } from "@/lib/database/oceanbaseConnectionMode";
 import { translateBackendError } from "@/i18n/backend-errors";
 import { applyHiveKerberosSubmitConfig, hiveKerberosFormConfig, type HiveKerberosAuthMode } from "@/lib/database/hiveKerberosOptions";
+import { hasCloudflareD1Credentials, isCloudflareD1Connection, normalizeCloudflareD1Connection } from "@/lib/connection/cloudflareD1";
 
 type DbOption = { value: string; label: string };
 type DbCategory = { key: string; title: string; options: DbOption[] };
@@ -114,9 +118,11 @@ const emit = defineEmits<{
   connectSucceeded: [name: string];
   connectFailed: [message: string];
   openDriverStore: [];
+  openTunnelProfileSettings: [];
 }>();
 
 const store = useConnectionStore();
+const tunnelProfileStore = useTunnelProfileStore();
 const isTesting = ref(false);
 const isSaving = ref(false);
 const testResult = ref<{ ok: boolean; message: string } | null>(null);
@@ -251,6 +257,7 @@ function normalizeSshTunnel(hop: Partial<SshTunnelConfig>): SshTunnelConfig {
     use_ssh_agent: !!hop.use_ssh_agent,
     ssh_agent_sock_path: hop.ssh_agent_sock_path || "",
     auth_method: hop.auth_method || inferSshAuthMethod(hop),
+    profile_id: hop.profile_id || undefined,
   };
 }
 
@@ -288,6 +295,7 @@ function normalizeProxyTunnel(layer: Partial<ProxyTunnelConfig>): ProxyTunnelCon
     port: Number(layer.port) || 1080,
     username: layer.username || "",
     password: layer.password || "",
+    profile_id: layer.profile_id || undefined,
   };
 }
 
@@ -299,6 +307,7 @@ function normalizeHttpTunnel(layer: Partial<HttpTunnelConfig>): HttpTunnelConfig
     url: layer.url || "",
     token: layer.token || "",
     connect_timeout_secs: Number(layer.connect_timeout_secs) || 10,
+    profile_id: layer.profile_id || undefined,
   };
 }
 
@@ -540,6 +549,7 @@ const driverProfiles: Record<
   sqlite: { type: "sqlite", port: 0, user: "", label: "SQLite", icon: "sqlite" },
   rqlite: { type: "rqlite", port: 4001, user: "", label: "RQLite", icon: "rqlite" },
   turso: { type: "turso", port: 443, user: "", label: "Turso", icon: "turso" },
+  "cloudflare-d1": { type: "cloudflare-d1", port: 443, user: "", label: "Cloudflare D1", icon: "cloudflare-d1" },
   duckdb: { type: "duckdb", port: 0, user: "", label: "DuckDB", icon: "duckdb" },
   access: { type: "access", port: 0, user: "", label: "Microsoft Access", icon: "access" },
   mongodb: { type: "mongodb", port: 27017, user: "", label: "MongoDB", icon: "mongodb" },
@@ -637,6 +647,7 @@ const driverProfiles: Record<
   },
   dm: { type: "dameng", port: 5236, user: "SYSDBA", label: "DM (Dameng)", icon: "dm" },
   h2: { type: "h2", port: 9092, user: "sa", label: "H2", icon: "h2" },
+  "h2-legacy": { type: "h2", port: 9092, user: "sa", label: "H2 2.1 Legacy", icon: "h2" },
   snowflake: { type: "snowflake", port: 443, user: "", label: "Snowflake", icon: "snowflake" },
   trino: { type: "trino", port: 8080, user: "", label: "Trino", icon: "trino" },
   prestosql: { type: "prestosql", port: 8080, user: "", label: "PrestoSQL", icon: "presto" },
@@ -1534,6 +1545,32 @@ const selectedSshLayer = computed(() => (selectedTransportLayer.value?.type === 
 const selectedProxyLayer = computed(() => (selectedTransportLayer.value?.type === "proxy" ? selectedTransportLayer.value : null));
 const selectedHttpTunnelLayer = computed(() => (selectedTransportLayer.value?.type === "http_tunnel" ? selectedTransportLayer.value : null));
 
+const tunnelProfiles = computed(() => tunnelProfileStore.profiles);
+const selectedLayerProfileId = computed(() => selectedTransportLayer.value?.profile_id || "");
+const selectedLayerProfile = computed(() => tunnelProfileStore.profileById(selectedLayerProfileId.value));
+
+function tunnelProfileOptionLabel(profile: (typeof tunnelProfiles.value)[number]): string {
+  const summary = tunnelProfileSummary(profile);
+  if (!profile.name?.trim()) return summary || profile.id;
+  return summary ? `${profile.name} (${summary})` : profile.name;
+}
+
+function applyTunnelProfileSelection(value: unknown) {
+  const selected = selectedTransportLayer.value;
+  if (!selected) return;
+  if (!value || value === "custom") {
+    if (!selected.profile_id) return;
+    const detached = detachTunnelProfileLayer(selected, tunnelProfileStore.profileById(selected.profile_id));
+    form.value.transport_layers = transportLayers.value.map((layer) => (layer.id === selected.id ? detached : layer));
+  } else {
+    const profile = tunnelProfileStore.profileById(String(value));
+    if (!profile) return;
+    const stub = tunnelProfileReferenceLayer(profile, selected);
+    form.value.transport_layers = transportLayers.value.map((layer) => (layer.id === selected.id ? stub : layer));
+  }
+  resetTestState();
+}
+
 function transportLayerDefaultName(layer: TransportLayerConfig, index: number): string {
   if (layer.type === "proxy") return `Proxy ${index + 1}`;
   if (layer.type === "http_tunnel") return t("connection.httpTunnelDefaultName", { index: index + 1 });
@@ -1541,6 +1578,11 @@ function transportLayerDefaultName(layer: TransportLayerConfig, index: number): 
 }
 
 function transportLayerDisplayName(layer: TransportLayerConfig, index: number): string {
+  if (layer.profile_id) {
+    const profile = tunnelProfileStore.profileById(layer.profile_id);
+    if (profile) return profile.name?.trim() || tunnelProfileSummary(profile) || transportLayerDefaultName(layer, index);
+    return layer.name?.trim() || t("connection.tunnelProfileMissingName");
+  }
   const target = layer.type === "http_tunnel" ? layer.url?.trim() : layer.host?.trim();
   return layer.name?.trim() || target || transportLayerDefaultName(layer, index);
 }
@@ -1597,6 +1639,7 @@ const iconTypeMap: Record<string, string> = {
   sqlite: "sqlite",
   rqlite: "rqlite",
   turso: "turso",
+  "cloudflare-d1": "cloudflare-d1",
   access: "access",
   redis: "redis",
   mongodb: "mongodb",
@@ -1686,6 +1729,7 @@ const dbOptions: DbOption[] = [
   { value: "dm", label: "DM (Dameng)" },
   { value: "opengauss", label: "openGauss" },
   { value: "turso", label: "Turso" },
+  { value: "cloudflare-d1", label: "Cloudflare D1" },
   { value: "duckdb", label: "DuckDB" },
   { value: "rqlite", label: "RQLite" },
   { value: "access", label: "Microsoft Access" },
@@ -1877,7 +1921,7 @@ const zookeeperConnectString = computed({
     form.value.connection_string = normalizeZooKeeperConnectString(value);
   },
 });
-const canUseTransportLayers = computed(() => form.value.db_type !== "sqlite" && form.value.db_type !== "access" && !isH2FileMode.value);
+const canUseTransportLayers = computed(() => form.value.db_type !== "sqlite" && form.value.db_type !== "access" && !isCloudflareD1Connection(form.value) && !isH2FileMode.value);
 const shouldShowAgentDriverInstallHint = computed(() => showAgentDriverInstallHint(form.value.db_type, agentDrivers.value, form.value.driver_profile));
 const h2DriverMissing = computed(() => form.value.db_type === "h2" && isH2FileMode.value && agentDrivers.value.find((d) => d.db_type === "h2")?.installed !== true);
 const canChooseVisibleDatabases = computed(() => connectionCanChooseVisibleDatabases(form.value));
@@ -2002,6 +2046,7 @@ const hasRequiredConnectionTarget = computed(() => {
   }
   if (form.value.db_type === "zookeeper") return !!(form.value.host || form.value.connection_string || connectionUrlInput.value.trim());
   if (form.value.db_type === "nacos") return !!nacosServerAddr.value.trim();
+  if (isCloudflareD1Connection(form.value)) return hasCloudflareD1Credentials(form.value);
   if (isH2FileMode.value) return !!(form.value.host.trim() || h2FilePathFromJdbcUrl(form.value.connection_string));
   return !!(form.value.host || (mongoUseUrl.value && form.value.connection_string) || (form.value.db_type === "jdbc" && form.value.connection_string) || connectionUrlInput.value.trim());
 });
@@ -2250,6 +2295,12 @@ function connectionConfigForSubmit(id: string): ConnectionConfig {
     config.database = config.database?.trim() || undefined;
     if (!config.database) {
       throw new Error(t("connection.kingbaseDatabaseRequired"));
+    }
+  }
+  if (isCloudflareD1Connection(config)) {
+    normalizeCloudflareD1Connection(config);
+    if (!hasCloudflareD1Credentials(config)) {
+      throw new Error(t("connection.d1FieldsRequired"));
     }
   }
   config.transport_layers = (config.transport_layers || []).map(normalizeTransportLayer);
@@ -3306,6 +3357,9 @@ function validateTransportLayers(config: LegacyConnectionConfig) {
   const layers = config.transport_layers || [];
   layers.forEach((layer, index) => {
     if (layer.enabled === false) return;
+    // Profile-referencing layers are stubs: the shared profile supplies the
+    // whole configuration at connect time, so there is nothing to validate.
+    if (layer.profile_id) return;
     const label = layer.name?.trim() || transportLayerDefaultName(layer, index);
     if (layer.type === "http_tunnel") {
       if (index !== 0) throw new Error(t("connection.httpTunnelInvalidOrder", { hop: label }));
@@ -3713,6 +3767,7 @@ function onJdbcDriverSelect(id: any) {
 }
 
 onMounted(async () => {
+  void tunnelProfileStore.init();
   unlistenAgentInstallProgress = await api.listenAgentInstallProgress(handleAgentInstallProgress);
 });
 
@@ -3928,6 +3983,30 @@ function openExternalUrl(url: string) {
                     <Button size="sm" :variant="h2ConnectionMode === 'tcp' ? 'default' : 'outline'" @click="switchH2ConnectionMode('tcp')">
                       {{ t("connection.h2TcpMode") }}
                     </Button>
+                  </div>
+                </div>
+
+                <div v-if="form.db_type === 'h2'" class="grid grid-cols-4 items-center gap-4">
+                  <Label :class="connectionLabelSmallClass">Driver</Label>
+                  <div class="col-span-3 flex gap-2">
+                    <Button
+                      size="sm"
+                      :variant="form.driver_profile !== 'h2-legacy' ? 'default' : 'outline'"
+                      @click="
+                        form.driver_profile = 'h2';
+                        resetTestState();
+                      "
+                      >H2 2.3</Button
+                    >
+                    <Button
+                      size="sm"
+                      :variant="form.driver_profile === 'h2-legacy' ? 'default' : 'outline'"
+                      @click="
+                        form.driver_profile = 'h2-legacy';
+                        resetTestState();
+                      "
+                      >H2 2.1 Legacy</Button
+                    >
                   </div>
                 </div>
 
@@ -4702,6 +4781,10 @@ function openExternalUrl(url: string) {
                   </div>
                 </template>
 
+                <template v-else-if="form.db_type === 'cloudflare-d1'">
+                  <CloudflareD1ConnectionFields v-model:account-id="form.host" v-model:database-id="form.database" v-model:api-token="form.password" />
+                </template>
+
                 <!-- MySQL / PostgreSQL: host, port, user, password, database -->
                 <template v-else>
                   <div class="grid grid-cols-4 items-center gap-4">
@@ -5372,7 +5455,35 @@ function openExternalUrl(url: string) {
                     <Label :class="connectionLabelSmallClass">{{ t("connection.sshHopName") }}</Label>
                     <Input v-model="selectedTransportLayer.name" class="col-span-3" :placeholder="t('connection.sshHopNamePlaceholder')" />
                   </div>
-                  <div class="grid grid-cols-4 items-center gap-4">
+                  <div v-if="tunnelProfiles.length || selectedLayerProfileId" class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelSmallClass">{{ t("connection.tunnelProfile") }}</Label>
+                    <div class="col-span-3 flex min-w-0 items-center gap-2">
+                      <Select :model-value="selectedLayerProfileId || 'custom'" @update:model-value="applyTunnelProfileSelection">
+                        <SelectTrigger class="h-9 min-w-0 flex-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="custom">{{ t("connection.tunnelProfileCustom") }}</SelectItem>
+                          <SelectItem v-for="profile in tunnelProfiles" :key="profile.id" :value="profile.id">{{ tunnelProfileOptionLabel(profile) }}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button type="button" variant="outline" size="sm" class="shrink-0" @click="emit('openTunnelProfileSettings')">
+                        {{ t("connection.tunnelProfileManage") }}
+                      </Button>
+                    </div>
+                  </div>
+                  <div v-if="selectedLayerProfileId" class="grid grid-cols-4 items-start gap-4">
+                    <span />
+                    <div class="col-span-3 grid min-w-0 gap-1 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                      <template v-if="selectedLayerProfile">
+                        <span class="truncate font-medium text-foreground">{{ selectedLayerProfile.name || tunnelProfileSummary(selectedLayerProfile) }}</span>
+                        <span v-if="selectedLayerProfile.name && tunnelProfileSummary(selectedLayerProfile)" class="truncate">{{ tunnelProfileSummary(selectedLayerProfile) }}</span>
+                        <span>{{ t("connection.tunnelProfileManaged") }}</span>
+                      </template>
+                      <span v-else class="text-red-500">{{ t("connection.tunnelProfileMissing") }}</span>
+                    </div>
+                  </div>
+                  <div v-if="!selectedLayerProfileId" class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelSmallClass">Type</Label>
                     <Select :model-value="selectedTransportLayer.type" @update:model-value="(value: any) => changeSelectedTransportLayerType(value)">
                       <SelectTrigger class="col-span-3 h-9">
@@ -5385,7 +5496,7 @@ function openExternalUrl(url: string) {
                       </SelectContent>
                     </Select>
                   </div>
-                  <template v-if="selectedSshLayer">
+                  <template v-if="selectedSshLayer && !selectedLayerProfileId">
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelSmallClass">{{ t("connection.sshHost") }}</Label>
                       <Input v-model="selectedSshLayer.host" class="col-span-2" list="ssh-config-host-aliases" :placeholder="t('connection.sshHostPlaceholder')" :disabled="selectedSshLayer.enabled === false" @change="applySshConfigHostAliasPrefill(selectedSshLayer!)" />
@@ -5463,7 +5574,7 @@ function openExternalUrl(url: string) {
                       <Input v-model.number="selectedSshLayer.connect_timeout_secs" type="number" min="1" max="300" step="1" class="col-span-3" :disabled="selectedSshLayer.enabled === false" />
                     </div>
                   </template>
-                  <template v-else-if="selectedProxyLayer">
+                  <template v-else-if="selectedProxyLayer && !selectedLayerProfileId">
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelSmallClass">{{ t("connection.proxyType") }}</Label>
                       <Select :model-value="selectedProxyLayer.proxy_type || 'socks5'" :disabled="selectedProxyLayer.enabled === false" @update:model-value="updateSelectedProxyType">
@@ -5490,7 +5601,7 @@ function openExternalUrl(url: string) {
                       <PasswordInput v-model="selectedProxyLayer.password" class="col-span-3" :placeholder="t('connection.proxyPasswordPlaceholder')" :disabled="selectedProxyLayer.enabled === false" />
                     </div>
                   </template>
-                  <template v-else-if="selectedHttpTunnelLayer">
+                  <template v-else-if="selectedHttpTunnelLayer && !selectedLayerProfileId">
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelSmallClass">{{ t("connection.httpTunnelUrl") }}</Label>
                       <Input v-model="selectedHttpTunnelLayer.url" class="col-span-3" placeholder="https://dbx.example.com/dbx_tunnel.php" :disabled="selectedHttpTunnelLayer.enabled === false" />

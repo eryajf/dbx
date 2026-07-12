@@ -762,6 +762,28 @@ test("suggests SQL Server IIF and CHOOSE scalar functions", () => {
   );
 });
 
+test("only suggests Cloudflare D1 supported common functions", () => {
+  const supported = buildSqlCompletionItems("SELECT SQ", "SELECT SQ".length, {
+    tables,
+    columnsByTable,
+    databaseType: "cloudflare-d1",
+  });
+  const unsupportedNow = buildSqlCompletionItems("SELECT NO", "SELECT NO".length, {
+    tables,
+    columnsByTable,
+    databaseType: "cloudflare-d1",
+  });
+  const unsupportedPower = buildSqlCompletionItems("SELECT PO", "SELECT PO".length, {
+    tables,
+    columnsByTable,
+    databaseType: "cloudflare-d1",
+  });
+
+  assert.ok(supported.some((item) => item.label === "SQRT"));
+  assert.ok(!unsupportedNow.some((item) => item.label === "NOW"));
+  assert.ok(!unsupportedPower.some((item) => item.label === "POWER"));
+});
+
 test("suggests SQL Server IDENTITY_INSERT after SET", () => {
   const sql = "set  iden";
   const items = buildSqlCompletionItems(sql, sql.length, {

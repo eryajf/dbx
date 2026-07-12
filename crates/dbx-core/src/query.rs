@@ -866,6 +866,7 @@ fn should_discard_pool_after_query_timeout(db_type: Option<DatabaseType>) -> boo
                 | DatabaseType::SqlServer
                 | DatabaseType::Rqlite
                 | DatabaseType::Turso
+                | DatabaseType::CloudflareD1
                 | DatabaseType::Elasticsearch
                 | DatabaseType::Qdrant
                 | DatabaseType::Milvus
@@ -1286,6 +1287,17 @@ pub async fn do_execute(
                 cancel_token,
                 query_timeout,
                 db::turso_driver::execute_query_with_max_rows(&client, sql, max_rows),
+            )
+            .await
+        }
+        PoolKind::CloudflareD1(client) => {
+            let client = client.clone();
+            let max_rows = options.max_rows;
+            drop(connections);
+            wait_for_query_opt(
+                cancel_token,
+                query_timeout,
+                db::cloudflare_d1_driver::execute_query_with_max_rows(&client, sql, max_rows),
             )
             .await
         }
@@ -1825,13 +1837,16 @@ pub async fn execute_multi_core_with_options_for_client(
             .map(|results| results.into_iter().map(Into::into).collect());
     }
 
-    let is_turso = {
+    let is_http_sqlite = {
         let configs = state.configs.read().await;
-        configs.get(connection_id).is_some_and(|c| c.db_type == DatabaseType::Turso)
+        configs
+            .get(connection_id)
+            .is_some_and(|c| matches!(c.db_type, DatabaseType::Turso | DatabaseType::CloudflareD1))
     };
 
-    // Turso sends all statements in one HTTP pipeline for transactional integrity.
-    if is_turso {
+    // HTTP SQLite providers send all statements in one request so the provider
+    // can preserve batch ordering and atomicity.
+    if is_http_sqlite {
         let result =
             execute_sql_statement_with_options(state, connection_id, database, sql, schema, cancel_token, options)
                 .await?;
@@ -2317,6 +2332,7 @@ pub async fn execute_statements_in_transaction(
             PoolKind::Postgres(pg) => TxPath::Pg(pg.clone()),
             PoolKind::Mysql(mp, _mode) => TxPath::Mysql(mp.clone(), false),
             PoolKind::Sqlite(sq) => TxPath::Sqlite(sq.clone()),
+            PoolKind::CloudflareD1(client) => TxPath::CloudflareD1(client.clone()),
             PoolKind::ClickHouse(_)
             | PoolKind::Rqlite(_)
             | PoolKind::Turso(_)
@@ -2355,6 +2371,15 @@ pub async fn execute_statements_in_transaction(
             exec_tx_mysql_inner(state, &pool_key, pool, statements, start, operation_budget.clone()).await
         }
         Some(TxPath::Sqlite(pool)) => exec_tx_sqlite_inner(pool, statements, start).await,
+        Some(TxPath::CloudflareD1(client)) => {
+            let sql = statements.join(";\n");
+            wait_for_query_opt(
+                None,
+                operation_budget.query_timeout,
+                db::cloudflare_d1_driver::execute_query_with_max_rows(&client, &sql, None),
+            )
+            .await
+        }
         Some(TxPath::Explicit) => {
             let mysql_dialect = connection_mysql_query_dialect(state, connection_id).await;
             exec_tx_explicit_inner(state, &pool_key, mysql_dialect, Some(database), statements, schema, start).await
@@ -2380,6 +2405,7 @@ enum TxPath {
     Pg(deadpool_postgres::Pool),
     Mysql(mysql_async::Pool, bool),
     Sqlite(db::sqlite::SqliteHandle),
+    CloudflareD1(db::cloudflare_d1_driver::CloudflareD1Client),
     Explicit,
     None,
 }

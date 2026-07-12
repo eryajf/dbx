@@ -1,6 +1,7 @@
 import { Cassandra, MariaSQL, MSSQL, MySQL, PLSQL, PostgreSQL, SQLite, StandardSQL } from "@codemirror/lang-sql";
 import type { DatabaseType, SqlSnippet } from "@/types/database";
 import { buildMongoCompletionItemsFromContext, type MongoCompletionItem } from "@/lib/mongo/mongoCompletion";
+import { CLOUDFLARE_D1_COMMON_FUNCTION_NAMES } from "@/lib/sql/cloudflareD1";
 
 const SQL_KEYWORDS = [
   "SELECT",
@@ -470,6 +471,7 @@ const DATABASE_SQL_KEYWORDS: Partial<Record<DatabaseType, string[]>> = {
   sqlite: SQLITE_SQL_KEYWORDS,
   rqlite: SQLITE_SQL_KEYWORDS,
   turso: SQLITE_SQL_KEYWORDS,
+  "cloudflare-d1": SQLITE_SQL_KEYWORDS,
   sqlserver: SQLSERVER_SQL_KEYWORDS,
   manticoresearch: MANTICORESEARCH_SQL_KEYWORDS,
 };
@@ -896,6 +898,8 @@ const SQLITE_FUNCTION_SIGNATURES = new Map<string, string[]>([
   ["NOW", []],
 ]);
 
+const CLOUDFLARE_D1_FUNCTION_SIGNATURES = new Map(Array.from(SQLITE_FUNCTION_SIGNATURES.entries()).filter(([name]) => name !== "NOW"));
+
 const SQLSERVER_FUNCTION_SIGNATURES = new Map<string, string[]>([
   ["TRY_CAST", ["expression AS type"]],
   ["TRY_CONVERT", ["type", "expression"]],
@@ -958,6 +962,7 @@ const DATABASE_FUNCTION_SIGNATURES: Partial<Record<DatabaseType, Map<string, str
   sqlite: SQLITE_FUNCTION_SIGNATURES,
   rqlite: SQLITE_FUNCTION_SIGNATURES,
   turso: SQLITE_FUNCTION_SIGNATURES,
+  "cloudflare-d1": CLOUDFLARE_D1_FUNCTION_SIGNATURES,
   sqlserver: SQLSERVER_FUNCTION_SIGNATURES,
   manticoresearch: MANTICORESEARCH_FUNCTION_SIGNATURES,
 };
@@ -3727,7 +3732,8 @@ function buildSnippetItems(prefix: string, snippets: SqlSnippet[], keywordCase?:
 }
 
 function activeFunctionSignatures(databaseType?: DatabaseType): Map<string, string[]> {
-  const signatures = databaseType ? new Map(Array.from(SQL_FUNCTION_SIGNATURES.entries()).filter(([name]) => COMMON_SQL_FUNCTION_NAMES.has(name))) : new Map(SQL_FUNCTION_SIGNATURES);
+  const commonFunctionNames = databaseType === "cloudflare-d1" ? CLOUDFLARE_D1_COMMON_FUNCTION_NAMES : COMMON_SQL_FUNCTION_NAMES;
+  const signatures = databaseType ? new Map(Array.from(SQL_FUNCTION_SIGNATURES.entries()).filter(([name]) => commonFunctionNames.has(name))) : new Map(SQL_FUNCTION_SIGNATURES);
   const databaseSignatures = databaseType ? DATABASE_FUNCTION_SIGNATURES[databaseType] : undefined;
   if (databaseSignatures) {
     for (const [name, parameters] of databaseSignatures) signatures.set(name, parameters);

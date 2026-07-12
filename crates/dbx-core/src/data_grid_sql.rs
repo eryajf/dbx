@@ -2088,6 +2088,7 @@ fn uses_keyless_row_predicate(database_type: Option<DatabaseType>) -> bool {
                 | DatabaseType::Sqlite
                 | DatabaseType::Rqlite
                 | DatabaseType::Turso
+                | DatabaseType::CloudflareD1
                 | DatabaseType::DuckDb
                 | DatabaseType::SqlServer
                 | DatabaseType::Oracle

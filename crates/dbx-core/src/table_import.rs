@@ -744,6 +744,17 @@ pub fn build_import_insert_batch_from_rows(
     if rows.is_empty() {
         return Ok(None);
     }
+    if *db_type == DatabaseType::CloudflareD1 {
+        return crate::db::cloudflare_d1::build_streaming_import_insert_batch(
+            rows,
+            columns,
+            mappings,
+            target_column_types,
+            table,
+            schema,
+            rows.len(),
+        );
+    }
     let mapped = mapping_indexes_for_columns(columns, mappings)?;
     let target_columns = mapped.iter().map(|(_, target)| target.clone()).collect::<Vec<_>>();
     let column_types = target_columns
@@ -781,6 +792,17 @@ pub fn build_import_insert_batches(
     db_type: &DatabaseType,
     batch_size: usize,
 ) -> Result<Vec<ImportSqlBatch>, String> {
+    if *db_type == DatabaseType::CloudflareD1 {
+        return crate::db::cloudflare_d1::build_import_insert_batches(
+            &data.rows,
+            &data.columns,
+            mappings,
+            target_column_types,
+            table,
+            schema,
+            batch_size.clamp(1, 100),
+        );
+    }
     let mapped = mapping_indexes(data, mappings)?;
     let columns = mapped.iter().map(|(_, target)| target.clone()).collect::<Vec<_>>();
     let column_types = columns
@@ -819,7 +841,7 @@ pub fn build_import_insert_batches(
 pub fn truncate_sql(table: &str, schema: &str, db_type: &DatabaseType) -> String {
     let full_table = qualified_table(table, schema, db_type);
     match db_type {
-        DatabaseType::Sqlite => format!("DELETE FROM {full_table}"),
+        DatabaseType::Sqlite | DatabaseType::CloudflareD1 => format!("DELETE FROM {full_table}"),
         _ => format!("TRUNCATE TABLE {full_table}"),
     }
 }
@@ -937,7 +959,7 @@ fn text_data_type(db_type: &DatabaseType) -> &'static str {
 
 fn integer_data_type(db_type: &DatabaseType) -> &'static str {
     match db_type {
-        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso => "INTEGER",
+        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => "INTEGER",
         DatabaseType::Oracle | DatabaseType::OceanbaseOracle | DatabaseType::Dameng => "NUMBER(19)",
         DatabaseType::ClickHouse => "Int64",
         _ => "BIGINT",
@@ -954,7 +976,7 @@ fn decimal_data_type(db_type: &DatabaseType) -> &'static str {
         | DatabaseType::Highgo
         | DatabaseType::Kwdb
         | DatabaseType::Vastbase => "DOUBLE PRECISION",
-        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso => "REAL",
+        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => "REAL",
         DatabaseType::Oracle | DatabaseType::OceanbaseOracle | DatabaseType::Dameng => "BINARY_DOUBLE",
         DatabaseType::ClickHouse => "Float64",
         _ => "DOUBLE",
@@ -970,7 +992,7 @@ fn boolean_data_type(db_type: &DatabaseType) -> &'static str {
         | DatabaseType::Sundb
         | DatabaseType::Databend => "TINYINT(1)",
         DatabaseType::SqlServer => "BIT",
-        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso => "INTEGER",
+        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => "INTEGER",
         DatabaseType::Oracle | DatabaseType::OceanbaseOracle | DatabaseType::Dameng => "NUMBER(1)",
         DatabaseType::ClickHouse => "UInt8",
         _ => "BOOLEAN",
@@ -979,7 +1001,7 @@ fn boolean_data_type(db_type: &DatabaseType) -> &'static str {
 
 fn date_data_type(db_type: &DatabaseType) -> &'static str {
     match db_type {
-        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso => "TEXT",
+        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => "TEXT",
         DatabaseType::ClickHouse => "Date",
         _ => "DATE",
     }
@@ -994,7 +1016,7 @@ fn timestamp_data_type(db_type: &DatabaseType) -> &'static str {
         | DatabaseType::Sundb
         | DatabaseType::Databend => "DATETIME",
         DatabaseType::SqlServer => "DATETIME2",
-        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso => "TEXT",
+        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => "TEXT",
         DatabaseType::ClickHouse => "DateTime64",
         _ => "TIMESTAMP",
     }
@@ -1382,6 +1404,7 @@ where
         };
         let effective_batch_size = match db_type {
             DatabaseType::Oracle | DatabaseType::OceanbaseOracle => 1,
+            DatabaseType::CloudflareD1 => batch_size.clamp(1, 100),
             _ => batch_size.max(1),
         };
         let mut rows_imported = 0;
