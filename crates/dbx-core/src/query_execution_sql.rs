@@ -4,11 +4,22 @@ use sqlparser::tokenizer::{Token, Tokenizer};
 
 use crate::models::connection::DatabaseType;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExplainFormat {
+    Json,
+    Standard,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExplainSqlOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database_type: Option<DatabaseType>,
+    /// MySQL supports both a structured JSON plan and the traditional tabular plan.
+    /// Omitted formats retain the existing JSON behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<ExplainFormat>,
     pub sql: String,
 }
 
@@ -39,7 +50,7 @@ pub fn build_explain_sql(options: ExplainSqlOptions) -> ExplainSqlBuildResult {
     if source.is_empty() {
         return explain_err("empty");
     }
-    if !is_safe_explain_source(&source) {
+    if !is_safe_explain_sql(&source) {
         return explain_err("unsafe");
     }
 
@@ -49,6 +60,11 @@ pub fn build_explain_sql(options: ExplainSqlOptions) -> ExplainSqlBuildResult {
         }
         Some(DatabaseType::Dameng | DatabaseType::Questdb) => {
             format!("EXPLAIN {source}")
+        }
+        Some(DatabaseType::Oracle) => format!("EXPLAIN PLAN FOR {source}"),
+        Some(DatabaseType::Mysql) if options.format == Some(ExplainFormat::Standard) => {
+            // MySQL 8.0.32+ may otherwise inherit TREE or JSON from the session-level explain_format.
+            format!("EXPLAIN FORMAT=TRADITIONAL {source}")
         }
         _ => format!("EXPLAIN FORMAT=JSON {source}"),
     };
@@ -77,8 +93,22 @@ pub fn build_dropped_file_preview_sql(options: DroppedFilePreviewSqlOptions) -> 
 pub fn supports_explain_plan(database_type: Option<DatabaseType>) -> bool {
     matches!(
         database_type,
-        Some(DatabaseType::Mysql | DatabaseType::Postgres | DatabaseType::Questdb | DatabaseType::Dameng)
+        Some(
+            DatabaseType::Mysql
+                | DatabaseType::Postgres
+                | DatabaseType::Questdb
+                | DatabaseType::Dameng
+                | DatabaseType::Oracle
+        )
     )
+}
+
+pub fn is_safe_explain_sql(sql: &str) -> bool {
+    let source = strip_trailing_semicolons(sql.trim());
+    !source.is_empty()
+        && !has_extra_statement_after_semicolon(&source)
+        && is_safe_explain_source(&source)
+        && !contains_dangerous_sql_keyword(&source)
 }
 
 /// Returns true for databases that support SQL query execution (execute_query / get_sample_data).
@@ -165,7 +195,7 @@ pub fn is_write_sql(sql: &str) -> bool {
 
 /// Returns true if the SQL statement is a write operation for a database
 /// dialect. In addition to ordinary write statements, this recognizes MySQL
-/// executable comments and file exports, plus PostgreSQL/SQL Server
+/// executable comments and file exports, plus PostgreSQL-family/SQL Server
 /// `SELECT ... INTO` table creation.
 pub fn is_write_sql_for_database(sql: &str, database_type: DatabaseType) -> bool {
     is_write_sql_with_database_type(sql, Some(database_type))
@@ -179,12 +209,15 @@ fn is_write_sql_with_database_type(sql: &str, database_type: Option<DatabaseType
     // The untyped helper remains conservative for MySQL executable comments.
     // Typed callers handle those comments in has_dialect_specific_write above.
     let detect_mysql_executable_comments = database_type.is_none();
+    let detect_select_into = database_type.is_none();
     let statements = match database_type {
         Some(database_type) => crate::sql::split_sql_statements_for_database(sql, database_type),
         None => crate::sql::split_sql_statements(sql),
     };
 
-    statements.iter().any(|statement| is_write_sql_statement(statement, detect_mysql_executable_comments))
+    statements
+        .iter()
+        .any(|statement| is_write_sql_statement(statement, detect_mysql_executable_comments, detect_select_into))
 }
 
 fn is_mysql_compatible_database(database_type: DatabaseType) -> bool {
@@ -195,6 +228,20 @@ fn is_mysql_compatible_database(database_type: DatabaseType) -> bool {
             | DatabaseType::StarRocks
             | DatabaseType::ManticoreSearch
             | DatabaseType::Goldendb
+    )
+}
+
+fn is_postgresql_family_database(database_type: DatabaseType) -> bool {
+    matches!(
+        database_type,
+        DatabaseType::Postgres
+            | DatabaseType::Redshift
+            | DatabaseType::Gaussdb
+            | DatabaseType::OpenGauss
+            | DatabaseType::Kingbase
+            | DatabaseType::Highgo
+            | DatabaseType::Vastbase
+            | DatabaseType::Kwdb
     )
 }
 
@@ -213,10 +260,13 @@ fn has_dialect_specific_write_statement(sql: &str, database_type: DatabaseType) 
             || contains_keyword_sequence(&cleaned, "INTO", "DUMPFILE");
     }
 
-    match database_type {
-        DatabaseType::Postgres => contains_unquoted_keyword(sql, &PostgreSqlDialect {}, "INTO"),
-        DatabaseType::SqlServer => contains_unquoted_keyword(sql, &MsSqlDialect {}, "INTO"),
-        _ => false,
+    if is_postgresql_family_database(database_type) {
+        contains_unquoted_keyword(sql, &PostgreSqlDialect {}, "INTO")
+    } else {
+        match database_type {
+            DatabaseType::SqlServer => contains_unquoted_keyword(sql, &MsSqlDialect {}, "INTO"),
+            _ => false,
+        }
     }
 }
 
@@ -241,7 +291,7 @@ fn contains_unquoted_keyword(sql: &str, dialect: &dyn sqlparser::dialect::Dialec
     })
 }
 
-fn is_write_sql_statement(sql: &str, detect_mysql_executable_comments: bool) -> bool {
+fn is_write_sql_statement(sql: &str, detect_mysql_executable_comments: bool, detect_select_into: bool) -> bool {
     // 1. Strip comments and string literals
     let (cleaned, has_mysql_executable_comment) =
         strip_sql_comments_and_literals_with_metadata(sql, detect_mysql_executable_comments);
@@ -273,6 +323,12 @@ fn is_write_sql_statement(sql: &str, detect_mysql_executable_comments: bool) -> 
         return false;
     }
 
+    // Untyped callers stay conservative. Typed callers handle SELECT ... INTO
+    // only for database families where the syntax performs a write.
+    if detect_select_into && starts_with_keyword(&upper, "SELECT") && select_contains_top_level_into(&upper) {
+        return true;
+    }
+
     // A statement is a write if it doesn't start with a read keyword,
     // or if it contains embedded dangerous keywords (e.g. CTE-wrapped writes like WITH ... AS (DELETE FROM ...))
     !starts_with_read || contains_dangerous_sql_keyword(sql)
@@ -286,6 +342,38 @@ fn starts_with_show_create(upper: &str) -> bool {
         return false;
     }
     starts_with_keyword(after_show.trim_start(), "CREATE")
+}
+
+fn select_contains_top_level_into(upper: &str) -> bool {
+    let mut token = String::new();
+    let mut depth = 0usize;
+    let mut saw_select = false;
+
+    for ch in upper.chars().chain(std::iter::once(' ')) {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            token.push(ch);
+            continue;
+        }
+
+        if !token.is_empty() {
+            if depth == 0 {
+                if token == "SELECT" {
+                    saw_select = true;
+                } else if saw_select && token == "INTO" {
+                    return true;
+                }
+            }
+            token.clear();
+        }
+
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth = depth.saturating_sub(1);
+        }
+    }
+
+    false
 }
 
 /// Check if a PRAGMA statement is a safe read-only form.
@@ -403,7 +491,13 @@ fn strip_sql_comments(sql: &str) -> String {
         }
         if ch == '/' && chars.peek() == Some(&'*') {
             chars.next();
-            in_block_comment = true;
+            if let Some(body) = read_mysql_executable_comment_body(&mut chars) {
+                output.push(' ');
+                output.push_str(&strip_sql_comments(&body));
+                output.push(' ');
+            } else {
+                in_block_comment = true;
+            }
             continue;
         }
 
@@ -531,6 +625,39 @@ fn is_mysql_executable_comment_start(chars: &std::iter::Peekable<std::str::Chars
     }
 }
 
+fn read_mysql_executable_comment_body<I>(chars: &mut std::iter::Peekable<I>) -> Option<String>
+where
+    I: Iterator<Item = char>,
+{
+    let marker = chars.peek().copied()?;
+    if marker == '!' {
+        chars.next();
+    } else if marker == 'M' {
+        chars.next();
+        if chars.peek() != Some(&'!') {
+            return None;
+        }
+        chars.next();
+    } else {
+        return None;
+    }
+
+    let mut body = String::new();
+    let mut skipping_version = true;
+    while let Some(ch) = chars.next() {
+        if ch == '*' && chars.peek() == Some(&'/') {
+            chars.next();
+            return Some(body);
+        }
+        if skipping_version && (ch.is_ascii_digit() || ch.is_whitespace()) {
+            continue;
+        }
+        skipping_version = false;
+        body.push(ch);
+    }
+    Some(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,6 +666,7 @@ mod tests {
     fn builds_postgres_json_explain_sql() {
         let result = build_explain_sql(ExplainSqlOptions {
             database_type: Some(DatabaseType::Postgres),
+            format: None,
             sql: " select * from users where id = 1; ".to_string(),
         });
 
@@ -556,6 +684,7 @@ mod tests {
     fn builds_dameng_explain_sql() {
         let result = build_explain_sql(ExplainSqlOptions {
             database_type: Some(DatabaseType::Dameng),
+            format: None,
             sql: "SELECT * FROM t1 WHERE id = 1".to_string(),
         });
 
@@ -564,6 +693,24 @@ mod tests {
             ExplainSqlBuildResult {
                 ok: true,
                 sql: Some("EXPLAIN SELECT * FROM t1 WHERE id = 1".to_string()),
+                reason: None,
+            }
+        );
+    }
+
+    #[test]
+    fn builds_oracle_explain_plan_sql() {
+        let result = build_explain_sql(ExplainSqlOptions {
+            database_type: Some(DatabaseType::Oracle),
+            format: None,
+            sql: "WITH rows AS (SELECT 1 AS id FROM dual) SELECT * FROM rows;".to_string(),
+        });
+
+        assert_eq!(
+            result,
+            ExplainSqlBuildResult {
+                ok: true,
+                sql: Some("EXPLAIN PLAN FOR WITH rows AS (SELECT 1 AS id FROM dual) SELECT * FROM rows".to_string()),
                 reason: None,
             }
         );
@@ -584,6 +731,7 @@ mod tests {
         assert_eq!(
             build_explain_sql(ExplainSqlOptions {
                 database_type: Some(DatabaseType::Mysql),
+                format: None,
                 sql: "SELECT * FROM users;".to_string(),
             }),
             ExplainSqlBuildResult {
@@ -596,9 +744,32 @@ mod tests {
         assert_eq!(
             build_explain_sql(ExplainSqlOptions {
                 database_type: Some(DatabaseType::Mysql),
+                format: None,
                 sql: "delete from users".to_string(),
             }),
             ExplainSqlBuildResult { ok: false, sql: None, reason: Some("unsafe".to_string()) }
+        );
+
+        assert_eq!(
+            build_explain_sql(ExplainSqlOptions {
+                database_type: Some(DatabaseType::Mysql),
+                format: None,
+                sql: "SELECT * FROM users; DELETE FROM users".to_string(),
+            }),
+            ExplainSqlBuildResult { ok: false, sql: None, reason: Some("unsafe".to_string()) }
+        );
+
+        assert_eq!(
+            build_explain_sql(ExplainSqlOptions {
+                database_type: Some(DatabaseType::Mysql),
+                format: Some(ExplainFormat::Standard),
+                sql: "SELECT * FROM users;".to_string(),
+            }),
+            ExplainSqlBuildResult {
+                ok: true,
+                sql: Some("EXPLAIN FORMAT=TRADITIONAL SELECT * FROM users".to_string()),
+                reason: None,
+            }
         );
     }
 
@@ -693,6 +864,11 @@ mod tests {
         assert!(is_write_sql("CREATE TABLE users (id INT)"));
         assert!(is_write_sql("ALTER TABLE users ADD COLUMN age INT"));
         assert!(is_write_sql("TRUNCATE TABLE users"));
+        assert!(is_write_sql("EXPLAIN ANALYZE DELETE FROM users"));
+        assert!(is_write_sql("SELECT * INTO backup_users FROM users"));
+        assert!(is_write_sql("SELECT * FROM users INTO OUTFILE '/tmp/users.csv'"));
+        assert!(is_write_sql("COPY users FROM '/tmp/users.csv'"));
+        assert!(is_write_sql("/*! DELETE FROM users */"));
         assert!(is_write_sql(
             "MERGE INTO target USING source ON t.id = s.id WHEN MATCHED THEN UPDATE SET t.name = s.name"
         ));
@@ -818,11 +994,25 @@ mod tests {
             assert!(is_write_sql_for_database(sql, DatabaseType::Mysql), "expected write SQL: {sql}");
         }
 
-        for sql in [
-            "SELECT * INTO copied_users FROM users",
-            "WITH active AS (SELECT * FROM users WHERE active) SELECT * INTO active_users FROM active",
+        for database_type in [
+            DatabaseType::Postgres,
+            DatabaseType::Redshift,
+            DatabaseType::Gaussdb,
+            DatabaseType::OpenGauss,
+            DatabaseType::Kingbase,
+            DatabaseType::Highgo,
+            DatabaseType::Vastbase,
+            DatabaseType::Kwdb,
         ] {
-            assert!(is_write_sql_for_database(sql, DatabaseType::Postgres), "expected write SQL: {sql}");
+            for sql in [
+                "SELECT * INTO copied_users FROM users",
+                "WITH active AS (SELECT * FROM users WHERE active) SELECT * INTO active_users FROM active",
+            ] {
+                assert!(
+                    is_write_sql_for_database(sql, database_type),
+                    "expected write SQL for {database_type:?}: {sql}"
+                );
+            }
         }
 
         for sql in [
@@ -974,6 +1164,13 @@ mod tests {
         for (sql, database_type) in [
             ("SELECT 3156 INTO OUTFILE '/var/lib/mysql-files/dbx_ro_probe.txt'", DatabaseType::Mysql),
             ("SELECT * INTO copied_users FROM users", DatabaseType::Postgres),
+            ("SELECT * INTO copied_users FROM users", DatabaseType::Redshift),
+            ("SELECT * INTO copied_users FROM users", DatabaseType::Gaussdb),
+            ("SELECT * INTO copied_users FROM users", DatabaseType::OpenGauss),
+            ("SELECT * INTO copied_users FROM users", DatabaseType::Kingbase),
+            ("SELECT * INTO copied_users FROM users", DatabaseType::Highgo),
+            ("SELECT * INTO copied_users FROM users", DatabaseType::Vastbase),
+            ("SELECT * INTO copied_users FROM users", DatabaseType::Kwdb),
             ("SELECT * INTO #copied_users FROM users", DatabaseType::SqlServer),
         ] {
             assert!(check_read_only(sql, "readonly", database_type).is_err(), "expected blocked SQL: {sql}");

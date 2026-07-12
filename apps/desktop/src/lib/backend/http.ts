@@ -25,6 +25,7 @@ import type {
   DatabaseType,
   InstalledPlugin,
   JdbcDriverInfo,
+  JdbcLocalBundleInfo,
   JdbcMavenBundleInfo,
   JdbcPluginStatus,
   SidebarLayout,
@@ -112,7 +113,7 @@ import type {
   DataGridSaveStatementOptions,
   HiveTablePropertiesSqlOptions,
 } from "@/lib/dataGrid/dataGridSql";
-import type { BuildTableStructureChangeSqlOptions, BuildSingleColumnAlterSqlOptions, TableStructureChangeSql } from "@/lib/table/tableStructureEditorSql";
+import type { BuildTableStructureChangeSqlOptions, BuildSingleColumnAlterSqlOptions, SqliteTableStructureChangePreview, TableStructureChangeSql } from "@/lib/table/tableStructureEditorSql";
 import type { BuildTableSelectSqlOptions } from "@/lib/table/tableSelectSql";
 import type { DatabaseSearchSql, DatabaseSearchSqlOptions, SearchResultWhereOptions } from "@/lib/database/databaseSearch";
 import type { BuildEditableObjectSourceSqlInput, BuildRoutineRenameObjectSourceInput } from "@/lib/table/objectSourceEditor";
@@ -267,6 +268,10 @@ export async function listJdbcMavenBundles(): Promise<JdbcMavenBundleInfo[]> {
   return get("/api/jdbc/drivers/maven");
 }
 
+export async function listJdbcLocalBundles(): Promise<JdbcLocalBundleInfo[]> {
+  return get("/api/jdbc/drivers/local");
+}
+
 export async function importJdbcDrivers(pathsOrFiles: (string | File)[]): Promise<JdbcDriverInfo[]> {
   const formData = new FormData();
   for (const item of pathsOrFiles) {
@@ -298,6 +303,10 @@ export async function deleteJdbcDriver(path: string): Promise<JdbcDriverInfo[]> 
 
 export async function deleteJdbcMavenBundle(bundleId: string): Promise<JdbcDriverInfo[]> {
   return del(`/api/jdbc/drivers/maven/${encodeURIComponent(bundleId)}`);
+}
+
+export async function deleteJdbcLocalBundle(bundleId: string): Promise<JdbcDriverInfo[]> {
+  return del(`/api/jdbc/drivers/local/${encodeURIComponent(bundleId)}`);
 }
 
 export async function jdbcPluginStatus(): Promise<JdbcPluginStatus> {
@@ -333,7 +342,7 @@ export async function listInstalledAgentsLocal(): Promise<AgentDriverInfo[]> {
   return get("/api/agents/installed-local");
 }
 
-export async function listInstalledAgents(): Promise<AgentDriverInfo[]> {
+export async function listInstalledAgents(_source?: UpdateDownloadSource): Promise<AgentDriverInfo[]> {
   return get("/api/agents/installed");
 }
 
@@ -361,11 +370,11 @@ export async function restartDriverRuntime(runtimeId: string): Promise<void> {
   await post("/api/agents/runtime/restart", { runtimeId });
 }
 
-export async function installAgent(dbType: string): Promise<void> {
+export async function installAgent(dbType: string, _source?: UpdateDownloadSource): Promise<void> {
   await post("/api/agents/install", { dbType });
 }
 
-export async function upgradeAllAgents(): Promise<UpgradeAllAgentDriversResult> {
+export async function upgradeAllAgents(_source?: UpdateDownloadSource): Promise<UpgradeAllAgentDriversResult> {
   return post("/api/agents/upgrade-all", {});
 }
 
@@ -418,7 +427,7 @@ export async function importAgentJar(dbType: string, pathOrFile: string | File):
   if (!uploadRes.ok) throw new Error(await uploadRes.text());
 }
 
-export async function reinstallJre(jreKey?: string): Promise<void> {
+export async function reinstallJre(jreKey?: string, _source?: UpdateDownloadSource): Promise<void> {
   await post("/api/agents/reinstall-jre", { jreKey });
 }
 
@@ -853,6 +862,14 @@ export async function buildViewDdlSql(input: BuildViewDdlInput): Promise<string>
 
 export async function buildTableStructureChangeSql(options: BuildTableStructureChangeSqlOptions): Promise<TableStructureChangeSql> {
   return post("/api/query/build-table-structure-change-sql", { options });
+}
+
+export async function previewSqliteTableStructureChange(connectionId: string, database: string, options: BuildTableStructureChangeSqlOptions): Promise<SqliteTableStructureChangePreview> {
+  return post("/api/query/preview-sqlite-table-structure-change", { connectionId, database, options });
+}
+
+export async function applySqliteTableStructureChange(connectionId: string, database: string, options: BuildTableStructureChangeSqlOptions, schemaRevision: string): Promise<QueryResult> {
+  return post("/api/query/apply-sqlite-table-structure-change", { connectionId, database, options, schemaRevision });
 }
 
 export async function buildCreateTableSql(options: BuildTableStructureChangeSqlOptions): Promise<TableStructureChangeSql> {
@@ -1665,11 +1682,12 @@ function downloadTextFile(filePath: string, fallbackFileName: string, content: s
   URL.revokeObjectURL(url);
 }
 
-export async function exportQueryResultXlsx(filePath: string, sheetName: string | undefined, columns: string[], rows: readonly (readonly XlsxCellValue[])[]): Promise<void> {
+export async function exportQueryResultXlsx(filePath: string, sheetName: string | undefined, columns: string[], columnTypes: string[], rows: readonly (readonly XlsxCellValue[])[]): Promise<void> {
   const { buildXlsxWorkbook } = await import("@/lib/export/xlsxExport");
   const workbook = buildXlsxWorkbook({
     sheetName: sheetName || "Export",
     columns,
+    columnTypes,
     rows,
   });
   const fileName = filePath.split(/[\\/]/).pop() || "export.xlsx";
@@ -1684,7 +1702,7 @@ export async function exportQueryResultXlsx(filePath: string, sheetName: string 
   URL.revokeObjectURL(url);
 }
 
-export async function exportQueryResultsXlsx(filePath: string, worksheets: readonly { sheetName?: string; columns: string[]; rows: readonly (readonly XlsxCellValue[])[] }[]): Promise<void> {
+export async function exportQueryResultsXlsx(filePath: string, worksheets: readonly { sheetName?: string; columns: string[]; columnTypes?: string[]; rows: readonly (readonly XlsxCellValue[])[] }[]): Promise<void> {
   const { buildXlsxWorkbookMulti } = await import("@/lib/export/xlsxExport");
   const workbook = buildXlsxWorkbookMulti(worksheets);
   const fileName = filePath.split(/[\\/]/).pop() || "export.xlsx";
