@@ -220,6 +220,17 @@ test("resultSourceRange resolves newline-separated MongoDB commands", () => {
   });
 });
 
+test("resultSourceRange resolves newline-separated Redis commands", () => {
+  const sql = "GET first\n\nGET second";
+  const sourceStatement = "GET second";
+
+  assert.deepEqual(resultSourceRange(sql, { sourceStatement }, 1, "redis"), {
+    from: sql.indexOf(sourceStatement),
+    to: sql.length,
+    sql: sourceStatement,
+  });
+});
+
 test("resultSqlForGrid prefers the active result source statement", () => {
   const tab = queryTab({
     sql: "select * from users; select * from orders",

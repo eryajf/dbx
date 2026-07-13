@@ -134,6 +134,18 @@ describe("query result source ranges", () => {
     });
   });
 
+  it("resolves newline-separated Redis commands with the Redis parser", () => {
+    const sql = "GET first\n\nGET second";
+    const sourceStatement = "GET second";
+    const range = resultSourceRange(sql, { sourceStatement }, 1, "redis");
+
+    expect(range).toEqual({
+      from: sql.indexOf(sourceStatement),
+      to: sql.length,
+      sql: sourceStatement,
+    });
+  });
+
   it("does not highlight a stale or ambiguous statement", () => {
     expect(resultSourceRange("SELECT * FROM users;", { sourceStatement: "SELECT * FROM orders" }, 0, "mysql")).toBeUndefined();
     expect(resultSourceRange("SELECT * FROM users; SELECT * FROM users;", { sourceStatement: "SELECT * FROM users" }, undefined, "mysql")).toBeUndefined();

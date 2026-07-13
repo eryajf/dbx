@@ -1,7 +1,7 @@
 ﻿import { useConnectionStore } from "@/stores/connectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { splitMongoCommandRanges } from "@/lib/mongo/mongoShellCommand";
-import { splitSqlStatementRanges, type SqlTextRange } from "@/lib/sql/sqlStatementRanges";
+import { executableStatementRanges, splitSqlStatementRanges, type SqlTextRange } from "@/lib/sql/sqlStatementRanges";
 import type { ConnectionConfig, DatabaseType, QueryResult, QueryTab } from "@/types/database";
 
 type Translate = (key: string, params?: Record<string, unknown>) => string;
@@ -170,7 +170,7 @@ export function resultSourceRange(editorSql: string, result: Pick<QueryResult, "
   const sourceStatement = result?.sourceStatement;
   if (!sourceStatement) return undefined;
 
-  const statements = databaseType === "mongodb" ? splitMongoCommandRanges(editorSql).map(({ from, to, text }) => ({ from, to, sql: text })) : splitSqlStatementRanges(editorSql, databaseType);
+  const statements = databaseType === "redis" ? executableStatementRanges(editorSql, databaseType) : databaseType === "mongodb" ? splitMongoCommandRanges(editorSql).map(({ from, to, text }) => ({ from, to, sql: text })) : splitSqlStatementRanges(editorSql, databaseType);
   const indexed = typeof resultIndex === "number" ? statements[resultIndex] : undefined;
   if (indexed?.sql === sourceStatement) {
     return { from: indexed.from, to: indexed.to, sql: indexed.sql };

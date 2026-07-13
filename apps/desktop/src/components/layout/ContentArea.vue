@@ -859,7 +859,7 @@ defineExpose({ focusSearch, refreshData, handleModRTarget, requestQueryEditorExe
                     <div class="result-tab-scrollbar__thumb" :style="resultTabsScrollbarThumbStyle" />
                   </div>
                   <div ref="resultTabsScrollerRef" class="result-tab-scroll flex h-full items-center gap-1 overflow-x-auto overflow-y-hidden px-1" :style="resultTabsScrollerStyle" @scroll="updateResultTabsScrollbar" @wheel="onResultTabsWheel">
-                    <LightTooltip v-for="item in visibleResultItems" :key="item.index" :text="item.label || item.title || t('tabs.resultN', { n: item.n })" :disabled="!item.labelTruncated" :delay="150" :close-delay="0" nowrap>
+                    <LightTooltip v-for="item in visibleResultItems" :key="item.index" :text="item.label || item.title || t('tabs.resultN', { n: item.n })" :disabled="!item.labelTruncated && !(!item.label && item.title)" :delay="150" :close-delay="0" nowrap>
                       <Button size="sm" :variant="activeOutputView === 'result' && (activeTab.activeResultIndex ?? 0) === item.index ? 'default' : 'ghost'" class="h-6 min-w-0 max-w-48 shrink-0 px-2 text-xs" :aria-label="item.label || t('tabs.resultN', { n: item.n })" @click="selectResultItem(item)">
                         <span class="block min-w-0 max-w-44 whitespace-nowrap">{{ item.displayLabel || item.label || t("tabs.resultN", { n: item.n }) }}</span>
                       </Button>
