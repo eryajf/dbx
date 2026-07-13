@@ -12,6 +12,6 @@ test("formatCsv writes database null as an empty cell and preserves literal NULL
         [3, "NULL"],
       ],
     ),
-    '"id","note"\n"1",""\n"2",""\n"3","NULL"',
+    '"id","note"\n"1",\n"2",""\n"3","NULL"',
   );
 });
