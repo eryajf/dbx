@@ -144,6 +144,31 @@ export function findConnectionLocation(layout: SidebarLayout, connectionId: stri
   return visit(layout.order);
 }
 
+/**
+ * Returns the display-name path for a connection's containing groups.
+ * A top-level connection returns an empty path; an absent connection returns null.
+ */
+export function findConnectionGroupPath(layout: SidebarLayout, connectionId: string): string[] | null {
+  const groupMap = new Map(layout.groups.map((group) => [group.id, group]));
+
+  const visit = (entries: SidebarOrderEntry[], path: string[]): string[] | null => {
+    for (const entry of entries) {
+      if (entry.type === "connection") {
+        if (entry.id === connectionId) return path;
+        continue;
+      }
+
+      const group = groupMap.get(entry.id);
+      if (!group) continue;
+      const found = visit(entryChildren(entry), [...path, group.name]);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  return visit(layout.order, []);
+}
+
 function findGroupEntry(entries: SidebarOrderEntry[], groupId: string): Extract<SidebarOrderEntry, { type: "group" }> | null {
   for (const entry of entries) {
     if (entry.type !== "group") continue;
