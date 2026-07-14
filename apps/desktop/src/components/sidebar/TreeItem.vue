@@ -105,7 +105,7 @@ import { isCopySidebarSelectionShortcut, isEditSidebarConnectionShortcut, isPast
 import { formatSqlInsert } from "@/lib/export/exportFormats";
 import { joinExportedDdls } from "@/lib/export/ddlExport";
 import { fetchTableDataForExport } from "@/lib/table/tableDataExport";
-import { canActivateExistingDataTableTab } from "@/lib/tabs/dataTabActivation";
+import { canActivateExistingDataTableTab, canRefreshDataTableFromSingleActivationDoubleClick, dataTableDoubleClickAction } from "@/lib/tabs/dataTabActivation";
 import { buildCreateDatabaseSql, buildDuckDbAttachDatabaseSql, duckDbAttachedDatabaseNameFromPath, supportsCreateDatabaseCharset, uniqueDuckDbAttachedDatabaseName } from "@/lib/database/createDatabaseSql";
 import {
   buildCreateSchemaSql,
@@ -740,6 +740,9 @@ function runRowClickAction(clickDetail: number) {
   const action = treeNodeRowAction(node.type, canExpand.value, settingsStore.editorSettings.sidebarActivation);
   if (!shouldRunTreeNodeRowAction(action, clickDetail)) return;
   if (action === "open-data") {
+    if (node.type === "table") {
+      singleActivationDoubleClickRefreshAllowed = canRefreshDataTableFromSingleActivationDoubleClick(findExistingSameTableDataTab());
+    }
     openData();
   } else if (isDocumentBrowserTreeNode(node.type)) {
     openMongoTreeData(node);
@@ -749,6 +752,8 @@ function runRowClickAction(clickDetail: number) {
     toggle();
   }
 }
+
+let singleActivationDoubleClickRefreshAllowed = false;
 
 function refreshActiveKvBrowserAfterOpen(mode: "etcd" | "zookeeper", connectionId: string) {
   void nextTick(() => {
@@ -868,6 +873,7 @@ function toggleConnectionMultiSelection(event: MouseEvent) {
 }
 
 function onClick(event: MouseEvent) {
+  if (props.node.type === "table" && event.detail <= 1) singleActivationDoubleClickRefreshAllowed = false;
   if (suppressNextTableReferenceClick) {
     suppressNextTableReferenceClick = false;
     event.preventDefault();
@@ -1079,6 +1085,8 @@ function onDoubleClick() {
     if (!props.node.isExpanded) void toggle();
   } else if (action === "open-data") {
     openData();
+  } else if (action === "refresh-data") {
+    void refreshData();
   } else if (action === "open-source") {
     openObjectSourceDialog(false);
   } else if (action === "open-saved-sql") {
@@ -1088,6 +1096,34 @@ function onDoubleClick() {
   } else if (action === "toggle") {
     toggle();
   }
+}
+
+async function refreshData() {
+  const node = props.node;
+  if (node.type !== "table" || !hasNodeDatabaseContext(node)) return;
+  const singleActivationRefreshAllowed = singleActivationDoubleClickRefreshAllowed;
+  singleActivationDoubleClickRefreshAllowed = false;
+  const activation = settingsStore.editorSettings.sidebarActivation;
+  if (activation === "single" && !singleActivationRefreshAllowed) return;
+  const existingSameTableTab = findExistingSameTableDataTab();
+  const action = dataTableDoubleClickAction(existingSameTableTab, activation, singleActivationRefreshAllowed);
+  if (action === "none") return;
+  if (action === "open") {
+    await openData();
+    return;
+  }
+  if (!existingSameTableTab) return;
+  queryStore.switchTab(existingSameTableTab.id);
+  if (action === "activate") return;
+  await queryStore.refreshDataTab(existingSameTableTab.id);
+}
+
+function findExistingSameTableDataTab() {
+  const node = props.node;
+  if (node.type !== "table" || !hasNodeDatabaseContext(node)) return undefined;
+  const config = connectionStore.getConfig(node.connectionId);
+  const tableSchema = connectionObjectTreeNodeSchema(config, node.database, node.schema);
+  return queryStore.tabs.find((tab) => tab.mode === "data" && tab.connectionId === node.connectionId && tab.database === node.database && (tab.tableMeta?.catalog || "") === (node.catalog || "") && (tab.schema || "") === (tableSchema || "") && (tab.tableMeta?.tableName || tab.title) === node.label);
 }
 
 function openMongoTreeData(node: TreeNode) {
