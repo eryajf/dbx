@@ -169,6 +169,28 @@ export function findConnectionGroupPath(layout: SidebarLayout, connectionId: str
   return visit(layout.order, []);
 }
 
+/** Build all connection group paths in one traversal for list rendering. */
+export function buildConnectionGroupPathMap(layout: SidebarLayout): Map<string, string[]> {
+  const groupMap = new Map(layout.groups.map((group) => [group.id, group]));
+  const paths = new Map<string, string[]>();
+
+  const visit = (entries: SidebarOrderEntry[], path: string[]) => {
+    for (const entry of entries) {
+      if (entry.type === "connection") {
+        paths.set(entry.id, path);
+        continue;
+      }
+
+      const group = groupMap.get(entry.id);
+      if (!group) continue;
+      visit(entryChildren(entry), [...path, group.name]);
+    }
+  };
+
+  visit(layout.order, []);
+  return paths;
+}
+
 function findGroupEntry(entries: SidebarOrderEntry[], groupId: string): Extract<SidebarOrderEntry, { type: "group" }> | null {
   for (const entry of entries) {
     if (entry.type !== "group") continue;
