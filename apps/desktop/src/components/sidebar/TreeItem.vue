@@ -145,7 +145,8 @@ import { sidebarDisplayTableName } from "@/lib/sidebar/sidebarTableNameDisplay";
 import { shouldMeasureSidebarLabelOverflow } from "@/lib/sidebar/sidebarLabelTooltip";
 import { selectedTreeNodesInVisibleOrder as orderSelectedTreeNodes, treeSelectionRangeIdsByIndex, treeSelectionRangeIds } from "@/lib/sidebar/sidebarTreeSelection";
 import { connectionPasteTargetGroupId, selectedConnectionClipboardTargets, selectedConnectionDeleteTargets, selectedConnectionDuplicateTargets, selectedConnectionEditTarget } from "@/lib/sidebar/sidebarConnectionSelection";
-import { supportsDatabaseUserAdmin } from "@/lib/database/databaseUserAdmin";
+import { getDatabaseUserAdminProvider, supportsDatabaseUserAdmin, type DatabaseUserIdentity } from "@/lib/database/databaseUserAdmin";
+import { authorizationPlanSql, authorizationPlanStatus, buildCreateDatabaseAuthorizationPlan, executeAuthorizationPlan, type AuthorizationPlan, type AuthorizationStepResult } from "@/lib/database/databaseAuthorizationPlan";
 import { connectionSupportsProcessList } from "@/lib/database/processListDrivers";
 import { connectionSupportsServerDashboard } from "@/lib/database/mysqlServerStatus";
 import { canCloseSidebarDatabaseConnection, isSidebarDatabaseOpened } from "@/lib/sidebar/sidebarDatabaseOpenState";
@@ -227,6 +228,14 @@ import {
   createDatabaseName,
   createDatabaseCharset,
   createDatabaseCollation,
+  createDatabaseUsers,
+  createDatabaseSelectedUsers,
+  createDatabaseUsersLoading,
+  showCreateDatabasePreviewDialog,
+  createDatabaseAuthorizationPlan,
+  createDatabasePreviewSql,
+  createDatabaseAuthorizationResults,
+  createDatabaseAuthorizationApplying,
   showCreateNacosNamespaceDialog,
   createNacosNamespaceId,
   createNacosNamespaceName,
@@ -3069,11 +3078,76 @@ function openCreateDatabaseDialog() {
   createDatabaseName.value = "";
   createDatabaseCharset.value = "utf8mb4";
   createDatabaseCollation.value = "utf8mb4_unicode_ci";
+  createDatabaseUsers.value = [];
+  createDatabaseSelectedUsers.value = [];
+  createDatabaseUsersLoading.value = false;
+  createDatabaseAuthorizationPlan.value = undefined;
+  createDatabasePreviewSql.value = "";
+  createDatabaseAuthorizationResults.value = [];
   createDatabaseCharsetOptions.value = fallbackCreateDatabaseCharset.charsets;
   createDatabaseCollationsByCharset.value = fallbackCreateDatabaseCharset.collationsByCharset;
   showCreateDatabaseDialog.value = true;
   if (canSetCreateDatabaseCharset.value) {
     void loadCreateDatabaseCharsetMetadata();
+  }
+  void loadCreateDatabaseUsers();
+}
+
+let createDatabaseUsersRequestId = 0;
+
+async function loadCreateDatabaseUsers() {
+  const node = sidebarFormTarget.value ?? props.node;
+  if (!node.connectionId) return;
+  const connectionId = node.connectionId;
+  const requestId = ++createDatabaseUsersRequestId;
+  const requestOwner = sidebarTreeDialogOwner.value;
+  const requestIsActive = () => requestId === createDatabaseUsersRequestId && sidebarTreeDialogOwner.value === requestOwner && sidebarFormTarget.value?.connectionId === connectionId && showCreateDatabaseDialog.value;
+  const config = connectionStore.getConfig(node.connectionId);
+  const databaseType = effectiveDatabaseTypeForConnection(config);
+  const userProvider = getDatabaseUserAdminProvider(databaseType);
+  if (!userProvider || !supportsDatabaseUserAdmin(databaseType)) return;
+  createDatabaseUsersLoading.value = true;
+  try {
+    await connectionStore.ensureConnected(connectionId);
+    try {
+      const result = await api.executeQuery(connectionId, "", userProvider.listUsersSql(), undefined, undefined, { maxRows: 5000 });
+      if (requestIsActive()) createDatabaseUsers.value = userProvider.parseUsers(result);
+    } catch (error) {
+      if (!userProvider.fallbackListUsersSql || !userProvider.parseFallbackUsers) throw error;
+      const result = await api.executeQuery(connectionId, "", userProvider.fallbackListUsersSql(), undefined, undefined, { maxRows: 5000 });
+      if (requestIsActive()) createDatabaseUsers.value = userProvider.parseFallbackUsers(result);
+    }
+  } catch (error: any) {
+    if (requestIsActive()) {
+      createDatabaseUsers.value = [];
+      toast(t("contextMenu.createDatabaseUsersLoadFailed", { message: error?.message || String(error) }), 5000);
+    }
+  } finally {
+    if (requestIsActive()) createDatabaseUsersLoading.value = false;
+  }
+}
+
+function createDatabaseUserKey(user: DatabaseUserIdentity): string {
+  return `${user.user}\u0000${user.host}`;
+}
+
+function createDatabaseUserLabel(user: DatabaseUserIdentity): string {
+  const node = sidebarFormTarget.value ?? props.node;
+  const provider = getDatabaseUserAdminProvider(effectiveDatabaseTypeForConnection(connectionStore.getConfig(node.connectionId || "")));
+  return provider?.label(user) ?? user.user;
+}
+
+function createDatabaseUserSelected(user: DatabaseUserIdentity): boolean {
+  const key = createDatabaseUserKey(user);
+  return createDatabaseSelectedUsers.value.some((selected) => createDatabaseUserKey(selected) === key);
+}
+
+function toggleCreateDatabaseUser(user: DatabaseUserIdentity) {
+  const key = createDatabaseUserKey(user);
+  if (createDatabaseSelectedUsers.value.some((selected) => createDatabaseUserKey(selected) === key)) {
+    createDatabaseSelectedUsers.value = createDatabaseSelectedUsers.value.filter((selected) => createDatabaseUserKey(selected) !== key);
+  } else {
+    createDatabaseSelectedUsers.value = [...createDatabaseSelectedUsers.value, user];
   }
 }
 
@@ -3245,11 +3319,11 @@ async function confirmCreateDatabase() {
   const node = sidebarFormTarget.value ?? props.node;
   const name = createDatabaseName.value.trim();
   if (!name || !node.connectionId) return;
-  showCreateDatabaseDialog.value = false;
   try {
     await connectionStore.ensureConnected(node.connectionId);
     const config = connectionStore.getConfig(node.connectionId);
     if (config?.db_type === "mongodb") {
+      showCreateDatabaseDialog.value = false;
       await api.mongoCreateDatabase(node.connectionId, name);
       toast(t("contextMenu.createDatabaseSuccess", { name }), 3000);
       await connectionStore.ensureVisibleDatabase(node.connectionId, name);
@@ -3264,13 +3338,77 @@ async function confirmCreateDatabase() {
       charset: createDatabaseCharset.value,
       collation: createDatabaseCollation.value,
     });
-    await executeTreeNodeSqlWithProductionGuard(node, sql, { database: "" });
-    toast(t("contextMenu.createDatabaseSuccess", { name }), 3000);
-    await connectionStore.ensureVisibleDatabase(node.connectionId, name);
-    await connectionStore.loadDatabases(node.connectionId, { force: true });
+    const databaseType = effectiveDatabaseTypeForConnection(config);
+    const provider = supportsDatabaseUserAdmin(databaseType) ? getDatabaseUserAdminProvider(databaseType) : null;
+    const plan: AuthorizationPlan = provider
+      ? buildCreateDatabaseAuthorizationPlan({ provider, database: name, createSql: sql, users: createDatabaseSelectedUsers.value })
+      : { steps: [{ id: "create-database", label: `create database ${name}`, database: "", sql, operation: "createDatabase", targetDatabase: name }] };
+    createDatabaseAuthorizationPlan.value = plan;
+    createDatabasePreviewSql.value = authorizationPlanSql(plan);
+    createDatabaseAuthorizationResults.value = [];
+    showCreateDatabaseDialog.value = false;
+    showCreateDatabasePreviewDialog.value = true;
   } catch (e: any) {
     toast(t("contextMenu.tableOperationFailed", { message: e?.message || String(e) }), 5000);
   }
+}
+
+async function applyCreateDatabaseAuthorizationPlan() {
+  const node = sidebarFormTarget.value ?? props.node;
+  const plan = createDatabaseAuthorizationPlan.value;
+  const name = createDatabaseName.value.trim();
+  if (!node.connectionId || !plan || createDatabaseAuthorizationApplying.value) return;
+  createDatabaseAuthorizationApplying.value = true;
+  try {
+    const results = await executeWithProductionSqlGuard({
+      connection: connectionStore.getConfig(node.connectionId),
+      database: "",
+      sql: createDatabasePreviewSql.value,
+      source: t("production.sourceSidebar"),
+      execute: () => executeAuthorizationPlan(plan, (step) => api.executeMulti(node.connectionId!, step.database, step.sql, undefined, undefined, { maxRows: 1000, continueOnError: true })),
+    });
+    if (!results) return;
+    createDatabaseAuthorizationResults.value = results;
+    const created = results.some((result) => result.step.id === "create-database" && result.status === "success");
+    const status = authorizationPlanStatus(results);
+    if (created) {
+      await connectionStore.ensureVisibleDatabase(node.connectionId, name);
+      await connectionStore.loadDatabases(node.connectionId, { force: true });
+    }
+    toast(t(status === "success" ? "contextMenu.createDatabaseSuccess" : status === "partial" ? "contextMenu.createDatabasePartial" : "contextMenu.createDatabaseFailed", { name }), status === "success" ? 3000 : 5000);
+  } catch (error: any) {
+    toast(t("contextMenu.tableOperationFailed", { message: error?.message || String(error) }), 5000);
+  } finally {
+    createDatabaseAuthorizationApplying.value = false;
+  }
+}
+
+function createDatabaseAuthorizationStepLabel(result: AuthorizationStepResult): string {
+  const step = result.step;
+  if (step.operation === "createDatabase") return t("contextMenu.createDatabaseStep", { database: step.targetDatabase });
+  if (step.operation === "grantDatabase") return t("contextMenu.createDatabaseGrantStep", { user: step.subject, database: step.targetDatabase });
+  if (step.operation === "grantCurrentObjects") {
+    return t("userAdmin.stepGrantCurrentObjects", {
+      user: step.subject,
+      database: step.targetDatabase,
+      schema: step.schema,
+      scope: createDatabaseAuthorizationScopeLabel(step.objectScope),
+    });
+  }
+  if (step.operation === "grantFutureObjects") {
+    return step.owner
+      ? t("userAdmin.stepGrantFutureObjectsForOwner", { user: step.subject, database: step.targetDatabase, owner: step.owner, scope: createDatabaseAuthorizationScopeLabel(step.objectScope) })
+      : t("userAdmin.stepGrantFutureObjects", { user: step.subject, database: step.targetDatabase, scope: createDatabaseAuthorizationScopeLabel(step.objectScope) });
+  }
+  return step.label;
+}
+
+function createDatabaseAuthorizationScopeLabel(scope: AuthorizationStepResult["step"]["objectScope"]): string {
+  if (scope === "schemas") return t("userAdmin.scopeSchemas");
+  if (scope === "tables") return t("userAdmin.scopeTables");
+  if (scope === "sequences") return t("userAdmin.scopeSequences");
+  if (scope === "functions") return t("userAdmin.scopeFunctions");
+  return "";
 }
 
 function dropDatabase() {
@@ -4715,6 +4853,19 @@ function getTreeItemDialogController(): Record<string, any> {
     createDatabaseCharsetLoading,
     normalizeCreateDatabaseCharset,
     createDatabaseCollation,
+    createDatabaseUsers,
+    createDatabaseSelectedUsers,
+    createDatabaseUsersLoading,
+    createDatabaseUserKey,
+    createDatabaseUserLabel,
+    createDatabaseUserSelected,
+    toggleCreateDatabaseUser,
+    showCreateDatabasePreviewDialog,
+    createDatabasePreviewSql,
+    createDatabaseAuthorizationResults,
+    createDatabaseAuthorizationApplying,
+    applyCreateDatabaseAuthorizationPlan,
+    createDatabaseAuthorizationStepLabel,
     createDatabaseCollationOptionsForCharset,
     createDatabaseCollationsByCharset,
     confirmCreateDatabase,
