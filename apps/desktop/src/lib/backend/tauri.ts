@@ -777,6 +777,7 @@ export async function executeMulti(
     clientSessionId?: string;
     timeoutSecs?: number;
     useTransaction?: boolean;
+    continueOnError?: boolean;
   },
 ): Promise<QueryResult[]> {
   return invoke("execute_multi", { connectionId, database, sql, schema, executionId, ...options });
@@ -1389,6 +1390,10 @@ export async function installMcpServer(): Promise<string> {
 
 export async function checkForUpdates(locale?: string): Promise<UpdateInfo> {
   return invoke("check_for_updates", { locale });
+}
+
+export async function fetchChangelog(lang?: string): Promise<import("@/lib/app/changelog").ChangelogData> {
+  return invoke("fetch_changelog", { lang });
 }
 
 export async function getSystemProxyUrl(): Promise<string | null> {

@@ -706,6 +706,7 @@ export async function executeMulti(
     clientSessionId?: string;
     timeoutSecs?: number;
     useTransaction?: boolean;
+    continueOnError?: boolean;
   },
 ): Promise<QueryResult[]> {
   return post("/api/query/execute-multi", { connectionId, database, sql, schema, executionId, ...options });
@@ -2163,6 +2164,11 @@ export async function deleteHistoryEntry(id: string): Promise<void> {
 export async function checkForUpdates(locale?: string): Promise<UpdateInfo> {
   const query = locale ? `?locale=${encodeURIComponent(locale)}` : "";
   return get(`/api/update/check${query}`);
+}
+
+export async function fetchChangelog(lang?: string): Promise<import("@/lib/app/changelog").ChangelogData> {
+  const query = lang ? `?lang=${encodeURIComponent(lang)}` : "";
+  return get(`/api/changelog${query}`);
 }
 
 export async function checkMcpServerStatus(): Promise<import("@/lib/backend/tauri").McpServerStatus> {

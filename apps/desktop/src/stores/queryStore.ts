@@ -1013,7 +1013,7 @@ export const useQueryStore = defineStore("query", () => {
     const id = uuid();
     const tab: QueryTab = {
       id,
-      title: t("processList.title"),
+      title: conn?.name ? `${conn.name} - ${t("processList.title")}` : t("processList.title"),
       connectionId,
       database: conn?.database || "",
       sql: "",
@@ -3026,6 +3026,7 @@ export const useQueryStore = defineStore("query", () => {
             : {}),
           ...(clientSessionId ? { clientSessionId } : {}),
           timeoutSecs: queryTimeoutSecs,
+          continueOnError: settingsStore.editorSettings.continueOnErrorOnBatch,
         };
         console.info("[DBX][executeTabSql:execute-multi:invoke]", {
           traceId,
