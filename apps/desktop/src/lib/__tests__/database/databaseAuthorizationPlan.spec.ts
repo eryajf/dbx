@@ -40,7 +40,7 @@ describe("database authorization plans", () => {
     const sql = authorizationPlanSql(plan);
 
     expect(sql).toContain('GRANT ALL PRIVILEGES ON DATABASE "app_db" TO "app_user";');
-    expect(sql).toContain('GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO "app_user";');
+    expect(sql).toContain('GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "public" TO "app_user";');
     expect(sql).toContain('ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON SCHEMAS TO "app_user";');
     expect(sql).toContain('ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON TABLES TO "app_user";');
     expect(sql).toContain('ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON SEQUENCES TO "app_user";');
