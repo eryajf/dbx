@@ -288,7 +288,7 @@ async function previewCreateUser() {
   if (!userProvider?.createUserSql || preparingCreatePlan.value) return;
   if (!createUser.value.trim() || !createPassword.value || !createDatabaseAuthorizationsValid.value) return;
   const requestId = ++createPlanRequestId;
-    preparingCreatePlan.value = true;
+  preparingCreatePlan.value = true;
   try {
     const principal = {
       user: createUser.value.trim(),
