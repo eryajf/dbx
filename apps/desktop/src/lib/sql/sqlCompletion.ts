@@ -2,6 +2,7 @@ import { Cassandra, MariaSQL, MSSQL, MySQL, PLSQL, PostgreSQL, SQLite, StandardS
 import type { DatabaseType, SqlSnippet } from "@/types/database";
 import { buildMongoCompletionItemsFromContext, type MongoCompletionItem } from "@/lib/mongo/mongoCompletion";
 import { CLOUDFLARE_D1_COMMON_FUNCTION_NAMES } from "@/lib/sql/cloudflareD1";
+import type { SqlObjectNavigationType } from "@/lib/sql/sqlNavigation";
 
 const SQL_KEYWORDS = [
   "SELECT",
@@ -1156,7 +1157,7 @@ function sqlAliasKeywordWords(...sources: Array<string | undefined>): string[] {
 export interface SqlCompletionTable {
   name: string;
   schema?: string;
-  type?: "table" | "view";
+  type?: SqlObjectNavigationType;
   detail?: string;
   applyName?: string;
   boost?: number;
@@ -2763,7 +2764,115 @@ function requiresPostgresIdentifierQuote(identifier: string): boolean {
   return POSTGRES_IDENTIFIER_KEYWORDS.has(identifier);
 }
 
-const POSTGRES_IDENTIFIER_KEYWORDS = new Set(SQL_KEYWORDS.map((keyword) => keyword.toLowerCase()).concat(["current_user", "session_user", "user"]));
+// PostgreSQL reserved_keyword + type_func_name_keyword categories (pg_get_keywords()
+// catcodes R and T) — identifiers matching these cannot appear as a bare column
+// reference and must be quoted. SQL_KEYWORDS alone misses most of them because it is
+// a completion phrase list ("ORDER BY", not "order").
+const POSTGRES_RESERVED_KEYWORDS = [
+  "all",
+  "analyse",
+  "analyze",
+  "and",
+  "any",
+  "array",
+  "as",
+  "asc",
+  "asymmetric",
+  "authorization",
+  "binary",
+  "both",
+  "case",
+  "cast",
+  "check",
+  "collate",
+  "collation",
+  "column",
+  "concurrently",
+  "constraint",
+  "create",
+  "cross",
+  "current_catalog",
+  "current_date",
+  "current_role",
+  "current_schema",
+  "current_time",
+  "current_timestamp",
+  "current_user",
+  "default",
+  "deferrable",
+  "desc",
+  "distinct",
+  "do",
+  "else",
+  "end",
+  "except",
+  "false",
+  "fetch",
+  "for",
+  "foreign",
+  "freeze",
+  "from",
+  "full",
+  "grant",
+  "group",
+  "having",
+  "ilike",
+  "in",
+  "initially",
+  "inner",
+  "intersect",
+  "into",
+  "is",
+  "isnull",
+  "join",
+  "lateral",
+  "leading",
+  "left",
+  "like",
+  "limit",
+  "localtime",
+  "localtimestamp",
+  "natural",
+  "not",
+  "notnull",
+  "null",
+  "offset",
+  "on",
+  "only",
+  "or",
+  "order",
+  "outer",
+  "overlaps",
+  "placing",
+  "primary",
+  "references",
+  "returning",
+  "right",
+  "select",
+  "session_user",
+  "similar",
+  "some",
+  "symmetric",
+  "system_user",
+  "table",
+  "tablesample",
+  "then",
+  "to",
+  "trailing",
+  "true",
+  "union",
+  "unique",
+  "user",
+  "using",
+  "variadic",
+  "verbose",
+  "when",
+  "where",
+  "window",
+  "with",
+];
+
+const POSTGRES_IDENTIFIER_KEYWORDS = new Set(SQL_KEYWORDS.map((keyword) => keyword.toLowerCase()).concat(POSTGRES_RESERVED_KEYWORDS));
 
 function buildTableItems(
   context: Pick<SqlCompletionContext, "prefix" | "qualifier">,

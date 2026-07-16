@@ -515,6 +515,8 @@ export interface QueryResult {
    * preview. This is populated only for MongoDB document query results.
    */
   mongo_documents?: unknown[];
+  /** Type-preserving Extended JSON documents used when copying MongoDB values. */
+  mongo_copy_documents?: unknown[];
   affected_rows: number;
   execution_time_ms: number;
   truncated?: boolean;
@@ -555,6 +557,7 @@ export interface QueryResultRun {
   resultTotalRowCountLoading?: boolean;
   resultSessionId?: string;
   resultAccessedAt?: number;
+  resultEstimatedBytes?: number;
   resultCacheKey?: string;
   resultCacheState?: "memory" | "disk" | "missing";
   resultEvicted?: boolean;
@@ -778,6 +781,7 @@ export interface QueryTab {
   resultTotalRowCountLoading?: boolean;
   resultSessionId?: string;
   resultAccessedAt?: number;
+  resultEstimatedBytes?: number;
   resultCacheKey?: string;
   resultCacheState?: "memory" | "disk" | "missing";
   pinned?: boolean;
@@ -809,9 +813,9 @@ export interface QueryTab {
   executionId?: string;
   isExplaining?: boolean;
   explainExecutionId?: string;
-  /** Per-run connection session for sequential MySQL explain formats. */
+  /** Per-run connection session for explain flows that require session state. */
   explainClientSessionId?: string;
-  mode: "data" | "query" | "redis" | "redis-dashboard" | "mongo" | "mongo-gridfs" | "mongo-bucket" | "vector" | "etcd" | "zookeeper" | "mq" | "nacos" | "objects" | "structure" | "users" | "dameng-jobs" | "processlist" | "mysql-dashboard";
+  mode: "data" | "query" | "redis" | "redis-dashboard" | "mongo" | "mongo-gridfs" | "mongo-bucket" | "vector" | "etcd" | "zookeeper" | "mq" | "nacos" | "objects" | "structure" | "users" | "dameng-jobs" | "processlist" | "mysql-dashboard" | "postgres-dashboard";
   mqTenant?: string;
   mqInitialTab?: "topics";
   nacosNamespace?: string;

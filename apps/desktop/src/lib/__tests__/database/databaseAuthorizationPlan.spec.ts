@@ -90,6 +90,25 @@ describe("database authorization plans", () => {
     expect(authorizationPlanSql(plan)).toContain("GRANT ALL PRIVILEGES ON `app-db`.* TO 'app'@'%';");
   });
 
+  it("keeps creation plans usable when authorization capabilities are unavailable", () => {
+    const createOnlyProvider = { ...mysqlUserAdminProvider, grantPrivilegesSql: undefined };
+    const databasePlan = buildCreateDatabaseAuthorizationPlan({
+      provider: createOnlyProvider,
+      database: "app_db",
+      createSql: "CREATE DATABASE `app_db`;",
+      users: [{ user: "app", host: "%" }],
+    });
+    const unsupportedUserPlan = buildCreateUserAuthorizationPlan({
+      provider: { ...createOnlyProvider, createUserSql: undefined },
+      principal: { user: "app", host: "%", password: "secret" },
+      accountType: "standard",
+      databases: [{ database: "app_db", preset: "readOnly" }],
+    });
+
+    expect(databasePlan.steps.map((step) => step.operation)).toEqual(["createDatabase"]);
+    expect(unsupportedUserPlan.steps).toEqual([]);
+  });
+
   it("keeps result metadata structured for IPv6 hosts and colon-containing databases", () => {
     const plan = buildCreateUserAuthorizationPlan({
       provider: mysqlUserAdminProvider,

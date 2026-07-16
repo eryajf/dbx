@@ -73,12 +73,16 @@ export function authorizationPresetPrivileges(provider: DatabaseUserAdminProvide
 }
 
 export function authorizationPrivileges(provider: DatabaseUserAdminProvider): string[] {
-  if (provider.dialect === "mysql") return Array.from(provider.privilegesForScope("mysql"));
-  return uniquePrivileges([...provider.privilegesForScope("database"), ...provider.privilegesForScope("schema"), ...provider.privilegesForScope("table"), "EXECUTE", "USAGE", "UPDATE"]);
+  const privilegesForScope = provider.privilegesForScope;
+  if (!privilegesForScope) return [];
+  if (provider.dialect === "mysql") return Array.from(privilegesForScope("mysql"));
+  return uniquePrivileges([...privilegesForScope("database"), ...privilegesForScope("schema"), ...privilegesForScope("table"), "EXECUTE", "USAGE", "UPDATE"]);
 }
 
 export function buildCreateUserAuthorizationPlan(input: CreateUserAuthorizationPlanInput): AuthorizationPlan {
   const createStepId = "create-user";
+  // Connection-specific providers expose only the admin operations supported by that server.
+  if (!input.provider.createUserSql) return { steps: [] };
   const steps: AuthorizationPlanStep[] = [
     {
       id: createStepId,
@@ -91,6 +95,7 @@ export function buildCreateUserAuthorizationPlan(input: CreateUserAuthorizationP
   ];
 
   if (input.accountType === "admin") {
+    if (input.provider.dialect === "mysql" && !input.provider.grantPrivilegesSql) return { steps };
     steps.push({
       id: "grant-admin",
       label: `grant admin privileges to ${input.provider.label(input.principal)}`,
@@ -107,6 +112,7 @@ export function buildCreateUserAuthorizationPlan(input: CreateUserAuthorizationP
     user: input.principal.user,
     host: input.principal.host,
   };
+  if (!input.provider.grantPrivilegesSql) return { steps };
   for (const selection of input.databases) {
     const database = selection.database.trim();
     if (!database) continue;
@@ -143,6 +149,7 @@ export function buildCreateDatabaseAuthorizationPlan(input: CreateDatabaseAuthor
   ];
   const postgresUsers: DatabaseUserIdentity[] = [];
   const postgresDatabaseGrantIds = new Map<string, string>();
+  if (!input.provider.grantPrivilegesSql) return { steps };
   for (const user of input.users) {
     if (input.provider.dialect === "mysql") {
       steps.push({

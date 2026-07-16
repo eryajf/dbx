@@ -783,6 +783,12 @@ async function ensureTreeLoadedForTarget(target: ActiveTabSidebarTarget, opts?: 
       if (force || !databaseChildrenLoaded) {
         await store.loadSqlServerDatabaseObjects(connId, target.database, loadOptions);
       }
+      if (targetSchema) {
+        const schemaNode = findSchemaNode(store.treeNodes, connId, target.database, targetSchema);
+        if (schemaNode && (force || !schemaNode.children || schemaNode.children.length === 0)) {
+          await store.loadTables(connId, target.database, targetSchema, loadOptions);
+        }
+      }
     } else if (usesSchemaTree) {
       if (force || !databaseChildrenLoaded) {
         await store.loadSchemas(connId, target.database, loadOptions);
@@ -961,12 +967,20 @@ function openSidebarProcedure(node: TreeNode) {
   sidebarProcedureOpen.value = true;
 }
 
-function openSidebarData(node: TreeNode, requireSelection: boolean, runner: (node: TreeNode, request: SidebarDataOpenRequest) => Promise<void>) {
+function openSidebarData(node: TreeNode, requireSelection: boolean, openMode: "default" | "new-tab", runner: (node: TreeNode, request: SidebarDataOpenRequest) => Promise<void>) {
   const target = createSidebarActionTarget(node);
-  runSidebarDataOpenImmediately((request) => {
-    if (requireSelection && store.selectedTreeNodeId !== target.id) return;
-    return runner(target, request);
-  });
+  runSidebarDataOpenImmediately(
+    {
+      connectionKey: target.connectionId || target.id,
+      // Explicit new-tab opens are intentional independent work; ordinary
+      // navigation keeps latest-request-wins behavior.
+      supersede: openMode !== "new-tab",
+    },
+    (request) => {
+      if (requireSelection && store.selectedTreeNodeId !== target.id) return;
+      return runner(target, request);
+    },
+  );
 }
 
 function openSidebarVisibleDatabases(node: TreeNode) {
@@ -1402,6 +1416,7 @@ defineExpose({ focusSearch, createNewGroup, collapseAllTreeNodes });
       v-model:open="sidebarDdlOpen"
       :connection-id="sidebarDdlTarget.connectionId!"
       :database="sidebarDdlTarget.database!"
+      :catalog="sidebarDdlTarget.catalog"
       :schema="sidebarDdlTarget.schema"
       :table-name="sidebarDdlTarget.label"
       :object-type="tableDdlObjectTypeForSidebarNode(sidebarDdlTarget.type)"
