@@ -5,6 +5,13 @@ export interface ArtifactInfo {
   size: number;
 }
 
+export type DownloadSource = "github" | "cnb" | "atomgit" | "official";
+
+export interface DownloadLink {
+  source: DownloadSource;
+  url: string;
+}
+
 export interface GitHubReleaseAsset {
   name: string;
   size: number;
@@ -66,6 +73,9 @@ export interface AgentDownloadCatalog {
 
 const AGENTS_LATEST_RELEASE_API_URL = "https://api.github.com/repos/t8y2/dbx/releases/tags/agents-latest";
 const JDBC_PLUGIN_DOWNLOAD_URL = "https://dl.dbxio.com/releases/latest/dbx-jdbc-plugin-latest.zip";
+const GITHUB_RELEASE_DOWNLOAD_PREFIX = "https://github.com/t8y2/dbx/releases/download/";
+const CNB_RELEASE_DOWNLOAD_PREFIX = "https://cnb.cool/dbxio.com/dbx/-/releases/download/";
+const ATOMGIT_RELEASE_DOWNLOAD_PREFIX = "https://atomgit.com/t8y2/dbx/releases/download/";
 const MIN_APP_VERSION = "0.6.0";
 const driverVersionMap = driverVersions as Record<string, string>;
 const nativeDriverKeys = new Set(["oracle", "xugu"]);
@@ -134,6 +144,17 @@ function assetInfo(asset: GitHubReleaseAsset): ArtifactInfo {
     url: asset.browser_download_url,
     size: asset.size,
   };
+}
+
+export function downloadLinksFor(url: string): DownloadLink[] {
+  const releasePath = url.startsWith(GITHUB_RELEASE_DOWNLOAD_PREFIX) ? url.slice(GITHUB_RELEASE_DOWNLOAD_PREFIX.length) : null;
+  if (!releasePath) return [{ source: "official", url }];
+
+  return [
+    { source: "github", url },
+    { source: "cnb", url: `${CNB_RELEASE_DOWNLOAD_PREFIX}${releasePath}` },
+    { source: "atomgit", url: `${ATOMGIT_RELEASE_DOWNLOAD_PREFIX}${releasePath}` },
+  ];
 }
 
 function assetMap(assets: GitHubReleaseAsset[]): Map<string, GitHubReleaseAsset> {
