@@ -4,10 +4,11 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { DEFAULT_RECIPES_ROOT, allPortMappingsBindToAllInterfaces, architectureWarning, assertResetConfirmed, discoverMakeTargets, discoverRecipes, expandSmokeCommand, expectedContainerName, parseDatabaseSelection, platformForArchitecture, recipeSelector, resolveRecipe, serviceHasNamedVolume, validateRecipe } from './database-env.mjs';
+import { DEFAULT_RECIPES_ROOT, allPortMappingsDefaultToLoopback, architectureWarning, assertResetConfirmed, discoverMakeTargets, discoverRecipes, expandSmokeCommand, expectedContainerName, parseDatabaseSelection, platformForArchitecture, recipeSelector, resolveRecipe, serviceHasNamedVolume, validateRecipe, validateRenderedCompose } from './database-env.mjs';
 
 const bashAvailable = spawnSync('bash', ['--version'], { stdio: 'ignore' }).status === 0;
 const zshAvailable = spawnSync('zsh', ['--version'], { stdio: 'ignore' }).status === 0;
+const dockerComposeAvailable = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore' }).status === 0;
 
 function fixture(database, version) {
   const root = mkdtempSync(join(tmpdir(), 'dbx-db-env-'));
@@ -15,7 +16,7 @@ function fixture(database, version) {
   mkdirSync(join(directory, 'init'), { recursive: true });
   writeFileSync(join(directory, 'init', '001-smoke.txt'), 'fixture initialization');
   writeFileSync(join(directory, 'recipe.json'), JSON.stringify({ database, version, displayVersion: version, name: database, image: 'test:1', platforms: ['linux/amd64'], service: 'database', defaultPort: 1234, connection: { host: '127.0.0.1', port: 1235, password: '123456', database: database === 'redis' ? 0 : 'dbx' }, smoke: { steps: [{ name: 'smoke', command: ['true'], expect: 'true' }] }, shell: ['true'] }));
-  writeFileSync(join(directory, 'compose.yaml'), `services:\n  database:\n    image: test:1\n    platform: linux/amd64\n    container_name: dbx-${database}-${version}\n    ports:\n      - "0.0.0.0:\${DB_PORT:-1235}:1234"\n    volumes:\n      - data:/var/lib/database\n    healthcheck:\n      test: ["CMD", "true"]\nvolumes:\n  data:\n`);
+  writeFileSync(join(directory, 'compose.yaml'), `services:\n  database:\n    image: test:1\n    platform: linux/amd64\n    container_name: dbx-${database}-${version}\n    ports:\n      - "\${DB_BIND_ADDRESS:-127.0.0.1}:\${DB_PORT:-1235}:1234"\n    volumes:\n      - data:/var/lib/database\n    healthcheck:\n      test: ["CMD", "true"]\nvolumes:\n  data:\n`);
   return root;
 }
 
@@ -168,9 +169,43 @@ test('smoke commands use password and port overrides without invoking a shell', 
   );
 });
 
-test('requires every port mapping to listen on all interfaces', () => {
-  assert.equal(allPortMappingsBindToAllInterfaces('services:\n  database:\n    ports:\n      - "127.0.0.1:3306:3306"'), false);
-  assert.equal(allPortMappingsBindToAllInterfaces('services:\n  database:\n    ports:\n      - "0.0.0.0:3306:3306"'), true);
+test('MongoDB commands pass reserved-character passwords as a distinct argument', () => {
+  const password = 'p@ss/word#with?reserved&characters';
+  for (const recipe of discoverRecipes().filter((item) => item.database === 'mongodb')) {
+    for (const command of [recipe.shell, ...recipe.smoke.steps.map((step) => step.command)]) {
+      const expanded = expandSmokeCommand(command, recipe, { DB_PASSWORD: password });
+      const passwordIndex = expanded.indexOf('--password');
+      assert.notEqual(passwordIndex, -1);
+      assert.equal(expanded[passwordIndex + 1], password);
+      assert.equal(expanded.some((argument) => argument.includes('mongodb://')), false);
+    }
+  }
+});
+
+test('requires every port mapping to default to loopback with an explicit override', () => {
+  assert.equal(allPortMappingsDefaultToLoopback('services:\n  database:\n    ports:\n      - "127.0.0.1:3306:3306"'), false);
+  assert.equal(allPortMappingsDefaultToLoopback('services:\n  database:\n    ports:\n      - "${DB_BIND_ADDRESS:-127.0.0.1}:3306:3306"'), true);
+  assert.equal(allPortMappingsDefaultToLoopback('services:\n  database:\n    ports:\n      - "${DB_BIND_ADDRESS:-0.0.0.0}:3306:3306"'), false);
+});
+
+test('rendered Compose recipes bind to loopback by default', { skip: !dockerComposeAvailable }, () => {
+  const recipes = discoverRecipes();
+  for (const recipe of recipes) {
+    const result = spawnSync('docker', ['compose', '--file', join(recipe.directory, 'compose.yaml'), 'config', '--format', 'json'], {
+      encoding: 'utf8',
+      env: { ...process.env, DB_BIND_ADDRESS: '' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotThrow(() => validateRenderedCompose(recipe, JSON.parse(result.stdout)));
+  }
+
+  const remoteResult = spawnSync('docker', ['compose', '--file', join(recipes[0].directory, 'compose.yaml'), 'config', '--format', 'json'], {
+    encoding: 'utf8',
+    env: { ...process.env, DB_BIND_ADDRESS: '0.0.0.0' },
+  });
+  assert.equal(remoteResult.status, 0, remoteResult.stderr);
+  const remoteService = JSON.parse(remoteResult.stdout).services[recipes[0].service];
+  assert.ok(remoteService.ports.every((port) => port.host_ip === '0.0.0.0'));
 });
 
 test('requires the target service to mount a named volume', () => {
@@ -204,6 +239,21 @@ test('requires every recipe port to be one greater than its database default por
   const [recipe] = discoverRecipes(fixture('postgresql', '17.4'));
   recipe.connection.port = 5432;
   assert.match(validateRecipe(recipe).join('; '), /connection.port must be defaultPort \+ 1/);
+});
+
+test('reports missing smoke structures without throwing a TypeError', () => {
+  const [recipe] = discoverRecipes(fixture('postgresql', '17.4'));
+  delete recipe.smoke;
+  let errors;
+  assert.doesNotThrow(() => {
+    errors = validateRecipe(recipe);
+  });
+  assert.match(errors.join('; '), /missing smoke/);
+  assert.match(errors.join('; '), /smoke\.steps must not be empty/);
+
+  recipe.smoke = {};
+  assert.doesNotThrow(() => validateRecipe(recipe));
+  assert.match(validateRecipe(recipe).join('; '), /smoke\.steps must not be empty/);
 });
 
 test('documents every checked-in recipe on both website pages', () => {

@@ -3,7 +3,7 @@ services:
     image: docker.cnb.cool/znb/images/postgres:14.23
     container_name: dbx-postgresql-14.23
     ports:
-      - "0.0.0.0:${DB_PORT:-5433}:5432"
+      - "${DB_BIND_ADDRESS:-127.0.0.1}:${DB_PORT:-5433}:5432"
     environment:
       POSTGRES_PASSWORD: "${DB_PASSWORD:-123456}"
       POSTGRES_DB: dbx

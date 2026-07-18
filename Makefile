@@ -7,6 +7,7 @@ TAURI_DEV_PORT ?= 1420
 
 export DB
 export DB_VERSION
+export DB_BIND_ADDRESS
 export DB_PORT
 export DB_PASSWORD
 export FOLLOW

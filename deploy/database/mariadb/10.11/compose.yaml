@@ -3,7 +3,7 @@ services:
     image: docker.cnb.cool/znb/images/mariadb:10.11.11
     container_name: dbx-mariadb-10.11
     ports:
-      - "0.0.0.0:${DB_PORT:-3307}:3306"
+      - "${DB_BIND_ADDRESS:-127.0.0.1}:${DB_PORT:-3307}:3306"
     environment:
       MARIADB_ROOT_PASSWORD: "${DB_PASSWORD:-123456}"
       MARIADB_DATABASE: dbx

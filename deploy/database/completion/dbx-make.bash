@@ -60,9 +60,9 @@ _dbx_make() {
           ;;
         *)
           if [[ "$target" == 'db-reset' ]]; then
-            COMPREPLY=( $(compgen -W 'DB= DB_PORT= DB_PASSWORD= CONFIRM=1' -- "$current") )
+            COMPREPLY=( $(compgen -W 'DB= DB_BIND_ADDRESS= DB_PORT= DB_PASSWORD= CONFIRM=1' -- "$current") )
           else
-            COMPREPLY=( $(compgen -W 'DB= DB_PORT= DB_PASSWORD=' -- "$current") )
+            COMPREPLY=( $(compgen -W 'DB= DB_BIND_ADDRESS= DB_PORT= DB_PASSWORD=' -- "$current") )
           fi
           ;;
       esac

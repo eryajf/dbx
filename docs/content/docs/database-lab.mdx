@@ -3,9 +3,9 @@ title: Database Test Lab
 description: Start reproducible, local database instances for DBX development and verification.
 ---
 
-The Database Test Lab provides small, pinned Docker Compose environments for testing DBX against real database versions. Every recipe uses a named data volume, a health check, initialization data or smoke data created during verification, and listens on `0.0.0.0` by default.
+The Database Test Lab provides small, pinned Docker Compose environments for testing DBX against real database versions. Every recipe uses a named data volume, a health check, initialization data or smoke data created during verification, and listens on `127.0.0.1` by default.
 
-<Callout type="warning">The default password is `123456` and ports listen on all host interfaces. Change `DB_PASSWORD` before using a shared network, and apply your normal firewall controls. These environments are for development, not production deployment.</Callout>
+<Callout type="warning">The default password is `123456`, but ports are accessible only from the local host by default. To allow remote access, explicitly set `DB_BIND_ADDRESS=0.0.0.0`, change `DB_PASSWORD`, and apply your normal firewall controls. These environments are for development, not production deployment.</Callout>
 
 ## Available recipes
 
@@ -57,10 +57,16 @@ make db-verify DB=postgresql@17.4
 | `make db-reset DB=product@version CONFIRM=1` | Delete the environment and its data volume |
 | `make db-check` | Validate every recipe and Compose file |
 
-`DB_PORT` changes the host-side port and `DB_PASSWORD` changes the default password. For example:
+`DB_BIND_ADDRESS` changes the host-side bind address, `DB_PORT` changes the host-side port, and `DB_PASSWORD` changes the default password. For example:
 
 ```bash
 DB_PORT=13306 DB_PASSWORD=local-secret make db-verify DB=mysql@8.4
+```
+
+Remote access must be enabled explicitly:
+
+```bash
+DB_BIND_ADDRESS=0.0.0.0 DB_PASSWORD=local-secret make db DB=mysql@8.4
 ```
 
 `db-reset` is intentionally guarded: it will not remove a named volume unless `CONFIRM=1` is set. Redis has no image initialization-directory convention; its `init/README.md` documents the smoke key created and read by `verify`. The lower-level `info`, `status`, `logs`, and `shell` commands remain available as `pnpm db:env -- <command> <product> <version>` when needed for diagnosis.
@@ -93,7 +99,7 @@ compose.yaml
 init/
 ```
 
-`recipe.json` supplies the DBX connection fields and smoke command array. Do not use a shell string for smoke checks: commands execute as argument arrays. Compose files must pin an image, use a named volume and health check, bind ports to `0.0.0.0`, and set `container_name` to `dbx-<product>-<version>`.
+`recipe.json` supplies the DBX connection fields and smoke command array. Do not use a shell string for smoke checks: commands execute as argument arrays. Compose files must pin an image, use a named volume and health check, default port bindings to `${DB_BIND_ADDRESS:-127.0.0.1}`, and set `container_name` to `dbx-<product>-<version>`.
 
 Finish by running:
 

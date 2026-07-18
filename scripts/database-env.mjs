@@ -62,6 +62,7 @@ function printQuickStart(recipes) {
   for (const recipe of recipes) console.log(`  make db DB=${recipeSelector(recipe)}`);
   console.log('');
   console.log('Optional parameters:');
+  console.log('  DB_BIND_ADDRESS=<ip>   Override the default bind address (127.0.0.1).');
   console.log('  DB_PORT=<port>          Override the default host port.');
   console.log('  DB_PASSWORD=<password>  Override the default password (123456).');
   console.log('');
@@ -142,7 +143,9 @@ export function validateRecipe(recipe) {
     if (recipe.platforms?.length === 1 && !compose.includes(`platform: ${recipe.platforms[0]}`)) {
       errors.push(`single-platform image must set compose platform to ${recipe.platforms[0]}`);
     }
-    if (!allPortMappingsBindToAllInterfaces(compose)) errors.push('compose.yaml ports must bind every mapping to 0.0.0.0');
+    if (!allPortMappingsDefaultToLoopback(compose)) {
+      errors.push('compose.yaml ports must default every mapping to 127.0.0.1 via DB_BIND_ADDRESS');
+    }
     if (!serviceHasNamedVolume(compose, recipe.service)) errors.push('target service must mount a named volume');
     if (!compose.includes(`\${DB_PORT:-${recipe.connection?.port}}:${recipe.defaultPort}`)) {
       errors.push('compose.yaml must default DB_PORT to connection.port and target defaultPort');
@@ -150,7 +153,7 @@ export function validateRecipe(recipe) {
   }
   const initDirectory = join(recipe.directory, 'init');
   if (!existsSync(initDirectory) || readdirSync(initDirectory).length === 0) errors.push('init directory must contain a file');
-  if (!Array.isArray(recipe.smoke.steps) || recipe.smoke.steps.length === 0) errors.push('smoke.steps must not be empty');
+  if (!Array.isArray(recipe.smoke?.steps) || recipe.smoke.steps.length === 0) errors.push('smoke.steps must not be empty');
   for (const step of recipe.smoke?.steps ?? []) {
     if (!step.name || !Array.isArray(step.command) || step.command.length === 0) errors.push('every smoke step needs a name and command');
     if (typeof step.expect !== 'string' || step.expect.length === 0) errors.push('every smoke step needs an expected output');
@@ -176,7 +179,7 @@ function serviceBlock(compose, service) {
   return block;
 }
 
-export function allPortMappingsBindToAllInterfaces(compose) {
+export function allPortMappingsDefaultToLoopback(compose) {
   const lines = compose.split(/\r?\n/);
   let portsIndent = null;
   let foundMapping = false;
@@ -188,7 +191,7 @@ export function allPortMappingsBindToAllInterfaces(compose) {
       const inlineMappings = trimmed.match(/['\"]([^'\"]+)['\"]/g) ?? [];
       if (inlineMappings.length > 0) {
         foundMapping = true;
-        if (inlineMappings.some((mapping) => !mapping.slice(1, -1).startsWith('0.0.0.0:'))) return false;
+        if (inlineMappings.some((mapping) => !mapping.slice(1, -1).startsWith('${DB_BIND_ADDRESS:-127.0.0.1}:'))) return false;
       }
       continue;
     }
@@ -200,7 +203,7 @@ export function allPortMappingsBindToAllInterfaces(compose) {
     if (!trimmed.startsWith('-')) continue;
     foundMapping = true;
     const mapping = trimmed.slice(1).trim().replace(/^['\"]|['\"]$/g, '');
-    if (!mapping.startsWith('0.0.0.0:')) return false;
+    if (!mapping.startsWith('${DB_BIND_ADDRESS:-127.0.0.1}:')) return false;
   }
   return foundMapping;
 }
@@ -274,7 +277,10 @@ function checkRecipes(recipes) {
       console.error(`FAIL ${recipe.database}/${recipe.displayVersion}: ${errors.join('; ')}`);
       continue;
     }
-    const result = spawnSync('docker', composeArgs(recipe, 'config', '--format', 'json'), { encoding: 'utf8', env: process.env });
+    const result = spawnSync('docker', composeArgs(recipe, 'config', '--format', 'json'), {
+      encoding: 'utf8',
+      env: { ...process.env, DB_BIND_ADDRESS: '' },
+    });
     if (result.error?.code === 'ENOENT') {
       console.log(`OK   ${recipe.database}/${recipe.displayVersion} (static checks; Docker unavailable)`);
     } else if (result.status !== 0) {
@@ -301,8 +307,8 @@ export function validateRenderedCompose(recipe, rendered) {
   }
   if (!service.healthcheck?.test) throw new Error('rendered target service is missing a healthcheck');
   const ports = service.ports ?? [];
-  if (ports.length === 0 || ports.some((port) => typeof port !== 'object' || port.host_ip !== '0.0.0.0')) {
-    throw new Error('rendered target service has a port mapping that does not listen on all interfaces');
+  if (ports.length === 0 || ports.some((port) => typeof port !== 'object' || port.host_ip !== '127.0.0.1')) {
+    throw new Error('rendered target service has a port mapping that does not default to 127.0.0.1');
   }
   const volumes = service.volumes ?? [];
   if (!volumes.some((volume) => typeof volume === 'object' && volume.type === 'volume')) {

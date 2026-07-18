@@ -51,7 +51,7 @@ $script:DbxMakeNativeCompleter = {
         return
     }
 
-    $parameters = @('DB=', 'DB_PORT=', 'DB_PASSWORD=')
+    $parameters = @('DB=', 'DB_BIND_ADDRESS=', 'DB_PORT=', 'DB_PASSWORD=')
     if ($target -eq 'db-reset') { $parameters += 'CONFIRM=1' }
     $parameters |
         Where-Object { $_ -like "$wordToComplete*" } |

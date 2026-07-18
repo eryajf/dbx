@@ -5,7 +5,7 @@ services:
     container_name: dbx-redis-3.0.7
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${DB_PASSWORD:-123456}"]
     ports:
-      - "0.0.0.0:${DB_PORT:-6380}:6379"
+      - "${DB_BIND_ADDRESS:-127.0.0.1}:${DB_PORT:-6380}:6379"
     volumes:
       - data:/data
     healthcheck:

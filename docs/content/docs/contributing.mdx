@@ -193,7 +193,7 @@ make db-verify DB=mysql@8.4
 make db-down DB=mysql@8.4
 ```
 
-The service ports listen on `0.0.0.0`; set `DB_PASSWORD` and use firewall controls before exposing a host to a shared network. See the [Database Test Lab](/en/docs/database-lab) for all supported recipes, overrides, and reset safety requirements.
+The service ports listen on `127.0.0.1` by default. Set `DB_BIND_ADDRESS=0.0.0.0`, choose a strong `DB_PASSWORD`, and use firewall controls before exposing a host to a shared network. See the [Database Test Lab](/en/docs/database-lab) for all supported recipes, overrides, and reset safety requirements.
 
 ## 5. Understand the Repository Layout
 

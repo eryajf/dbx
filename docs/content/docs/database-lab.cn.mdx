@@ -3,9 +3,9 @@ title: 数据库测试实验室
 description: 为 DBX 开发与验证启动可重复创建的本地数据库实例。
 ---
 
-数据库测试实验室提供轻量、固定版本的 Docker Compose 环境，方便使用真实数据库版本验证 DBX。每个配方都使用命名数据卷、健康检查、初始化数据或验证阶段创建的冒烟数据，并且默认监听 `0.0.0.0`。
+数据库测试实验室提供轻量、固定版本的 Docker Compose 环境，方便使用真实数据库版本验证 DBX。每个配方都使用命名数据卷、健康检查、初始化数据或验证阶段创建的冒烟数据，并且默认监听 `127.0.0.1`。
 
-<Callout type="warning">默认密码为 `123456`，端口会监听宿主机的全部网络接口。在共享网络中使用前请设置 `DB_PASSWORD`，并配置常规防火墙规则。这些环境用于开发，不是生产部署模板。</Callout>
+<Callout type="warning">默认密码为 `123456`，但端口默认只能从本机访问。如需远程访问，请显式设置 `DB_BIND_ADDRESS=0.0.0.0`、修改 `DB_PASSWORD`，并配置常规防火墙规则。这些环境用于开发，不是生产部署模板。</Callout>
 
 ## 可用配方
 
@@ -57,10 +57,16 @@ make db-verify DB=postgresql@17.4
 | `make db-reset DB=product@version CONFIRM=1` | 删除环境及数据卷 |
 | `make db-check` | 校验全部配方和 Compose 文件 |
 
-`DB_PORT` 修改主机侧端口，`DB_PASSWORD` 修改默认密码。例如：
+`DB_BIND_ADDRESS` 修改主机侧绑定地址，`DB_PORT` 修改主机侧端口，`DB_PASSWORD` 修改默认密码。例如：
 
 ```bash
 DB_PORT=13306 DB_PASSWORD=local-secret make db-verify DB=mysql@8.4
+```
+
+远程访问必须显式启用：
+
+```bash
+DB_BIND_ADDRESS=0.0.0.0 DB_PASSWORD=local-secret make db DB=mysql@8.4
 ```
 
 `db-reset` 受安全保护：只有设置 `CONFIRM=1` 才会删除命名卷。Redis 不支持镜像初始化目录约定；其 `init/README.md` 说明了 `verify` 会创建并读取的冒烟键。需要诊断时，可直接运行 `pnpm db:env -- info|status|logs|shell <product> <version>`。
@@ -93,7 +99,7 @@ compose.yaml
 init/
 ```
 
-`recipe.json` 提供 DBX 连接字段和冒烟命令数组。不要使用 shell 字符串，命令必须作为参数数组执行。Compose 文件必须固定镜像版本、使用命名卷和健康检查、将端口绑定至 `0.0.0.0`，并把 `container_name` 设置为 `dbx-<product>-<version>`。
+`recipe.json` 提供 DBX 连接字段和冒烟命令数组。不要使用 shell 字符串，命令必须作为参数数组执行。Compose 文件必须固定镜像版本、使用命名卷和健康检查、将端口默认绑定至 `${DB_BIND_ADDRESS:-127.0.0.1}`，并把 `container_name` 设置为 `dbx-<product>-<version>`。
 
 完成后运行：
 

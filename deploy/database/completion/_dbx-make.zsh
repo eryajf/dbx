@@ -36,7 +36,7 @@ _dbx_make() {
         compset -P 'CONFIRM='
         compadd '1'
       else
-        parameters=(DB DB_PORT DB_PASSWORD)
+        parameters=(DB DB_BIND_ADDRESS DB_PORT DB_PASSWORD)
         [[ "$target" == db-reset ]] && parameters+=(CONFIRM)
         compadd -S '=' -- $parameters
       fi
