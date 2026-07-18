@@ -1,0 +1,17 @@
+services:
+  database:
+    image: docker.cnb.cool/znb/images/redis:3.0.7-alpine
+    platform: linux/amd64
+    container_name: dbx-redis-3.0.7
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${DB_PASSWORD:-123456}"]
+    ports:
+      - "0.0.0.0:${DB_PORT:-6380}:6379"
+    volumes:
+      - data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '${DB_PASSWORD:-123456}' ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+volumes:
+  data:

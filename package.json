@@ -22,6 +22,8 @@
     "build": "vite build --config apps/desktop/vite.config.ts",
     "build:checked": "pnpm typecheck && pnpm build",
     "check": "node scripts/run-check.mjs",
+    "db:env": "node scripts/database-env.mjs",
+    "test:db-env": "node --test scripts/database-env.test.mjs",
     "bench:redis-key-search": "node scripts/bench/redis-key-search.mjs",
     "bench:mongodb-count": "node scripts/bench/mongodb-count.mjs",
     "lint": "oxlint --vue-plugin apps/desktop/src",
