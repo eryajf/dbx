@@ -12,7 +12,7 @@ services:
       - data:/data/db
       - ./init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --username root --password $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep 1"]
+      test: ["CMD-SHELL", "mongosh --quiet --username root --password \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep 1"]
       interval: 5s
       timeout: 5s
       retries: 30

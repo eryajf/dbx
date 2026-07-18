@@ -208,6 +208,31 @@ test('rendered Compose recipes bind to loopback by default', { skip: !dockerComp
   assert.ok(remoteService.ports.every((port) => port.host_ip === '0.0.0.0'));
 });
 
+test('healthchecks safely reference configurable passwords', { skip: !dockerComposeAvailable }, () => {
+  const password = "space ' password";
+  const recipes = discoverRecipes().filter((recipe) => ['mariadb', 'mongodb', 'mysql', 'redis'].includes(recipe.database));
+
+  for (const recipe of recipes) {
+    const result = spawnSync('docker', ['compose', '--file', join(recipe.directory, 'compose.yaml'), 'config', '--format', 'json'], {
+      encoding: 'utf8',
+      env: { ...process.env, DB_PASSWORD: password },
+    });
+    assert.equal(result.status, 0, result.stderr);
+
+    const service = JSON.parse(result.stdout).services[recipe.service];
+    const command = service.healthcheck.test[1];
+    assert.equal(command.includes(password), false, `${recipeSelector(recipe)} interpolates the password into CMD-SHELL`);
+
+    if (recipe.database === 'mongodb') assert.match(command, /--password "\$\$MONGO_INITDB_ROOT_PASSWORD"/);
+    if (recipe.database === 'mysql') assert.match(command, /-p"\$\$MYSQL_ROOT_PASSWORD"/);
+    if (recipe.database === 'mariadb') assert.match(command, /-p"\$\$MARIADB_ROOT_PASSWORD"/);
+    if (recipe.database === 'redis') {
+      assert.equal(service.environment.REDIS_PASSWORD, password);
+      assert.match(command, /-a "\$\$REDIS_PASSWORD"/);
+    }
+  }
+});
+
 test('requires the target service to mount a named volume', () => {
   const bindOnly = 'services:\n  database:\n    volumes:\n      - ./init:/docker-entrypoint-initdb.d:ro\nvolumes:\n  data:\n';
   const namedVolume = 'services:\n  database:\n    volumes:\n      - data:/var/lib/database\nvolumes:\n  data:\n';
