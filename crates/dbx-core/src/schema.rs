@@ -2465,6 +2465,7 @@ mod tests {
             port: 5432,
             username: "user".to_string(),
             password: "secret".to_string(),
+            remember_password: true,
             database: Some("demo".to_string()),
             visible_databases: None,
             visible_schemas: None,

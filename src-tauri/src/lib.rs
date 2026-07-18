@@ -1073,6 +1073,7 @@ pub fn run() {
             commands::connection::test_connection,
             commands::connection::test_connection_with_info,
             commands::connection::connect_db,
+            commands::connection::connection_runtime_driver_profile,
             commands::connection::connection_final_proxy_port,
             commands::connection::disconnect_db,
             commands::connection::close_database_connection,

@@ -22,6 +22,12 @@ export default {
     changePasswordFailed: "Failed to change password",
     changePasswordDescription: "Enter your current password and choose a new one",
   },
+  connectionPasswordPrompt: {
+    title: "Enter connection password",
+    description: "Enter the password for {name} to connect.",
+    notSaved: "This password is used only for this connection attempt and is not saved locally.",
+    connect: "Connect",
+  },
   toolbar: {
     newConnection: "New Connection",
     newQuery: "New Query",
@@ -185,6 +191,7 @@ export default {
     sqliteExtensionBrowse: "Select SQLite extension",
     user: "User",
     password: "Password",
+    rememberPassword: "Remember password",
     database: "Database",
     databasePlaceholder: "Optional",
     databasePlaceholderRequired: "Required, enter an existing database",

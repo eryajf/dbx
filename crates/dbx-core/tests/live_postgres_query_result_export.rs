@@ -27,6 +27,7 @@ fn live_postgres_config(
         port,
         username: user.to_string(),
         password: password.to_string(),
+        remember_password: true,
         database: Some(database.to_string()),
         visible_databases: None,
         visible_schemas: None,

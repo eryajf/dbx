@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import PasswordInput from "@/components/ui/PasswordInput.vue";
+import RememberPasswordInput from "@/components/connection/RememberPasswordInput.vue";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -132,7 +133,7 @@ type LegacyTransportFields = {
   proxy_password?: string;
 };
 type LegacyConnectionConfig = ConnectionConfig & LegacyTransportFields;
-type ConnectionForm = Omit<ConnectionConfig, "id">;
+type ConnectionForm = Omit<ConnectionConfig, "id" | "remember_password"> & { remember_password: boolean };
 type ConnectionTestState = ConnectionTestResult & { ok: boolean };
 type SuccessfulConnectionTest = { result: ConnectionTestResult; config: ConnectionConfig };
 
@@ -214,6 +215,7 @@ const defaultForm = (): ConnectionForm => ({
   port: 3306,
   username: "root",
   password: "",
+  remember_password: true,
   database: undefined,
   color: "",
   transport_layers: [],
@@ -1575,6 +1577,7 @@ watch(
         port: profile === "tdengine" && (config.port === 0 || config.port === 6030) ? 6041 : config.port,
         username: config.username,
         password: config.password,
+        remember_password: config.remember_password !== false,
         database: config.database,
         color: config.color || "",
         transport_layers: transportLayersForConfig(legacyConfig),
@@ -2404,7 +2407,8 @@ function applyConnectionUrlToForm(input: string): boolean {
     }
 
     const parsed = parseConnectionUrl(input, selectedType.value);
-    form.value = applyParsedConnectionUrl(form.value, parsed);
+    const parsedForm = applyParsedConnectionUrl(form.value, parsed);
+    form.value = { ...parsedForm, remember_password: parsedForm.remember_password !== false };
     selectedType.value = parsed.driverProfile;
     customDriverName.value = isCustomCompatibleProfile() ? parsed.driverLabel : "";
     mongoUseUrl.value = !!parsed.useMongoUrl;
@@ -2646,6 +2650,11 @@ function connectionConfigForSubmit(id: string, generatedName = ""): ConnectionCo
     config.connection_string = undefined;
   } else if (config.db_type === "mongodb") {
     config.connection_string = normalizeMongoConnectionString(config.connection_string?.trim() || "");
+    if (config.remember_password === false && config.connection_string) {
+      const parsedMongoUrl = parseConnectionUrl(config.connection_string, "mongodb");
+      config.username = parsedMongoUrl.username;
+      config.password = parsedMongoUrl.password;
+    }
   }
   if (config.db_type === "mongodb" && config.driver_profile !== "mongodb-legacy") {
     config.driver_profile = "mongodb";
@@ -3415,7 +3424,8 @@ function applyConnectionDraftToConfig(config: Omit<ConnectionConfig, "id">, draf
 
 function applyConnectionDraftToForm(draft: ConnectionDeepLinkDraft) {
   applyProfile(draft.driverProfile);
-  form.value = applyConnectionDraftToConfig(form.value, draft);
+  const draftForm = applyConnectionDraftToConfig(form.value, draft);
+  form.value = { ...draftForm, remember_password: draftForm.remember_password !== false };
   selectedType.value = draft.driverProfile;
   if (form.value.db_type === "h2") {
     h2ConnectionMode.value = h2ConnectionModeForConfig(form.value);
@@ -4322,7 +4332,7 @@ function openExternalUrl(url: string) {
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.password") }}</Label>
-                    <PasswordInput v-model="form.password" class="col-span-3" />
+                    <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" />
                   </div>
                   <div class="grid grid-cols-4 items-start gap-4">
                     <Label :class="connectionLabelTopClass">{{ t("connection.jdbcDriverPaths") }}</Label>
@@ -4426,7 +4436,7 @@ function openExternalUrl(url: string) {
                   </div>
                   <div v-if="form.db_type === 'sqlite'" class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.sqliteCipherKey") }}</Label>
-                    <PasswordInput v-model="form.password" class="col-span-3" :placeholder="t('connection.sqliteCipherKeyPlaceholder')" />
+                    <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" :placeholder="t('connection.sqliteCipherKeyPlaceholder')" />
                   </div>
                   <div v-if="form.db_type === 'sqlite'" class="grid grid-cols-4 items-start gap-4">
                     <Label :class="connectionLabelTopClass">{{ t("connection.sqliteExtensions") }}</Label>
@@ -4473,7 +4483,7 @@ function openExternalUrl(url: string) {
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.password") }}{{ form.db_type === "access" ? "（可选）" : "" }}</Label>
-                      <PasswordInput v-model="form.password" class="col-span-3" />
+                      <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" />
                     </div>
                   </template>
                 </template>
@@ -4532,7 +4542,7 @@ function openExternalUrl(url: string) {
                   <template v-if="mqAuthKind === 'token'">
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.mqToken") }}</Label>
-                      <PasswordInput v-model="mqToken" class="col-span-3" />
+                      <RememberPasswordInput v-model="mqToken" v-model:remember="form.remember_password" class="col-span-3" />
                     </div>
                   </template>
                   <template v-else-if="mqAuthKind === 'basic'">
@@ -4542,7 +4552,7 @@ function openExternalUrl(url: string) {
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.password") }}</Label>
-                      <PasswordInput v-model="mqBasicPassword" class="col-span-3" />
+                      <RememberPasswordInput v-model="mqBasicPassword" v-model:remember="form.remember_password" class="col-span-3" />
                     </div>
                     <div v-if="mqSystemKind === 'kafka'" class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.mqSaslMechanism") }}</Label>
@@ -4610,7 +4620,7 @@ function openExternalUrl(url: string) {
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.mqApiKeyValue") }}</Label>
-                      <PasswordInput v-model="mqApiKeyValue" class="col-span-3" />
+                      <RememberPasswordInput v-model="mqApiKeyValue" v-model:remember="form.remember_password" class="col-span-3" />
                     </div>
                   </template>
                   <template v-else-if="mqAuthKind === 'oauth2'">
@@ -4624,7 +4634,7 @@ function openExternalUrl(url: string) {
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.mqOauthClientSecret") }}</Label>
-                      <PasswordInput v-model="mqOauthClientSecret" class="col-span-3" />
+                      <RememberPasswordInput v-model="mqOauthClientSecret" v-model:remember="form.remember_password" class="col-span-3" />
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.mqOauthAudience") }}</Label>
@@ -4717,7 +4727,7 @@ function openExternalUrl(url: string) {
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.password") }}</Label>
-                      <PasswordInput v-model="nacosPassword" class="col-span-3" />
+                      <RememberPasswordInput v-model="nacosPassword" v-model:remember="form.remember_password" class="col-span-3" />
                     </div>
                   </template>
                   <div class="grid grid-cols-4 items-center gap-4">
@@ -4774,7 +4784,7 @@ function openExternalUrl(url: string) {
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.redisSentinelPassword") }}</Label>
-                      <PasswordInput v-model="form.redis_sentinel_password" class="col-span-3" />
+                      <RememberPasswordInput v-model="form.redis_sentinel_password" v-model:remember="form.remember_password" class="col-span-3" />
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelSmallClass">{{ t("connection.redisSentinelTls") }}</Label>
@@ -4801,7 +4811,7 @@ function openExternalUrl(url: string) {
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.password") }}</Label>
-                    <PasswordInput v-model="form.password" class="col-span-3" :placeholder="t('connection.databasePlaceholder')" />
+                    <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" :placeholder="t('connection.databasePlaceholder')" />
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelSmallClass">{{ t("connection.redisKeySeparator") }}</Label>
@@ -4836,7 +4846,7 @@ function openExternalUrl(url: string) {
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.password") }}</Label>
-                    <PasswordInput v-model="form.password" class="col-span-3" />
+                    <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" />
                   </div>
                 </template>
 
@@ -4867,7 +4877,7 @@ function openExternalUrl(url: string) {
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.password") }}</Label>
-                    <PasswordInput v-model="form.password" class="col-span-3" />
+                    <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" />
                   </div>
                 </template>
 
@@ -4898,11 +4908,17 @@ function openExternalUrl(url: string) {
                   <template v-if="mongoUseUrl">
                     <div class="grid grid-cols-4 items-start gap-4">
                       <Label :class="connectionLabelTopClass">URL</Label>
-                      <textarea
-                        v-model="form.connection_string"
-                        class="col-span-3 flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        placeholder="mongodb+srv://user:pass@cluster.mongodb.net/mydb"
-                      />
+                      <div class="col-span-3 flex items-start gap-3">
+                        <textarea
+                          v-model="form.connection_string"
+                          class="flex min-h-[80px] min-w-0 flex-1 rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          placeholder="mongodb+srv://user:pass@cluster.mongodb.net/mydb"
+                        />
+                        <label class="flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap pt-2 text-xs text-muted-foreground">
+                          <input v-model="form.remember_password" type="checkbox" class="mr-0" />
+                          <span>{{ t("connection.rememberPassword") }}</span>
+                        </label>
+                      </div>
                     </div>
                   </template>
                   <template v-else>
@@ -4958,7 +4974,7 @@ function openExternalUrl(url: string) {
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.password") }}</Label>
-                      <PasswordInput v-model="form.password" class="col-span-3" />
+                      <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" />
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.defaultDatabase") }}</Label>
@@ -5025,7 +5041,7 @@ function openExternalUrl(url: string) {
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">Token</Label>
-                      <PasswordInput v-model="form.password" class="col-span-3" />
+                      <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" />
                     </div>
                   </template>
                   <template v-else>
@@ -5035,7 +5051,7 @@ function openExternalUrl(url: string) {
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.password") }}</Label>
-                      <PasswordInput v-model="form.password" class="col-span-3" />
+                      <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" />
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ t("connection.database") }}</Label>
@@ -5062,7 +5078,7 @@ function openExternalUrl(url: string) {
 
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">Auth Token</Label>
-                    <PasswordInput v-model="form.password" class="col-span-3" placeholder="eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9..." />
+                    <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" placeholder="eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9..." />
                   </div>
 
                   <div class="grid grid-cols-4 items-start gap-4">
@@ -5077,7 +5093,7 @@ function openExternalUrl(url: string) {
                 </template>
 
                 <template v-else-if="form.db_type === 'cloudflare-d1'">
-                  <CloudflareD1ConnectionFields v-model:account-id="form.host" v-model:database-id="form.database" v-model:api-token="form.password" />
+                  <CloudflareD1ConnectionFields v-model:account-id="form.host" v-model:database-id="form.database" v-model:api-token="form.password" v-model:remember-password="form.remember_password" />
                 </template>
 
                 <!-- MySQL / PostgreSQL: host, port, user, password, database -->
@@ -5105,7 +5121,7 @@ function openExternalUrl(url: string) {
 
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.password") }}</Label>
-                    <PasswordInput v-model="form.password" class="col-span-3" />
+                    <RememberPasswordInput v-model="form.password" v-model:remember="form.remember_password" class="col-span-3" />
                   </div>
 
                   <div class="grid grid-cols-4 items-center gap-4">

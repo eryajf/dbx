@@ -14,6 +14,7 @@ const SchemaDiagramDialog = defineAsyncComponent(() => import("@/components/diag
 const TableImportDialog = defineAsyncComponent(() => import("@/components/import/TableImportDialog.vue"));
 const FieldLineageDialog = defineAsyncComponent(() => import("@/components/lineage/FieldLineageDialog.vue"));
 const ConfigPassphraseDialog = defineAsyncComponent(() => import("@/components/config/ConfigPassphraseDialog.vue"));
+const ConnectionPasswordPromptDialog = defineAsyncComponent(() => import("@/components/connection/ConnectionPasswordPromptDialog.vue"));
 const DatabaseSearchDialog = defineAsyncComponent(() => import("@/components/search/DatabaseSearchDialog.vue"));
 const DatabaseExportDialog = defineAsyncComponent(() => import("@/components/export/DatabaseExportDialog.vue"));
 const DataGenerateDialog = defineAsyncComponent(() => import("@/components/generate/DataGenerateDialog.vue"));
@@ -140,6 +141,7 @@ watch(
     @open-driver-store="emit('openDriverStore', $event)"
     @open-tunnel-profile-settings="emit('openTunnelProfileSettings')"
   />
+  <ConnectionPasswordPromptDialog />
   <DangerConfirmDialog
     v-if="showDangerDialog"
     :open="showDangerDialog"

@@ -12,6 +12,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoCredential;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
@@ -365,6 +366,25 @@ class MongoAgentTest {
         connection.addProperty("database", "gray_lite_twin_fat");
 
         assertEquals("admin", MongoAgent.authenticationDatabase(connection));
+    }
+
+    @Test
+    void connectionStringCredentialsRemainAuthoritativeOverTopLevelCredentials() {
+        JsonObject connection = minimalConnection();
+        connection.addProperty(
+            "connection_string",
+            "mongodb://uri-user:uri-password@127.0.0.1:27017/app?authSource=admin&authMechanism=SCRAM-SHA-1"
+        );
+        connection.addProperty("username", "stale-form-user");
+        connection.addProperty("password", "stale-form-password");
+
+        MongoCredential credential = MongoAgent.configureBuilder(connection).build().getCredential();
+
+        assertNotNull(credential);
+        assertEquals("uri-user", credential.getUserName());
+        assertEquals("uri-password", new String(credential.getPassword()));
+        assertEquals("admin", credential.getSource());
+        assertEquals("SCRAM-SHA-1", credential.getMechanism());
     }
 
     // ─── TLS: configureBuilder JSON parsing ───

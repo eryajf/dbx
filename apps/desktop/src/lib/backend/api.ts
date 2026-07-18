@@ -54,6 +54,7 @@ function forward<K extends keyof Backend>(name: K): Backend[K] {
 export const testConnection = forward("testConnection");
 export const testConnectionWithInfo = forward("testConnectionWithInfo");
 export const connectDb = forward("connectDb");
+export const connectionRuntimeDriverProfile = forward("connectionRuntimeDriverProfile");
 export const connectionDatabaseInfo = forward("connectionDatabaseInfo");
 export const saveConnectionDatabaseInfo = forward("saveConnectionDatabaseInfo");
 export const connectionFinalProxyPort = forward("connectionFinalProxyPort");

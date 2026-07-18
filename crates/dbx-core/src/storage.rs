@@ -9,9 +9,10 @@ use uuid::Uuid;
 
 use crate::ai::{AiChatMessage, AiConfig, AiConfigItem, AiConversation, AiProvider};
 use crate::connection_secrets::{
+    connection_string_without_password, extract_and_scrub_turso_auth_token, CONNECTION_STRING_KEY, MAIN_PASSWORD_KEY,
     MQ_AUTH_API_KEY_VALUE_KEY, MQ_AUTH_CLIENT_SECRET_KEY, MQ_AUTH_PASSWORD_KEY, MQ_AUTH_SECRET_PREFIX,
     MQ_AUTH_TOKEN_KEY, MQ_TOKEN_SIGNING_KEY, MQ_TOKEN_SIGNING_SECRET_PREFIX, NACOS_AUTH_PASSWORD_KEY,
-    NACOS_AUTH_SECRET_PREFIX,
+    NACOS_AUTH_SECRET_PREFIX, REDIS_SENTINEL_PASSWORD_KEY,
 };
 use crate::db::sqlite::{connect_path_create_if_missing, SqliteHandle};
 use crate::history::{HistoryEntry, MAX_HISTORY};
@@ -1467,8 +1468,10 @@ impl Storage {
             tx.execute("DELETE FROM connections", []).map_err(|e| e.to_string())?;
 
             for config in &configs {
-                let config = config.canonicalized();
+                let mut config = config.canonicalized();
+                extract_and_scrub_turso_auth_token(&mut config);
                 let config_id = config.id.clone();
+                let connection_string = config.connection_string.clone();
                 let mut sanitized = config;
                 sanitized.password = String::new();
                 scrub_transport_layer_secrets(&mut sanitized);
@@ -1482,6 +1485,21 @@ impl Storage {
 
                 tx.execute("INSERT INTO connections (id, config_json) VALUES (?1, ?2)", params![config_id, json])
                     .map_err(|e| e.to_string())?;
+
+                if !sanitized.remember_password {
+                    persist_secret_in_tx(&tx, &sanitized.id, MAIN_PASSWORD_KEY, "")?;
+                    persist_secret_in_tx(&tx, &sanitized.id, REDIS_SENTINEL_PASSWORD_KEY, "")?;
+                    delete_secret_prefix_in_tx(&tx, &sanitized.id, MQ_AUTH_SECRET_PREFIX)?;
+                    delete_secret_prefix_in_tx(&tx, &sanitized.id, NACOS_AUTH_SECRET_PREFIX)?;
+                    let existing = get_secret_in_tx(&tx, &sanitized.id, CONNECTION_STRING_KEY)?;
+                    let connection_string = connection_string.or(existing);
+                    persist_secret_in_tx(
+                        &tx,
+                        &sanitized.id,
+                        CONNECTION_STRING_KEY,
+                        connection_string.as_deref().map(connection_string_without_password).as_deref().unwrap_or(""),
+                    )?;
+                }
             }
 
             if configs.is_empty() {
@@ -1505,7 +1523,11 @@ impl Storage {
             tx.execute("DELETE FROM connections", []).map_err(|e| e.to_string())?;
 
             for config in &configs {
-                let config = config.canonicalized();
+                let mut config = config.canonicalized();
+                let turso_auth_token = extract_and_scrub_turso_auth_token(&mut config);
+                if config.remember_password && config.password.is_empty() {
+                    config.password = turso_auth_token.filter(|token| !token.is_empty()).unwrap_or_default();
+                }
                 let config_id = config.id.clone();
                 let mut sanitized = config.clone();
                 sanitized.password = String::new();
@@ -1521,7 +1543,12 @@ impl Storage {
                 tx.execute("INSERT INTO connections (id, config_json) VALUES (?1, ?2)", params![config_id, json])
                     .map_err(|e| e.to_string())?;
 
-                persist_secret_in_tx(&tx, &config.id, "password", &config.password)?;
+                persist_secret_in_tx(
+                    &tx,
+                    &config.id,
+                    MAIN_PASSWORD_KEY,
+                    if config.remember_password { &config.password } else { "" },
+                )?;
                 delete_secret_prefix_in_tx(&tx, &config.id, TRANSPORT_LAYER_SECRET_PREFIX)?;
                 for (index, layer) in config.transport_layers.iter().enumerate() {
                     match layer {
@@ -1557,17 +1584,24 @@ impl Storage {
                         }
                     }
                 }
-                persist_secret_in_tx(&tx, &config.id, "redis_sentinel_password", &config.redis_sentinel_password)?;
+                persist_secret_in_tx(
+                    &tx,
+                    &config.id,
+                    REDIS_SENTINEL_PASSWORD_KEY,
+                    if config.remember_password { &config.redis_sentinel_password } else { "" },
+                )?;
                 persist_secret_in_tx(&tx, &config.id, "ssh_password", "")?;
                 persist_secret_in_tx(&tx, &config.id, "ssh_key_passphrase", "")?;
                 persist_secret_in_tx(&tx, &config.id, "proxy_password", "")?;
                 delete_secret_prefix_in_tx(&tx, &config.id, SSH_TUNNEL_SECRET_PREFIX)?;
                 if let Some(cs) = &config.connection_string {
-                    persist_secret_in_tx(&tx, &config.id, "connection_string", cs)?;
+                    let stored =
+                        if config.remember_password { cs.clone() } else { connection_string_without_password(cs) };
+                    persist_secret_in_tx(&tx, &config.id, CONNECTION_STRING_KEY, &stored)?;
                 } else {
                     tx.execute(
                         "DELETE FROM connection_secrets WHERE connection_id = ?1 AND key = ?2",
-                        params![config.id, "connection_string"],
+                        params![config.id, CONNECTION_STRING_KEY],
                     )
                     .map_err(|e| e.to_string())?;
                 }
@@ -1637,7 +1671,27 @@ impl Storage {
         let mut configs = Vec::new();
         for (id, json) in rows {
             let mut config: ConnectionConfig = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            config.password = self.get_secret(&id, "password").await?.unwrap_or_default();
+            let turso_auth_token = extract_and_scrub_turso_auth_token(&mut config);
+            let mut needs_config_rewrite = !config.remember_password
+                && (!config.password.is_empty() || !config.redis_sentinel_password.is_empty());
+            needs_config_rewrite |= turso_auth_token.is_some();
+            let embedded_connection_string = config.connection_string.take();
+            needs_config_rewrite |= embedded_connection_string.is_some();
+            config.password = if config.remember_password {
+                match self.get_secret(&id, MAIN_PASSWORD_KEY).await? {
+                    Some(password) => password,
+                    None => {
+                        let password = turso_auth_token.filter(|token| !token.is_empty()).unwrap_or_default();
+                        if !password.is_empty() {
+                            self.set_secret(&id, MAIN_PASSWORD_KEY, &password).await?;
+                        }
+                        password
+                    }
+                }
+            } else {
+                self.delete_secret(&id, MAIN_PASSWORD_KEY).await?;
+                String::new()
+            };
             for index in 0..config.transport_layers.len() {
                 let layer_for_key = config.transport_layers[index].clone();
                 match &mut config.transport_layers[index] {
@@ -1689,16 +1743,47 @@ impl Storage {
                     }
                 }
             }
-            config.redis_sentinel_password = self.get_secret(&id, "redis_sentinel_password").await?.unwrap_or_default();
-            config.connection_string = self.get_secret(&id, "connection_string").await?;
+            config.redis_sentinel_password = if config.remember_password {
+                self.get_secret(&id, REDIS_SENTINEL_PASSWORD_KEY).await?.unwrap_or_default()
+            } else {
+                self.delete_secret(&id, REDIS_SENTINEL_PASSWORD_KEY).await?;
+                String::new()
+            };
+            let saved_connection_string = self.get_secret(&id, CONNECTION_STRING_KEY).await?;
+            config.connection_string = match saved_connection_string.or(embedded_connection_string) {
+                Some(connection_string) if !config.remember_password => {
+                    let sanitized = connection_string_without_password(&connection_string);
+                    if sanitized.is_empty() {
+                        self.delete_secret(&id, CONNECTION_STRING_KEY).await?;
+                        None
+                    } else {
+                        if sanitized != connection_string {
+                            self.set_secret(&id, CONNECTION_STRING_KEY, &sanitized).await?;
+                        }
+                        Some(sanitized)
+                    }
+                }
+                Some(connection_string) => {
+                    self.set_secret(&id, CONNECTION_STRING_KEY, &connection_string).await?;
+                    Some(connection_string)
+                }
+                None => None,
+            };
             config.init_script = self.get_secret(&id, "init_script").await?;
             let needs_mq_auth_rewrite = self.hydrate_mq_auth_secrets(&id, &mut config).await?;
             let needs_mq_token_signing_rewrite = self.hydrate_mq_token_signing_secret(&id, &mut config).await?;
             let needs_nacos_auth_rewrite = self.hydrate_nacos_auth_secret(&id, &mut config).await?;
-            let needs_external_secret_rewrite =
-                needs_mq_auth_rewrite || needs_mq_token_signing_rewrite || needs_nacos_auth_rewrite;
+            let needs_external_secret_rewrite = needs_config_rewrite
+                || needs_mq_auth_rewrite
+                || needs_mq_token_signing_rewrite
+                || needs_nacos_auth_rewrite;
             if needs_external_secret_rewrite {
                 let mut sanitized = config.clone().canonicalized();
+                sanitized.password.clear();
+                scrub_transport_layer_secrets(&mut sanitized);
+                sanitized.redis_sentinel_password.clear();
+                sanitized.connection_string = None;
+                sanitized.init_script = None;
                 scrub_mq_auth_secrets(&mut sanitized);
                 scrub_mq_token_signing_secret(&mut sanitized);
                 scrub_nacos_auth_secrets(&mut sanitized);
@@ -1726,6 +1811,14 @@ impl Storage {
     ) -> Result<bool, String> {
         if config.db_type != DatabaseType::MessageQueue {
             return Ok(false);
+        }
+        if !config.remember_password {
+            let original = config.external_config.clone();
+            scrub_mq_auth_secrets(config);
+            for key in [MQ_AUTH_TOKEN_KEY, MQ_AUTH_PASSWORD_KEY, MQ_AUTH_API_KEY_VALUE_KEY, MQ_AUTH_CLIENT_SECRET_KEY] {
+                self.delete_secret(connection_id, key).await?;
+            }
+            return Ok(config.external_config != original);
         }
         let Some(auth) = mq_auth_object_mut(config.external_config.as_mut()) else {
             return Ok(false);
@@ -1776,6 +1869,14 @@ impl Storage {
         };
         if auth.get("kind").and_then(serde_json::Value::as_str) != Some("usernamePassword") {
             return Ok(false);
+        }
+
+        if !config.remember_password {
+            let had_password =
+                auth.get("password").and_then(serde_json::Value::as_str).is_some_and(|value| !value.is_empty());
+            scrub_json_secret(auth, "password");
+            self.delete_secret(connection_id, NACOS_AUTH_PASSWORD_KEY).await?;
+            return Ok(had_password);
         }
 
         hydrate_mq_json_secret(self, connection_id, NACOS_AUTH_PASSWORD_KEY, auth, "password").await
@@ -2653,7 +2754,7 @@ fn persist_secret_in_tx(
 }
 
 fn persist_mq_auth_secrets_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionConfig) -> Result<(), String> {
-    if config.db_type != DatabaseType::MessageQueue {
+    if config.db_type != DatabaseType::MessageQueue || !config.remember_password {
         delete_secret_prefix_in_tx(tx, &config.id, MQ_AUTH_SECRET_PREFIX)?;
         return Ok(());
     }
@@ -2726,7 +2827,7 @@ fn persist_mq_token_signing_secret_in_tx(
 }
 
 fn persist_nacos_auth_secrets_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionConfig) -> Result<(), String> {
-    if config.db_type != DatabaseType::Nacos {
+    if config.db_type != DatabaseType::Nacos || !config.remember_password {
         delete_secret_prefix_in_tx(tx, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
         return Ok(());
     }
@@ -2866,7 +2967,8 @@ fn map_from_sql_err(err: serde_json::Error) -> rusqlite::Error {
 mod tests {
     use super::{maybe_import_user_data_db, DataDbImportResult, DesktopIconTheme, DesktopSettings, Storage};
     use crate::connection_secrets::{
-        MQ_AUTH_PASSWORD_KEY, MQ_AUTH_TOKEN_KEY, MQ_TOKEN_SIGNING_KEY, NACOS_AUTH_PASSWORD_KEY,
+        CONNECTION_STRING_KEY, MAIN_PASSWORD_KEY, MQ_AUTH_PASSWORD_KEY, MQ_AUTH_TOKEN_KEY, MQ_TOKEN_SIGNING_KEY,
+        NACOS_AUTH_PASSWORD_KEY, REDIS_SENTINEL_PASSWORD_KEY,
     };
     use crate::models::connection::{
         ConnectionConfig, DatabaseConnectionInfo, DatabaseType, SshTunnelConfig, TransportLayerConfig,
@@ -2957,6 +3059,7 @@ mod tests {
             port: 8080,
             username: String::new(),
             password: String::new(),
+            remember_password: true,
             database: None,
             visible_databases: None,
             visible_schemas: None,
@@ -3018,6 +3121,7 @@ mod tests {
             port: 8848,
             username: "nacos".to_string(),
             password: String::new(),
+            remember_password: true,
             database: None,
             visible_databases: None,
             visible_schemas: None,
@@ -3218,6 +3322,230 @@ mod tests {
         let loaded = storage.load_connections().await.unwrap();
         assert_eq!(loaded[0].database_info, Some(updated_info));
         assert_eq!(mq_token(&loaded[0]), Some("mq-secret"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn save_connections_removes_password_when_remember_password_is_disabled() {
+        let path = temp_db_path("forget-main-password");
+        let storage = Storage::open(&path).await.unwrap();
+        let mut config = mq_connection("forget-main-password", "mq-secret");
+        config.password = "database-secret".to_string();
+
+        storage.save_connections(std::slice::from_ref(&config)).await.unwrap();
+        assert_eq!(
+            storage.get_secret(&config.id, MAIN_PASSWORD_KEY).await.unwrap().as_deref(),
+            Some("database-secret")
+        );
+
+        config.remember_password = false;
+        storage.save_connections(std::slice::from_ref(&config)).await.unwrap();
+
+        assert_eq!(storage.get_secret(&config.id, MAIN_PASSWORD_KEY).await.unwrap(), None);
+        assert_eq!(storage.get_secret(&config.id, MQ_AUTH_TOKEN_KEY).await.unwrap(), None);
+        let loaded = storage.load_connections().await.unwrap();
+        assert!(!loaded[0].remember_password);
+        assert!(loaded[0].password.is_empty());
+        assert_eq!(mq_token(&loaded[0]), Some(""));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn save_connections_moves_or_discards_turso_url_parameter_tokens() {
+        let path = temp_db_path("turso-url-token");
+        let storage = Storage::open(&path).await.unwrap();
+        let mut remembered = mq_connection("turso", "");
+        remembered.db_type = DatabaseType::Turso;
+        remembered.external_config = None;
+        remembered.url_params = Some("mode=primary&authToken=turso-secret&sync=true".to_string());
+
+        storage.save_connections(std::slice::from_ref(&remembered)).await.unwrap();
+
+        let raw_json = raw_connection_json(&storage, "turso").await;
+        assert!(!raw_json.contains("turso-secret"));
+        assert!(raw_json.contains("mode=primary&sync=true"));
+        assert_eq!(storage.get_secret("turso", MAIN_PASSWORD_KEY).await.unwrap().as_deref(), Some("turso-secret"));
+        let loaded = storage.load_connections().await.unwrap();
+        assert_eq!(loaded[0].password, "turso-secret");
+        assert_eq!(loaded[0].url_params.as_deref(), Some("mode=primary&sync=true"));
+
+        let mut forgotten = remembered;
+        forgotten.remember_password = false;
+        forgotten.password.clear();
+        forgotten.url_params = Some("?auth-token=discard-me&mode=replica".to_string());
+        storage.save_connections(std::slice::from_ref(&forgotten)).await.unwrap();
+
+        let raw_json = raw_connection_json(&storage, "turso").await;
+        assert!(!raw_json.contains("discard-me"));
+        assert!(raw_json.contains("?mode=replica"));
+        assert_eq!(storage.get_secret("turso", MAIN_PASSWORD_KEY).await.unwrap(), None);
+        let loaded = storage.load_connections().await.unwrap();
+        assert_eq!(loaded[0].password, "");
+        assert_eq!(loaded[0].url_params.as_deref(), Some("?mode=replica"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn load_connections_migrates_legacy_turso_url_parameter_tokens() {
+        let path = temp_db_path("legacy-turso-url-token");
+        let storage = Storage::open(&path).await.unwrap();
+        let mut remembered = mq_connection("turso-remembered", "");
+        remembered.db_type = DatabaseType::Turso;
+        remembered.external_config = None;
+        remembered.url_params = Some("authToken=legacy-secret&mode=primary".to_string());
+        let mut forgotten = mq_connection("turso-forgotten", "");
+        forgotten.db_type = DatabaseType::Turso;
+        forgotten.external_config = None;
+        forgotten.remember_password = false;
+        forgotten.url_params = Some("auth_token=discard-me&mode=replica".to_string());
+        insert_raw_connection(&storage, &remembered).await;
+        insert_raw_connection(&storage, &forgotten).await;
+
+        let loaded = storage.load_connections().await.unwrap();
+
+        let remembered = loaded.iter().find(|config| config.id == "turso-remembered").unwrap();
+        assert_eq!(remembered.password, "legacy-secret");
+        assert_eq!(remembered.url_params.as_deref(), Some("mode=primary"));
+        assert_eq!(
+            storage.get_secret("turso-remembered", MAIN_PASSWORD_KEY).await.unwrap().as_deref(),
+            Some("legacy-secret")
+        );
+        let forgotten = loaded.iter().find(|config| config.id == "turso-forgotten").unwrap();
+        assert_eq!(forgotten.password, "");
+        assert_eq!(forgotten.url_params.as_deref(), Some("mode=replica"));
+        assert_eq!(storage.get_secret("turso-forgotten", MAIN_PASSWORD_KEY).await.unwrap(), None);
+        assert!(!raw_connection_json(&storage, "turso-remembered").await.contains("legacy-secret"));
+        assert!(!raw_connection_json(&storage, "turso-forgotten").await.contains("discard-me"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn save_connections_removes_nacos_password_when_remember_password_is_disabled() {
+        let path = temp_db_path("forget-nacos-password");
+        let storage = Storage::open(&path).await.unwrap();
+        let mut config = nacos_connection("nacos", "nacos-secret");
+        config.remember_password = false;
+
+        storage.save_connections(std::slice::from_ref(&config)).await.unwrap();
+
+        assert_eq!(storage.get_secret(&config.id, MAIN_PASSWORD_KEY).await.unwrap(), None);
+        assert_eq!(storage.get_secret(&config.id, NACOS_AUTH_PASSWORD_KEY).await.unwrap(), None);
+        let loaded = storage.load_connections().await.unwrap();
+        assert!(!loaded[0].remember_password);
+        assert!(loaded[0].password.is_empty());
+        assert_eq!(nacos_auth_password(&loaded[0]), Some(""));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn save_connections_forgets_sentinel_password_and_sanitizes_connection_string() {
+        let path = temp_db_path("forget-sentinel-and-connection-string");
+        let storage = Storage::open(&path).await.unwrap();
+        let mut config = mq_connection("mongo", "");
+        config.db_type = DatabaseType::MongoDb;
+        config.external_config = None;
+        config.username = "mongo-user".to_string();
+        config.password = "mongo-secret".to_string();
+        config.redis_sentinel_password = "sentinel-secret".to_string();
+        config.connection_string =
+            Some("mongodb://mongo-user:mongo-secret@mongo-a:27017,mongo-b:27017/app?authSource=admin".to_string());
+        config.remember_password = false;
+
+        storage.save_connections(std::slice::from_ref(&config)).await.unwrap();
+
+        assert_eq!(storage.get_secret(&config.id, MAIN_PASSWORD_KEY).await.unwrap(), None);
+        assert_eq!(storage.get_secret(&config.id, REDIS_SENTINEL_PASSWORD_KEY).await.unwrap(), None);
+        assert_eq!(
+            storage.get_secret(&config.id, CONNECTION_STRING_KEY).await.unwrap().as_deref(),
+            Some("mongodb://mongo-user@mongo-a:27017,mongo-b:27017/app?authSource=admin")
+        );
+        let loaded = storage.load_connections().await.unwrap();
+        assert_eq!(loaded[0].password, "");
+        assert_eq!(loaded[0].redis_sentinel_password, "");
+        assert_eq!(
+            loaded[0].connection_string.as_deref(),
+            Some("mongodb://mongo-user@mongo-a:27017,mongo-b:27017/app?authSource=admin")
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn metadata_save_for_unremembered_connection_clears_auth_and_preserves_sanitized_connection_structure() {
+        let path = temp_db_path("forget-metadata-secrets");
+        let storage = Storage::open(&path).await.unwrap();
+        let mut original = mq_connection("metadata", "mq-secret");
+        original.password = "main-secret".to_string();
+        original.redis_sentinel_password = "sentinel-secret".to_string();
+        original.connection_string = Some(
+            "jdbc:dremio:direct=dremio.example.com:31010;schema=analytics;user=admin;password=dremio-secret;ssl=true"
+                .to_string(),
+        );
+        storage.save_connections(std::slice::from_ref(&original)).await.unwrap();
+
+        let mut metadata = original;
+        metadata.remember_password = false;
+        metadata.password.clear();
+        metadata.redis_sentinel_password.clear();
+        metadata.connection_string = None;
+        if let Some(auth) = metadata.external_config.as_mut().and_then(|value| value.get_mut("auth")) {
+            auth["token"] = serde_json::Value::String(String::new());
+        }
+        storage.save_connection_metadata_preserving_secrets(&[metadata]).await.unwrap();
+
+        assert_eq!(storage.get_secret("metadata", MAIN_PASSWORD_KEY).await.unwrap(), None);
+        assert_eq!(storage.get_secret("metadata", REDIS_SENTINEL_PASSWORD_KEY).await.unwrap(), None);
+        assert_eq!(storage.get_secret("metadata", MQ_AUTH_TOKEN_KEY).await.unwrap(), None);
+        assert_eq!(
+            storage.get_secret("metadata", CONNECTION_STRING_KEY).await.unwrap().as_deref(),
+            Some("jdbc:dremio:direct=dremio.example.com:31010;schema=analytics;user=admin;ssl=true")
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn load_unremembered_connection_cleans_legacy_auth_secrets_and_plaintext_json() {
+        let path = temp_db_path("forget-load-cleanup");
+        let storage = Storage::open(&path).await.unwrap();
+        let mut config = mq_connection("legacy", "plaintext-mq-secret");
+        config.remember_password = false;
+        config.password = "plaintext-main-secret".to_string();
+        config.redis_sentinel_password = "plaintext-sentinel-secret".to_string();
+        config.connection_string =
+            Some("mongodb://legacy-user:plaintext-uri-secret@mongo-a:27017/app?authSource=admin".to_string());
+        insert_raw_connection(&storage, &config).await;
+        storage.set_secret("legacy", MAIN_PASSWORD_KEY, "stored-main-secret").await.unwrap();
+        storage.set_secret("legacy", REDIS_SENTINEL_PASSWORD_KEY, "stored-sentinel-secret").await.unwrap();
+        storage.set_secret("legacy", MQ_AUTH_TOKEN_KEY, "stored-mq-secret").await.unwrap();
+
+        let loaded = storage.load_connections().await.unwrap();
+
+        assert_eq!(loaded[0].password, "");
+        assert_eq!(loaded[0].redis_sentinel_password, "");
+        assert_eq!(mq_token(&loaded[0]), Some(""));
+        assert_eq!(
+            loaded[0].connection_string.as_deref(),
+            Some("mongodb://legacy-user@mongo-a:27017/app?authSource=admin")
+        );
+        assert_eq!(storage.get_secret("legacy", MAIN_PASSWORD_KEY).await.unwrap(), None);
+        assert_eq!(storage.get_secret("legacy", REDIS_SENTINEL_PASSWORD_KEY).await.unwrap(), None);
+        assert_eq!(storage.get_secret("legacy", MQ_AUTH_TOKEN_KEY).await.unwrap(), None);
+        assert_eq!(
+            storage.get_secret("legacy", CONNECTION_STRING_KEY).await.unwrap().as_deref(),
+            Some("mongodb://legacy-user@mongo-a:27017/app?authSource=admin")
+        );
+        let raw_json = raw_connection_json(&storage, "legacy").await;
+        for secret in
+            ["plaintext-main-secret", "plaintext-sentinel-secret", "plaintext-mq-secret", "plaintext-uri-secret"]
+        {
+            assert!(!raw_json.contains(secret));
+        }
 
         let _ = std::fs::remove_file(path);
     }

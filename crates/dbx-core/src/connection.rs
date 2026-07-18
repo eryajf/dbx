@@ -16,6 +16,7 @@ use crate::agent_connection::{
     oracle_error_with_driver_hint, should_retry_mongo_with_legacy_driver, trino_like_jdbc_connection_string,
 };
 use crate::agent_manager::{JavaRuntimeMode, DEFAULT_JRE_KEY};
+use crate::connection_secrets::turso_auth_token_from_url_params;
 use crate::database_capabilities;
 use crate::db;
 use crate::db::agent_driver::AgentMethod;
@@ -1154,7 +1155,7 @@ impl AppState {
                 let auth_token = if !db_config.password.is_empty() {
                     db_config.password.clone()
                 } else {
-                    db_config.url_params.as_deref().and_then(extract_auth_token_from_params).unwrap_or_default()
+                    db_config.url_params.as_deref().and_then(turso_auth_token_from_url_params).unwrap_or_default()
                 };
                 let client = db::turso_driver::TursoClient::new(&url, &auth_token, db_config.ssl, connect_timeout)?;
                 db::turso_driver::test_connection(&client, connect_timeout).await?;
@@ -1193,7 +1194,16 @@ impl AppState {
                     client.connect(connect_params).await.map_err(|err| mongo_legacy_error_with_auth_hint(&err))?;
                     PoolKind::Agent(Arc::new(tokio::sync::Mutex::new(client)))
                 } else {
-                    let native_err = match db::mongo_driver::connect(&url, connect_timeout, idle_timeout).await {
+                    let native_err = match db::mongo_driver::connect_with_password_policy(
+                        &url,
+                        connect_timeout,
+                        idle_timeout,
+                        db_config.remember_password,
+                        &db_config.username,
+                        &db_config.password,
+                    )
+                    .await
+                    {
                         Ok(client) => match db::mongo_driver::test_connection(
                             &client,
                             connect_timeout,
@@ -3185,19 +3195,6 @@ async fn close_pool_kind_with_timeout(pool_key: String, pool: PoolKind) {
     }
 }
 
-fn extract_auth_token_from_params(params: &str) -> Option<String> {
-    params
-        .trim()
-        .trim_start_matches('?')
-        .split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .find(|(key, _)| {
-            let k = key.trim().to_ascii_lowercase();
-            k == "auth_token" || k == "authtoken" || k == "auth-token"
-        })
-        .map(|(_, value)| value.trim().to_string())
-}
-
 fn base_pool_key_for(
     db_type: Option<DatabaseType>,
     connection_id: &str,
@@ -3443,6 +3440,7 @@ mod tests {
             port: 3306,
             username: "root".to_string(),
             password: "secret".to_string(),
+            remember_password: true,
             database: database.map(str::to_string),
             visible_databases: None,
             visible_schemas: None,
@@ -3651,6 +3649,49 @@ mod tests {
         let params = agent_connect_params(&config, "172.22.4.42", 27017, "");
 
         assert_eq!(params["database"], "RestCloud_V45PUB_Gateway");
+    }
+
+    #[test]
+    fn agent_connect_params_mongodb_keeps_remembered_uri_credentials_authoritative() {
+        let mut config = mysql_config(None);
+        config.db_type = DatabaseType::MongoDb;
+        config.host = "172.22.4.42".to_string();
+        config.port = 27017;
+        config.username = "stale-form-user".to_string();
+        config.password = "stale-form-password".to_string();
+        config.remember_password = true;
+        config.connection_string = Some(
+            "mongodb://uri-user:uri-password@172.22.4.42:27017/app?authSource=admin&authMechanism=SCRAM-SHA-1"
+                .to_string(),
+        );
+
+        let params = agent_connect_params(&config, "172.22.4.42", 27017, "app");
+
+        assert_eq!(
+            params["connection_string"],
+            "mongodb://uri-user:uri-password@172.22.4.42:27017/app?authSource=admin&authMechanism=SCRAM-SHA-1"
+        );
+    }
+
+    #[test]
+    fn agent_connect_params_mongodb_injects_unremembered_runtime_credentials_into_uri() {
+        let mut config = mysql_config(None);
+        config.db_type = DatabaseType::MongoDb;
+        config.host = "srv-a".to_string();
+        config.port = 27017;
+        config.username = "runtime user".to_string();
+        config.password = "runtime:p@ss".to_string();
+        config.remember_password = false;
+        config.connection_string = Some(
+            "mongodb://saved-user@srv-a:27017,srv-b:27018/app?authSource=admin&authMechanism=SCRAM-SHA-1".to_string(),
+        );
+
+        let params = agent_connect_params(&config, "srv-a", 27017, "app");
+
+        assert_eq!(
+            params["connection_string"],
+            "mongodb://runtime%20user:runtime%3Ap%40ss@srv-a:27017,srv-b:27018/app?authSource=admin&authMechanism=SCRAM-SHA-1"
+        );
     }
 
     #[test]

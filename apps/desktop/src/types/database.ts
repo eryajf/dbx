@@ -124,6 +124,7 @@ export interface ConnectionConfig {
   port: number;
   username: string;
   password: string;
+  remember_password?: boolean;
   database?: string;
   visible_databases?: string[];
   visible_schemas?: Record<string, string[]>;

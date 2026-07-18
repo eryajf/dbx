@@ -678,6 +678,11 @@ export async function connectDb(config: ConnectionConfig, clientAttempt?: number
   return invoke("connect_db", { config, clientAttempt });
 }
 
+export async function connectionRuntimeDriverProfile(connectionId: string): Promise<string | undefined> {
+  const profile = await invoke<string | null>("connection_runtime_driver_profile", { connectionId });
+  return profile ?? undefined;
+}
+
 export async function connectionDatabaseInfo(connectionId: string, database?: string): Promise<DatabaseConnectionInfo | undefined> {
   const info = await invoke<DatabaseConnectionInfo | null>("connection_database_info", { connectionId, database });
   return info ?? undefined;

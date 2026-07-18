@@ -230,6 +230,10 @@ export async function connectDb(config: ConnectionConfig, clientAttempt?: number
   return post("/api/connection/connect", { config, clientAttempt });
 }
 
+export async function connectionRuntimeDriverProfile(_connectionId: string): Promise<string | undefined> {
+  return undefined;
+}
+
 export async function connectionDatabaseInfo(connectionId: string, database?: string): Promise<DatabaseConnectionInfo | undefined> {
   const info = await post<DatabaseConnectionInfo | null>("/api/connection/database-info", { connectionId, database });
   return info ?? undefined;

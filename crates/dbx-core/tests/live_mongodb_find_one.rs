@@ -1,6 +1,22 @@
 use std::time::Duration;
 
 use dbx_core::db::mongo_driver;
+
+#[tokio::test]
+#[ignore = "requires DBX_LIVE_MONGODB_URL plus DBX_LIVE_MONGODB_USERNAME and DBX_LIVE_MONGODB_PASSWORD"]
+async fn runtime_credentials_authenticate_when_uri_has_no_password() {
+    let url = std::env::var("DBX_LIVE_MONGODB_URL").expect("DBX_LIVE_MONGODB_URL");
+    let username = std::env::var("DBX_LIVE_MONGODB_USERNAME").expect("DBX_LIVE_MONGODB_USERNAME");
+    let password = std::env::var("DBX_LIVE_MONGODB_PASSWORD").expect("DBX_LIVE_MONGODB_PASSWORD");
+    let timeout = Duration::from_secs(10);
+
+    let client =
+        mongo_driver::connect_with_password_policy(&url, timeout, Duration::from_secs(60), false, &username, &password)
+            .await
+            .expect("runtime credentials should authenticate");
+
+    mongo_driver::test_connection(&client, timeout, None).await.expect("authenticated ping should succeed");
+}
 use mongodb::bson::{doc, Bson, DateTime};
 
 #[tokio::test]

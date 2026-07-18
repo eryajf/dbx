@@ -24,6 +24,12 @@ export default withEnglishFallback({
     changePasswordFailed: "密码修改失败",
     changePasswordDescription: "输入当前密码并设置新密码",
   },
+  connectionPasswordPrompt: {
+    title: "输入连接密码",
+    description: "请输入 {name} 的密码以建立连接。",
+    notSaved: "该密码仅用于本次连接，不会保存到本地。",
+    connect: "连接",
+  },
   toolbar: {
     newConnection: "新建连接",
     newQuery: "新建查询",
@@ -187,6 +193,7 @@ export default withEnglishFallback({
     sqliteExtensionBrowse: "选择 SQLite 扩展库",
     user: "用户名",
     password: "密码",
+    rememberPassword: "记住密码",
     database: "数据库",
     databasePlaceholder: "可选",
     databasePlaceholderRequired: "必填，请填写已存在的数据库",

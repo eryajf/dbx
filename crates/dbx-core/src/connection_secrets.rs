@@ -22,6 +22,135 @@ pub const MQ_TOKEN_SIGNING_KEY: &str = "mq.token_signing.key";
 pub const NACOS_AUTH_SECRET_PREFIX: &str = "nacos.auth.";
 pub const NACOS_AUTH_PASSWORD_KEY: &str = "nacos.auth.password";
 
+fn is_turso_auth_token_key(key: &str) -> bool {
+    matches!(key.trim().to_ascii_lowercase().as_str(), "auth_token" | "authtoken" | "auth-token")
+}
+
+pub fn turso_auth_token_from_url_params(params: &str) -> Option<String> {
+    params
+        .trim()
+        .trim_start_matches(['?', '&'])
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| is_turso_auth_token_key(key))
+        .map(|(_, value)| value.trim().to_string())
+}
+
+pub fn turso_url_params_without_auth_token(params: &str) -> String {
+    let trimmed = params.trim();
+    let prefix = if trimmed.starts_with('?') { "?" } else { "" };
+    let retained = trimmed
+        .trim_start_matches(['?', '&'])
+        .split('&')
+        .filter(|part| part.split_once('=').is_none_or(|(key, _)| !is_turso_auth_token_key(key)))
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if retained.is_empty() {
+        String::new()
+    } else {
+        format!("{prefix}{}", retained.join("&"))
+    }
+}
+
+/// Removes a Turso auth token from public connection metadata and returns it so
+/// persistence layers can either store it in the protected password slot or
+/// discard it when password persistence is disabled.
+pub fn extract_and_scrub_turso_auth_token(config: &mut ConnectionConfig) -> Option<String> {
+    if config.db_type != DatabaseType::Turso {
+        return None;
+    }
+    let params = config.url_params.as_deref()?;
+    let token = turso_auth_token_from_url_params(params);
+    let sanitized = turso_url_params_without_auth_token(params);
+    if sanitized != params {
+        config.url_params = Some(sanitized);
+    }
+    token
+}
+
+/// Removes password material from connection-string formats accepted by DBX while
+/// preserving the address, username, database and driver options needed to rebuild
+/// a runtime connection. This intentionally handles URI userinfo plus the
+/// `password`/`pwd` properties used by MongoDB, H2 and Dremio URLs.
+pub fn connection_string_without_password(connection_string: &str) -> String {
+    let without_userinfo_password = strip_uri_userinfo_password(connection_string);
+    let without_properties = strip_password_properties(&without_userinfo_password, ';');
+    strip_query_password_properties(&without_properties)
+}
+
+fn strip_uri_userinfo_password(connection_string: &str) -> String {
+    let Some(scheme_end) = connection_string.find("://") else {
+        return connection_string.to_string();
+    };
+    let authority_start = scheme_end + 3;
+    let authority_end = connection_string[authority_start..]
+        .find(['/', '?', '#'])
+        .map(|offset| authority_start + offset)
+        .unwrap_or(connection_string.len());
+    let authority = &connection_string[authority_start..authority_end];
+    let Some(at) = authority.rfind('@') else {
+        return connection_string.to_string();
+    };
+    let userinfo = &authority[..at];
+    let Some(password_separator) = userinfo.find(':') else {
+        return connection_string.to_string();
+    };
+    let username = &userinfo[..password_separator];
+
+    let mut sanitized = String::with_capacity(connection_string.len());
+    sanitized.push_str(&connection_string[..authority_start]);
+    if !username.is_empty() {
+        sanitized.push_str(username);
+        sanitized.push('@');
+    }
+    sanitized.push_str(&authority[at + 1..]);
+    sanitized.push_str(&connection_string[authority_end..]);
+    sanitized
+}
+
+fn strip_password_properties(value: &str, delimiter: char) -> String {
+    let mut segments = value.split(delimiter);
+    let Some(first) = segments.next() else {
+        return String::new();
+    };
+    let mut sanitized = first.to_string();
+    for segment in segments {
+        if is_password_property(segment) {
+            continue;
+        }
+        sanitized.push(delimiter);
+        sanitized.push_str(segment);
+    }
+    sanitized
+}
+
+fn strip_query_password_properties(value: &str) -> String {
+    let (without_fragment, fragment) =
+        value.split_once('#').map_or((value, None), |(base, fragment)| (base, Some(fragment)));
+    let Some((base, query)) = without_fragment.split_once('?') else {
+        return value.to_string();
+    };
+    let retained = query.split('&').filter(|part| !is_password_property(part)).collect::<Vec<_>>();
+
+    let mut sanitized = base.to_string();
+    if !retained.is_empty() {
+        sanitized.push('?');
+        sanitized.push_str(&retained.join("&"));
+    }
+    if let Some(fragment) = fragment {
+        sanitized.push('#');
+        sanitized.push_str(fragment);
+    }
+    sanitized
+}
+
+fn is_password_property(value: &str) -> bool {
+    let Some((key, _)) = value.split_once('=') else {
+        return false;
+    };
+    matches!(key.trim().to_ascii_lowercase().as_str(), "password" | "pwd")
+}
+
 pub trait ConnectionSecretStore {
     fn set_secret(&self, connection_id: &str, key: &str, secret: &str) -> Result<(), String>;
     fn get_secret(&self, connection_id: &str, key: &str) -> Result<Option<String>, String>;
@@ -96,18 +225,47 @@ pub fn save_connections_to_file(
     configs: &[ConnectionConfig],
     store: &dyn ConnectionSecretStore,
 ) -> Result<(), String> {
-    delete_removed_connection_secrets(path, configs, store)?;
-    for config in configs {
-        persist_secret(store, &config.id, MAIN_PASSWORD_KEY, &config.password)?;
+    let configs = configs
+        .iter()
+        .cloned()
+        .map(|mut config| {
+            let turso_auth_token = extract_and_scrub_turso_auth_token(&mut config);
+            if config.remember_password && config.password.is_empty() {
+                config.password = turso_auth_token.filter(|token| !token.is_empty()).unwrap_or_default();
+            }
+            config
+        })
+        .collect::<Vec<_>>();
+    delete_removed_connection_secrets(path, &configs, store)?;
+    for config in &configs {
+        persist_secret(
+            store,
+            &config.id,
+            MAIN_PASSWORD_KEY,
+            if config.remember_password { &config.password } else { "" },
+        )?;
         delete_secret_prefix(store, &config.id, TRANSPORT_LAYER_SECRET_PREFIX)?;
         for (index, layer) in config.transport_layers.iter().enumerate() {
             persist_transport_layer_secrets(store, &config.id, index, layer)?;
         }
-        persist_secret(store, &config.id, REDIS_SENTINEL_PASSWORD_KEY, &config.redis_sentinel_password)?;
-        persist_optional_secret(store, &config.id, CONNECTION_STRING_KEY, config.connection_string.as_deref())?;
+        persist_secret(
+            store,
+            &config.id,
+            REDIS_SENTINEL_PASSWORD_KEY,
+            if config.remember_password { &config.redis_sentinel_password } else { "" },
+        )?;
+        let connection_string = config.connection_string.as_deref().map(|value| {
+            if config.remember_password {
+                value.to_string()
+            } else {
+                connection_string_without_password(value)
+            }
+        });
+        persist_optional_secret(store, &config.id, CONNECTION_STRING_KEY, connection_string.as_deref())?;
         persist_optional_secret(store, &config.id, INIT_SCRIPT_KEY, config.init_script.as_deref())?;
         persist_mq_auth_secrets(store, config)?;
         persist_mq_token_signing_secret(store, config)?;
+        persist_nacos_auth_secret(store, config)?;
 
         // New configs persist transport-layer secrets only. Remove legacy transport secret slots after the
         // migrated layer values have been written so old configs do not keep two sources of truth.
@@ -117,7 +275,7 @@ pub fn save_connections_to_file(
         delete_secret_prefix(store, &config.id, SSH_TUNNEL_SECRET_PREFIX)?;
     }
 
-    write_sanitized_connections(path, configs)
+    write_sanitized_connections(path, &configs)
 }
 
 pub fn load_connections_from_file(
@@ -131,8 +289,17 @@ pub fn load_connections_from_file(
     let mut configs = read_connections(path)?;
     let mut needs_rewrite = false;
     for config in &mut configs {
-        if config.password.is_empty() {
+        let turso_auth_token = extract_and_scrub_turso_auth_token(config);
+        needs_rewrite |= turso_auth_token.is_some();
+        if !config.remember_password {
+            needs_rewrite |= !config.password.is_empty();
+            config.password.clear();
+            store.delete_secret(&config.id, MAIN_PASSWORD_KEY)?;
+        } else if config.password.is_empty() {
             if let Some(secret) = store.get_secret(&config.id, MAIN_PASSWORD_KEY)? {
+                config.password = secret;
+            } else if let Some(secret) = turso_auth_token.filter(|token| !token.is_empty()) {
+                store.set_secret(&config.id, MAIN_PASSWORD_KEY, &secret)?;
                 config.password = secret;
             }
         } else {
@@ -142,7 +309,11 @@ pub fn load_connections_from_file(
 
         hydrate_transport_layer_secrets(store, config, &mut needs_rewrite)?;
 
-        if config.redis_sentinel_password.is_empty() {
+        if !config.remember_password {
+            needs_rewrite |= !config.redis_sentinel_password.is_empty();
+            config.redis_sentinel_password.clear();
+            store.delete_secret(&config.id, REDIS_SENTINEL_PASSWORD_KEY)?;
+        } else if config.redis_sentinel_password.is_empty() {
             if let Some(secret) = store.get_secret(&config.id, REDIS_SENTINEL_PASSWORD_KEY)? {
                 config.redis_sentinel_password = secret;
             }
@@ -153,12 +324,23 @@ pub fn load_connections_from_file(
 
         match config.connection_string.as_deref().filter(|secret| !secret.is_empty()) {
             Some(secret) => {
-                store.set_secret(&config.id, CONNECTION_STRING_KEY, secret)?;
+                let stored = if config.remember_password {
+                    secret.to_string()
+                } else {
+                    connection_string_without_password(secret)
+                };
+                persist_optional_secret(store, &config.id, CONNECTION_STRING_KEY, Some(&stored))?;
+                config.connection_string = (!stored.is_empty()).then_some(stored);
                 needs_rewrite = true;
             }
             None => {
                 if let Some(secret) = store.get_secret(&config.id, CONNECTION_STRING_KEY)? {
-                    config.connection_string = Some(secret);
+                    let stored =
+                        if config.remember_password { secret } else { connection_string_without_password(&secret) };
+                    if !config.remember_password {
+                        persist_optional_secret(store, &config.id, CONNECTION_STRING_KEY, Some(&stored))?;
+                    }
+                    config.connection_string = (!stored.is_empty()).then_some(stored);
                 }
             }
         }
@@ -176,6 +358,7 @@ pub fn load_connections_from_file(
         }
         hydrate_mq_auth_secrets(store, config, &mut needs_rewrite)?;
         hydrate_mq_token_signing_secret(store, config, &mut needs_rewrite)?;
+        hydrate_nacos_auth_secret(store, config, &mut needs_rewrite)?;
     }
 
     if needs_rewrite {
@@ -348,12 +531,14 @@ fn delete_removed_connection_secrets(
         store.delete_secret(&config.id, MAIN_PASSWORD_KEY)?;
         store.delete_secret(&config.id, SSH_PASSWORD_KEY)?;
         store.delete_secret(&config.id, SSH_KEY_PASSPHRASE_KEY)?;
+        store.delete_secret(&config.id, REDIS_SENTINEL_PASSWORD_KEY)?;
         delete_secret_prefix(store, &config.id, SSH_TUNNEL_SECRET_PREFIX)?;
         delete_secret_prefix(store, &config.id, TRANSPORT_LAYER_SECRET_PREFIX)?;
         store.delete_secret(&config.id, CONNECTION_STRING_KEY)?;
         store.delete_secret(&config.id, INIT_SCRIPT_KEY)?;
         delete_secret_prefix(store, &config.id, MQ_AUTH_SECRET_PREFIX)?;
         delete_secret_prefix(store, &config.id, MQ_TOKEN_SIGNING_SECRET_PREFIX)?;
+        delete_secret_prefix(store, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
     }
     Ok(())
 }
@@ -392,7 +577,7 @@ fn delete_secret_prefix(
 }
 
 fn persist_mq_auth_secrets(store: &dyn ConnectionSecretStore, config: &ConnectionConfig) -> Result<(), String> {
-    if config.db_type != DatabaseType::MessageQueue {
+    if config.db_type != DatabaseType::MessageQueue || !config.remember_password {
         delete_secret_prefix(store, &config.id, MQ_AUTH_SECRET_PREFIX)?;
         return Ok(());
     }
@@ -458,6 +643,14 @@ fn hydrate_mq_auth_secrets(
         return Ok(());
     }
 
+    if !config.remember_password {
+        let original = config.external_config.clone();
+        scrub_mq_auth_secrets(config);
+        *needs_rewrite |= config.external_config != original;
+        delete_secret_prefix(store, &config.id, MQ_AUTH_SECRET_PREFIX)?;
+        return Ok(());
+    }
+
     let Some(auth) = mq_auth_object_mut(config.external_config.as_mut()) else {
         return Ok(());
     };
@@ -474,6 +667,65 @@ fn hydrate_mq_auth_secrets(
         _ => {}
     }
 
+    Ok(())
+}
+
+fn persist_nacos_auth_secret(store: &dyn ConnectionSecretStore, config: &ConnectionConfig) -> Result<(), String> {
+    if config.db_type != DatabaseType::Nacos || !config.remember_password {
+        delete_secret_prefix(store, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
+        return Ok(());
+    }
+
+    let Some(auth) = mq_auth_object(config.external_config.as_ref()) else {
+        delete_secret_prefix(store, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
+        return Ok(());
+    };
+    if auth.get("kind").and_then(serde_json::Value::as_str) == Some("usernamePassword") {
+        replace_nacos_auth_secret(store, &config.id, auth)?;
+    } else {
+        delete_secret_prefix(store, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
+    }
+    Ok(())
+}
+
+fn replace_nacos_auth_secret(
+    store: &dyn ConnectionSecretStore,
+    connection_id: &str,
+    auth: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    let current = auth.get("password").and_then(serde_json::Value::as_str).filter(|secret| !secret.is_empty());
+    let existing = if current.is_none() { store.get_secret(connection_id, NACOS_AUTH_PASSWORD_KEY)? } else { None };
+    delete_secret_prefix(store, connection_id, NACOS_AUTH_SECRET_PREFIX)?;
+    match current {
+        Some(secret) => store.set_secret(connection_id, NACOS_AUTH_PASSWORD_KEY, secret),
+        None => match existing {
+            Some(secret) => store.set_secret(connection_id, NACOS_AUTH_PASSWORD_KEY, &secret),
+            None => Ok(()),
+        },
+    }
+}
+
+fn hydrate_nacos_auth_secret(
+    store: &dyn ConnectionSecretStore,
+    config: &mut ConnectionConfig,
+    needs_rewrite: &mut bool,
+) -> Result<(), String> {
+    if config.db_type != DatabaseType::Nacos {
+        return Ok(());
+    }
+    if !config.remember_password {
+        let original = config.external_config.clone();
+        scrub_nacos_auth_secret(config);
+        *needs_rewrite |= config.external_config != original;
+        delete_secret_prefix(store, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
+        return Ok(());
+    }
+    let Some(auth) = mq_auth_object_mut(config.external_config.as_mut()) else {
+        return Ok(());
+    };
+    if auth.get("kind").and_then(serde_json::Value::as_str) == Some("usernamePassword") {
+        hydrate_json_secret(store, &config.id, NACOS_AUTH_PASSWORD_KEY, auth, "password", needs_rewrite)?;
+    }
     Ok(())
 }
 
@@ -546,6 +798,18 @@ fn scrub_mq_token_signing_secret(config: &mut ConnectionConfig) {
         return;
     };
     scrub_json_secret(signing, "key");
+}
+
+fn scrub_nacos_auth_secret(config: &mut ConnectionConfig) {
+    if config.db_type != DatabaseType::Nacos {
+        return;
+    }
+    let Some(auth) = mq_auth_object_mut(config.external_config.as_mut()) else {
+        return;
+    };
+    if auth.get("kind").and_then(serde_json::Value::as_str) == Some("usernamePassword") {
+        scrub_json_secret(auth, "password");
+    }
 }
 
 fn scrub_json_secret(auth: &mut serde_json::Map<String, serde_json::Value>, field: &str) {
@@ -635,6 +899,7 @@ fn sanitize_connections(configs: &[ConnectionConfig]) -> Vec<ConnectionConfig> {
         .iter()
         .cloned()
         .map(|mut config| {
+            extract_and_scrub_turso_auth_token(&mut config);
             config.password.clear();
             for layer in &mut config.transport_layers {
                 match layer {
@@ -655,6 +920,7 @@ fn sanitize_connections(configs: &[ConnectionConfig]) -> Vec<ConnectionConfig> {
             config.init_script = None;
             scrub_mq_auth_secrets(&mut config);
             scrub_mq_token_signing_secret(&mut config);
+            scrub_nacos_auth_secret(&mut config);
             config
         })
         .collect()
@@ -667,9 +933,10 @@ pub fn secret_account(connection_id: &str, key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        load_connections_from_file, save_connections_to_file, ConnectionSecretStore, CONNECTION_STRING_KEY,
-        INIT_SCRIPT_KEY, MAIN_PASSWORD_KEY, MQ_AUTH_PASSWORD_KEY, MQ_AUTH_TOKEN_KEY, MQ_TOKEN_SIGNING_KEY,
-        REDIS_SENTINEL_PASSWORD_KEY, SSH_PASSWORD_KEY,
+        connection_string_without_password, load_connections_from_file, save_connections_to_file,
+        ConnectionSecretStore, CONNECTION_STRING_KEY, INIT_SCRIPT_KEY, MAIN_PASSWORD_KEY, MQ_AUTH_PASSWORD_KEY,
+        MQ_AUTH_TOKEN_KEY, MQ_TOKEN_SIGNING_KEY, NACOS_AUTH_PASSWORD_KEY, REDIS_SENTINEL_PASSWORD_KEY,
+        SSH_PASSWORD_KEY,
     };
     use crate::models::connection::{
         ConnectionConfig, DatabaseType, HttpTunnelConfig, SshTunnelConfig, TransportLayerConfig,
@@ -745,6 +1012,7 @@ mod tests {
             port: 5432,
             username: "postgres".to_string(),
             password: password.to_string(),
+            remember_password: true,
             database: Some("postgres".to_string()),
             visible_databases: None,
             visible_schemas: None,
@@ -848,6 +1116,67 @@ mod tests {
             _ => panic!("expected ssh layer"),
         }
         assert_eq!(persisted[0].redis_sentinel_password, "");
+    }
+
+    #[test]
+    fn save_connections_extracts_or_discards_turso_url_parameter_tokens() {
+        let remembered_path = temp_connections_file("turso-token-remembered");
+        let remembered_store = MemorySecretStore::default();
+        let mut remembered = connection("turso-remembered", "", "");
+        remembered.db_type = DatabaseType::Turso;
+        remembered.url_params = Some("mode=primary&authToken=turso-secret&sync=true".to_string());
+
+        save_connections_to_file(&remembered_path, &[remembered], &remembered_store).unwrap();
+
+        assert_eq!(
+            remembered_store.get_existing("turso-remembered", MAIN_PASSWORD_KEY).as_deref(),
+            Some("turso-secret")
+        );
+        let remembered_persisted = read_configs(&remembered_path);
+        assert_eq!(remembered_persisted[0].url_params.as_deref(), Some("mode=primary&sync=true"));
+        assert!(!std::fs::read_to_string(&remembered_path).unwrap().contains("turso-secret"));
+
+        let forgotten_path = temp_connections_file("turso-token-forgotten");
+        let forgotten_store = MemorySecretStore::default();
+        let mut forgotten = connection("turso-forgotten", "", "");
+        forgotten.db_type = DatabaseType::Turso;
+        forgotten.remember_password = false;
+        forgotten.url_params = Some("?auth_token=discard-me&mode=replica".to_string());
+
+        save_connections_to_file(&forgotten_path, &[forgotten], &forgotten_store).unwrap();
+
+        assert_eq!(forgotten_store.get_existing("turso-forgotten", MAIN_PASSWORD_KEY), None);
+        let forgotten_persisted = read_configs(&forgotten_path);
+        assert_eq!(forgotten_persisted[0].url_params.as_deref(), Some("?mode=replica"));
+        assert!(!std::fs::read_to_string(&forgotten_path).unwrap().contains("discard-me"));
+    }
+
+    #[test]
+    fn load_connections_migrates_legacy_turso_url_parameter_tokens() {
+        let path = temp_connections_file("legacy-turso-token");
+        let store = MemorySecretStore::default();
+        let mut remembered = connection("turso-remembered", "", "");
+        remembered.db_type = DatabaseType::Turso;
+        remembered.url_params = Some("authToken=legacy-secret&mode=primary".to_string());
+        let mut forgotten = connection("turso-forgotten", "", "");
+        forgotten.db_type = DatabaseType::Turso;
+        forgotten.remember_password = false;
+        forgotten.url_params = Some("auth_token=discard-me&mode=replica".to_string());
+        std::fs::write(&path, serde_json::to_string_pretty(&vec![remembered, forgotten]).unwrap()).unwrap();
+
+        let loaded = load_connections_from_file(&path, &store).unwrap();
+
+        let remembered = loaded.iter().find(|config| config.id == "turso-remembered").unwrap();
+        assert_eq!(remembered.password, "legacy-secret");
+        assert_eq!(remembered.url_params.as_deref(), Some("mode=primary"));
+        assert_eq!(store.get_existing("turso-remembered", MAIN_PASSWORD_KEY).as_deref(), Some("legacy-secret"));
+        let forgotten = loaded.iter().find(|config| config.id == "turso-forgotten").unwrap();
+        assert_eq!(forgotten.password, "");
+        assert_eq!(forgotten.url_params.as_deref(), Some("mode=replica"));
+        assert_eq!(store.get_existing("turso-forgotten", MAIN_PASSWORD_KEY), None);
+        let rewritten = std::fs::read_to_string(&path).unwrap();
+        assert!(!rewritten.contains("legacy-secret"));
+        assert!(!rewritten.contains("discard-me"));
     }
 
     #[test]
@@ -977,6 +1306,97 @@ mod tests {
 
         let loaded = load_connections_from_file(&path, &store).unwrap();
         assert_eq!(loaded[0].connection_string.as_deref(), Some("mongodb://user:secret@localhost/app"));
+    }
+
+    #[test]
+    fn connection_string_password_scrubbing_preserves_supported_structure() {
+        assert_eq!(
+            connection_string_without_password(
+                "mongodb+srv://user:p%40ss@mongo-a.example.com,mongo-b.example.com/app?authSource=admin&tls=true"
+            ),
+            "mongodb+srv://user@mongo-a.example.com,mongo-b.example.com/app?authSource=admin&tls=true"
+        );
+        assert_eq!(
+            connection_string_without_password(
+                "jdbc:h2:tcp://db.example.com/app;USER=sa;PASSWORD=h2-secret;MODE=PostgreSQL"
+            ),
+            "jdbc:h2:tcp://db.example.com/app;USER=sa;MODE=PostgreSQL"
+        );
+        assert_eq!(
+            connection_string_without_password(
+                "jdbc:dremio:direct=dremio.example.com:31010;schema=analytics;user=admin;password=dremio-secret;ssl=true"
+            ),
+            "jdbc:dremio:direct=dremio.example.com:31010;schema=analytics;user=admin;ssl=true"
+        );
+        assert_eq!(
+            connection_string_without_password(
+                "jdbc:arrow-flight-sql://user:uri-secret@dremio.example.com:32010/?password=query-secret&schema=analytics#flight"
+            ),
+            "jdbc:arrow-flight-sql://user@dremio.example.com:32010/?schema=analytics#flight"
+        );
+    }
+
+    #[test]
+    fn forget_password_removes_all_connection_auth_secrets_but_keeps_sanitized_connection_string() {
+        let path = temp_connections_file("forget-all-auth");
+        let store = MemorySecretStore::default();
+
+        let mut mongo = connection("mongo", "mongo-secret", "");
+        mongo.db_type = DatabaseType::MongoDb;
+        mongo.remember_password = false;
+        mongo.connection_string =
+            Some("mongodb://mongo-user:mongo-secret@mongo-a:27017,mongo-b:27017/app?authSource=admin".to_string());
+
+        let mut redis = connection("redis", "redis-secret", "");
+        redis.db_type = DatabaseType::Redis;
+        redis.remember_password = false;
+        redis.redis_sentinel_password = "sentinel-secret".to_string();
+
+        let mut mq = connection("mq", "", "");
+        mq.db_type = DatabaseType::MessageQueue;
+        mq.remember_password = false;
+        mq.external_config = Some(serde_json::json!({
+            "systemKind": "pulsar",
+            "adminUrl": "http://localhost:8080",
+            "auth": { "kind": "basic", "username": "admin", "password": "mq-secret" }
+        }));
+
+        let mut nacos = connection("nacos", "nacos-secret", "");
+        nacos.db_type = DatabaseType::Nacos;
+        nacos.remember_password = false;
+        nacos.external_config = Some(serde_json::json!({
+            "serverAddr": "http://localhost:8848",
+            "auth": { "kind": "usernamePassword", "username": "nacos", "password": "nacos-secret" }
+        }));
+
+        save_connections_to_file(&path, &[mongo, redis, mq, nacos], &store).unwrap();
+
+        assert_eq!(store.get_existing("mongo", MAIN_PASSWORD_KEY), None);
+        assert_eq!(store.get_existing("redis", MAIN_PASSWORD_KEY), None);
+        assert_eq!(store.get_existing("redis", REDIS_SENTINEL_PASSWORD_KEY), None);
+        assert_eq!(store.get_existing("mq", MQ_AUTH_PASSWORD_KEY), None);
+        assert_eq!(store.get_existing("nacos", MAIN_PASSWORD_KEY), None);
+        assert_eq!(store.get_existing("nacos", NACOS_AUTH_PASSWORD_KEY), None);
+        assert_eq!(
+            store.get_existing("mongo", CONNECTION_STRING_KEY).as_deref(),
+            Some("mongodb://mongo-user@mongo-a:27017,mongo-b:27017/app?authSource=admin")
+        );
+
+        let persisted_json = std::fs::read_to_string(&path).unwrap();
+        for secret in ["mongo-secret", "redis-secret", "sentinel-secret", "mq-secret", "nacos-secret"] {
+            assert!(!persisted_json.contains(secret));
+        }
+
+        let loaded = load_connections_from_file(&path, &store).unwrap();
+        assert_eq!(loaded[0].password, "");
+        assert_eq!(
+            loaded[0].connection_string.as_deref(),
+            Some("mongodb://mongo-user@mongo-a:27017,mongo-b:27017/app?authSource=admin")
+        );
+        assert_eq!(loaded[1].password, "");
+        assert_eq!(loaded[1].redis_sentinel_password, "");
+        assert_eq!(loaded[2].external_config.as_ref().unwrap()["auth"]["password"].as_str(), Some(""));
+        assert_eq!(loaded[3].external_config.as_ref().unwrap()["auth"]["password"].as_str(), Some(""));
     }
 
     #[test]

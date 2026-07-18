@@ -575,6 +575,7 @@ mod tests {
             port: 3306,
             username: "root".to_string(),
             password: String::new(),
+            remember_password: true,
             database: None,
             visible_databases: None,
             visible_schemas: None,

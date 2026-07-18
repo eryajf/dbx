@@ -85,6 +85,8 @@ pub struct ConnectionConfig {
     pub port: u16,
     pub username: String,
     pub password: String,
+    #[serde(default = "default_true")]
+    pub remember_password: bool,
     pub database: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible_databases: Option<Vec<String>>,
@@ -541,6 +543,8 @@ struct ConnectionConfigData {
     pub port: u16,
     pub username: String,
     pub password: String,
+    #[serde(default = "default_true")]
+    pub remember_password: bool,
     pub database: Option<String>,
     #[serde(default)]
     pub visible_databases: Option<Vec<String>>,
@@ -632,6 +636,7 @@ impl From<ConnectionConfigData> for ConnectionConfig {
             port: data.port,
             username: data.username,
             password: data.password,
+            remember_password: data.remember_password,
             database: data.database,
             visible_databases: data.visible_databases,
             visible_schemas: data.visible_schemas,
@@ -2043,6 +2048,7 @@ mod tests {
             port: 2883,
             username: username.to_string(),
             password: password.to_string(),
+            remember_password: true,
             database: database.map(str::to_string),
             visible_databases: None,
             visible_schemas: None,
@@ -2153,6 +2159,7 @@ mod tests {
 
         assert!(config.agent_java_options.is_empty());
         assert_eq!(config.database_info, None);
+        assert!(config.remember_password);
     }
 
     #[test]

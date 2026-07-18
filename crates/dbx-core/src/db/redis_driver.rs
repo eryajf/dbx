@@ -3167,6 +3167,7 @@ mod tests {
             port: 6379,
             username: String::new(),
             password: String::new(),
+            remember_password: true,
             database: Some("4".to_string()),
             visible_databases: None,
             visible_schemas: None,

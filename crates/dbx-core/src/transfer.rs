@@ -4785,6 +4785,7 @@ mod tests {
             port: 0,
             username: String::new(),
             password: String::new(),
+            remember_password: true,
             database: None,
             visible_databases: None,
             visible_schemas: None,

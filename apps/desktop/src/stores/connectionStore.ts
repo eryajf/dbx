@@ -78,6 +78,7 @@ import { prunePinnedTreeNodeIdsForConnection } from "@/lib/app/pinnedTreeNodeIds
 import { connectionSupportsDatabaseUserAdmin } from "@/lib/database/databaseUserAdmin";
 import { getTableMetadataCapabilities } from "@/lib/table/tableMetadataCapabilities";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useConnectionCredentialStore } from "@/stores/connectionCredentialStore";
 import { encodeSqlServerLinkedSchema, parseSqlServerLinkedSchema } from "@/lib/database/sqlServerLinkedServers";
 import { inferMongoCompletionFields, type MongoCompletionField } from "@/lib/mongo/mongoCompletion";
 import { completionSchemasFromTree, completionTablesFromTree } from "@/lib/metadata/completionTreeIndex";
@@ -86,6 +87,7 @@ import { REDIS_SCAN_PAGE_SIZE_DEFAULT } from "@/lib/redis/redisKeyPattern";
 import { appendAgentDriverUpdateHint, hasAgentDriverUpdate, type AgentDriverInstallState } from "@/lib/connection/agentDriverInstallHint";
 import { appendConnectionErrorHints } from "@/lib/connection/connectionErrorHints";
 import { appendVisibleDatabaseSelection } from "@/lib/connection/connectionVisibleDatabases";
+import { connectionCredentialFields, connectionCredentialValues, connectionWithCredentials, persistentConnectionConfig } from "@/lib/connection/connectionPasswordPersistence";
 import { configuredDatabaseProductName, connectionConfigFingerprint, normalizeDatabaseConnectionInfo } from "@/lib/connection/connectionDatabaseInfo";
 import { createMetadataLoadTrace, logMetadataLoadTrace, MetadataLoadCoordinator, type MetadataLoadTraceLogger } from "@/lib/metadata/metadataLoadCoordinator";
 import type { MetadataScopeInput } from "@/lib/metadata/metadataLoadScope";
@@ -234,6 +236,7 @@ function metadataDriverProfile(config?: ConnectionConfig): string | undefined {
 
 export const useConnectionStore = defineStore("connection", () => {
   const settingsStore = useSettingsStore();
+  const credentialStore = useConnectionCredentialStore();
   const connections = ref<ConnectionConfig[]>([]);
   const isDesktop = isTauriRuntime();
   const activeConnectionId = ref<string | null>(localStorage.getItem(ACTIVE_CONNECTION_STORAGE_KEY));
@@ -908,6 +911,7 @@ export const useConnectionStore = defineStore("connection", () => {
       db_type: dbType,
       driver_profile: profile,
       driver_label: config.driver_label || labelMap[profile] || config.db_type,
+      remember_password: config.remember_password !== false,
       url_params: config.url_params || "",
       agent_java_options: Array.isArray(config.agent_java_options) ? config.agent_java_options : [],
       attached_databases: Array.isArray(config.attached_databases) ? config.attached_databases.filter((database) => database.name?.trim() && database.path?.trim()) : [],
@@ -919,6 +923,30 @@ export const useConnectionStore = defineStore("connection", () => {
       keepalive_interval_secs: config.keepalive_interval_secs ?? DEFAULT_KEEPALIVE_INTERVAL_SECS,
       database_info: normalizeDatabaseConnectionInfo(config.database_info),
     };
+  }
+
+  function persistentConnection(config: ConnectionConfig): ConnectionConfig {
+    const normalized = normalizeConnection(config);
+    return persistentConnectionConfig(normalized);
+  }
+
+  function runtimeConnection(config: ConnectionConfig): ConnectionConfig | Promise<ConnectionConfig> {
+    if (config.remember_password !== false) return config;
+    const fields = connectionCredentialFields(config);
+    if (!fields.length) return config;
+    const existingCredentials = connectionCredentialValues(config);
+    const missingFields = fields.filter((field) => !existingCredentials[field]);
+    if (!missingFields.length) return connectionWithCredentials(config, existingCredentials);
+    return credentialStore
+      .requestCredentials({
+        connectionId: config.id,
+        connectionName: config.name,
+        fields: missingFields,
+      })
+      .then((credentials) => {
+        if (credentials == null) throw new Error(CONNECTION_ATTEMPT_CANCELLED_MESSAGE);
+        return connectionWithCredentials(config, { ...existingCredentials, ...credentials });
+      });
   }
 
   function loadPinnedTreeNodeIdsFromLocalStorage(): Set<string> {
@@ -1670,8 +1698,7 @@ export const useConnectionStore = defineStore("connection", () => {
       const groupId = targetGroupId !== undefined ? targetGroupId : newConnectionGroupId.value;
       sidebarLayout.value = appendConnectionToLayout(sidebarLayout.value, normalized.id, groupId);
     }
-    await persistConnections(nextConnections);
-    connections.value = nextConnections;
+    connections.value = await persistConnections(nextConnections);
     rebuildTreeNodes();
     persistSidebarLayoutDebounced();
     stopCreatingConnectionInGroup();
@@ -1768,8 +1795,7 @@ export const useConnectionStore = defineStore("connection", () => {
 
     const removedIds = new Set(connectionIds);
     const nextConnections = connections.value.filter((c) => !removedIds.has(c.id));
-    await persistConnections(nextConnections);
-    connections.value = nextConnections;
+    connections.value = await persistConnections(nextConnections);
     for (const id of removedIds) {
       pinnedTreeNodeIds.value = prunePinnedTreeNodeIdsForConnection(pinnedTreeNodeIds.value, id);
     }
@@ -1807,8 +1833,7 @@ export const useConnectionStore = defineStore("connection", () => {
     if (idx < 0) return;
     const nextConnections = [...connections.value];
     nextConnections[idx] = config;
-    await persistConnections(nextConnections);
-    connections.value = nextConnections;
+    connections.value = await persistConnections(nextConnections);
     rebuildTreeNodes();
     connectedIds.value.delete(config.id);
     clearConnectionIdentifierQuote(config.id);
@@ -1842,10 +1867,12 @@ export const useConnectionStore = defineStore("connection", () => {
   }
 
   async function refreshConnectedDatabaseInfo(connectionId: string, config: ConnectionConfig): Promise<void> {
-    const expectedConfigFingerprint = connectionConfigFingerprint(config);
+    const currentConfig = getConfig(connectionId);
+    const fingerprintConfig = currentConfig || persistentConnectionConfig({ ...config, id: connectionId });
+    const expectedConfigFingerprint = connectionConfigFingerprint(fingerprintConfig);
     try {
       const detected = await api.connectionDatabaseInfo(connectionId);
-      const normalized = normalizeDatabaseConnectionInfo(detected, configuredDatabaseProductName(config), config.database);
+      const normalized = normalizeDatabaseConnectionInfo(detected, configuredDatabaseProductName(fingerprintConfig), fingerprintConfig.database);
       if (normalized) await updateConnectionDatabaseInfo(connectionId, normalized, expectedConfigFingerprint);
     } catch {
       // Database metadata is optional and must not turn a successful connection into a failure.
@@ -1857,16 +1884,16 @@ export const useConnectionStore = defineStore("connection", () => {
       return;
     }
 
-    const savedConnections = await api.loadConnections().catch(() => null);
-    const savedConfig = savedConnections?.map((connection) => normalizeConnection(connection)).find((connection) => connection.id === connectionId && connection.driver_profile === MONGO_LEGACY_DRIVER_PROFILE);
-    if (!savedConfig) return;
+    const runtimeDriverProfile = await api.connectionRuntimeDriverProfile(connectionId).catch(() => undefined);
+    if (runtimeDriverProfile !== MONGO_LEGACY_DRIVER_PROFILE) return;
 
     const idx = connections.value.findIndex((connection) => connection.id === connectionId);
     if (idx < 0) return;
     const nextConnections = [...connections.value];
     nextConnections[idx] = {
-      ...savedConfig,
-      driver_label: savedConfig.driver_label || MONGO_LEGACY_DRIVER_LABEL,
+      ...nextConnections[idx],
+      driver_profile: MONGO_LEGACY_DRIVER_PROFILE,
+      driver_label: MONGO_LEGACY_DRIVER_LABEL,
     };
     connections.value = nextConnections;
     rebuildTreeNodes();
@@ -1934,8 +1961,7 @@ export const useConnectionStore = defineStore("connection", () => {
       ...nextConnections[idx],
       visible_databases: visibleDatabases,
     };
-    await persistConnections(nextConnections);
-    connections.value = nextConnections;
+    connections.value = await persistConnections(nextConnections);
     invalidateCompletionCache(connectionId);
     rebuildTreeNodes();
   }
@@ -1973,8 +1999,7 @@ export const useConnectionStore = defineStore("connection", () => {
       ...nextConnections[idx],
       visible_schemas: nextSchemas,
     };
-    await persistConnections(nextConnections);
-    connections.value = nextConnections;
+    connections.value = await persistConnections(nextConnections);
     rebuildTreeNodes();
   }
 
@@ -2027,17 +2052,19 @@ export const useConnectionStore = defineStore("connection", () => {
     if (getBlockingDisconnectInFlight(config.id)) await waitForBlockingDisconnectInFlight(config.id);
     const localAttempt = beginLocalConnectionAttempt(config.id);
     try {
-      await beforeConnectHandler?.(config);
-      await ensureSqlServerLegacyCompatibilityComponentInstalled(config);
+      const runtimeConfigOrPromise = runtimeConnection(config);
+      const runtimeConfig = runtimeConfigOrPromise instanceof Promise ? await runtimeConfigOrPromise : runtimeConfigOrPromise;
+      await beforeConnectHandler?.(runtimeConfig);
+      await ensureSqlServerLegacyCompatibilityComponentInstalled(runtimeConfig);
       ensureLocalConnectionAttemptActive(config.id, localAttempt);
-      const id = await withConnectionAttemptTimeout(api.connectDb(config, localAttempt), config);
+      const id = await withConnectionAttemptTimeout(api.connectDb(runtimeConfig, localAttempt), runtimeConfig);
       await ensureLocalConnectionAttemptActiveAfterConnectResult(config.id, localAttempt, id);
-      await syncMongoLegacyDriverFallback(id, config);
+      await syncMongoLegacyDriverFallback(id, runtimeConfig);
       await ensureLocalConnectionAttemptActiveAfterConnectResult(config.id, localAttempt, id);
       activeConnectionId.value = id;
       connectedIds.value.add(id);
-      void refreshConnectedDatabaseInfo(id, { ...config, id });
-      await refreshConnectionIdentifierQuote(id, { ...config, id });
+      void refreshConnectedDatabaseInfo(id, { ...runtimeConfig, id });
+      await refreshConnectionIdentifierQuote(id, { ...runtimeConfig, id });
       if (id !== config.id) markSuccessfulLocalConnectionAttempt(config.id, localAttempt);
       markSuccessfulLocalConnectionAttempt(id, localAttempt);
       markConnectionHealthChecked(id);
@@ -2194,15 +2221,17 @@ export const useConnectionStore = defineStore("connection", () => {
     }
     const localAttempt = beginLocalConnectionAttempt(connectionId);
     const connectPromise = (async () => {
-      await beforeConnectHandler?.(config);
+      const runtimeConfigOrPromise = runtimeConnection(config);
+      const runtimeConfig = runtimeConfigOrPromise instanceof Promise ? await runtimeConfigOrPromise : runtimeConfigOrPromise;
+      await beforeConnectHandler?.(runtimeConfig);
       ensureLocalConnectionAttemptActive(connectionId, localAttempt);
-      const id = await withConnectionAttemptTimeout(api.connectDb(config, localAttempt), config);
+      const id = await withConnectionAttemptTimeout(api.connectDb(runtimeConfig, localAttempt), runtimeConfig);
       await ensureLocalConnectionAttemptActiveAfterConnectResult(connectionId, localAttempt, id);
-      await syncMongoLegacyDriverFallback(connectionId, config);
+      await syncMongoLegacyDriverFallback(connectionId, runtimeConfig);
       await ensureLocalConnectionAttemptActiveAfterConnectResult(connectionId, localAttempt, id);
       connectedIds.value.add(connectionId);
-      void refreshConnectedDatabaseInfo(connectionId, config);
-      await refreshConnectionIdentifierQuote(connectionId, config);
+      void refreshConnectedDatabaseInfo(connectionId, runtimeConfig);
+      await refreshConnectionIdentifierQuote(connectionId, runtimeConfig);
       markSuccessfulLocalConnectionAttempt(connectionId, localAttempt);
       markConnectionHealthChecked(connectionId);
       activeConnectionId.value = connectionId;
@@ -4856,8 +4885,10 @@ export const useConnectionStore = defineStore("connection", () => {
     return null;
   }
 
-  async function persistConnections(nextConnections: ConnectionConfig[] = connections.value) {
-    await api.saveConnections(nextConnections);
+  async function persistConnections(nextConnections: ConnectionConfig[] = connections.value): Promise<ConnectionConfig[]> {
+    const persistentConnections = nextConnections.map(persistentConnection);
+    await api.saveConnections(persistentConnections);
+    return persistentConnections;
   }
 
   function persistSidebarLayoutDebounced() {
@@ -5311,8 +5342,7 @@ export const useConnectionStore = defineStore("connection", () => {
       });
 
       if (filled > 0) {
-        connections.value = updated;
-        await persistConnections();
+        connections.value = await persistConnections(updated);
       }
       return filled;
     } catch (e) {

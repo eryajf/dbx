@@ -11,8 +11,10 @@ use sha2::{Digest, Sha256};
 
 use crate::ai::AiConfigItem;
 use crate::connection_secrets::{
-    MQ_AUTH_API_KEY_VALUE_KEY, MQ_AUTH_CLIENT_SECRET_KEY, MQ_AUTH_PASSWORD_KEY, MQ_AUTH_TOKEN_KEY,
-    MQ_TOKEN_SIGNING_KEY, NACOS_AUTH_PASSWORD_KEY,
+    connection_string_without_password, extract_and_scrub_turso_auth_token, turso_auth_token_from_url_params,
+    CONNECTION_STRING_KEY, MAIN_PASSWORD_KEY, MQ_AUTH_API_KEY_VALUE_KEY, MQ_AUTH_CLIENT_SECRET_KEY,
+    MQ_AUTH_PASSWORD_KEY, MQ_AUTH_TOKEN_KEY, MQ_TOKEN_SIGNING_KEY, NACOS_AUTH_PASSWORD_KEY,
+    REDIS_SENTINEL_PASSWORD_KEY,
 };
 use crate::models::connection::{ConnectionConfig, DatabaseType, TransportLayerConfig};
 use crate::saved_sql::SavedSqlLibrary;
@@ -254,6 +256,29 @@ pub async fn apply_sync_snapshot(
     if let Some(payload) = &sensitive_payload {
         clear_connection_secrets(storage, &connections).await?;
         apply_sensitive_payload(storage, payload).await?;
+        for config in &connections {
+            if !config.remember_password {
+                storage.delete_secret(&config.id, MAIN_PASSWORD_KEY).await?;
+                storage.delete_secret(&config.id, REDIS_SENTINEL_PASSWORD_KEY).await?;
+                for key in
+                    [MQ_AUTH_TOKEN_KEY, MQ_AUTH_PASSWORD_KEY, MQ_AUTH_API_KEY_VALUE_KEY, MQ_AUTH_CLIENT_SECRET_KEY]
+                {
+                    storage.delete_secret(&config.id, key).await?;
+                }
+                storage.delete_secret(&config.id, NACOS_AUTH_PASSWORD_KEY).await?;
+                match storage.get_secret(&config.id, CONNECTION_STRING_KEY).await? {
+                    Some(connection_string) => {
+                        let sanitized = connection_string_without_password(&connection_string);
+                        if sanitized.is_empty() {
+                            storage.delete_secret(&config.id, CONNECTION_STRING_KEY).await?;
+                        } else {
+                            storage.set_secret(&config.id, CONNECTION_STRING_KEY, &sanitized).await?;
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
     }
     Ok(ApplySnapshotSummary { encrypted_secrets_present, secrets_applied: sensitive_payload.is_some() })
 }
@@ -586,6 +611,7 @@ impl SnippetSyncClient {
 }
 
 fn scrub_connection_secrets(config: &mut ConnectionConfig) {
+    extract_and_scrub_turso_auth_token(config);
     config.password.clear();
     for layer in &mut config.transport_layers {
         match layer {
@@ -623,7 +649,14 @@ async fn build_sensitive_payload(
 ) -> Result<SensitiveSyncPayload, String> {
     let mut connection_secrets = Vec::new();
     for config in connections {
-        push_secret(&mut connection_secrets, &config.id, "password", &config.password);
+        if config.remember_password {
+            let password = if config.password.is_empty() && config.db_type == DatabaseType::Turso {
+                config.url_params.as_deref().and_then(turso_auth_token_from_url_params).unwrap_or_default()
+            } else {
+                config.password.clone()
+            };
+            push_secret(&mut connection_secrets, &config.id, "password", &password);
+        }
         push_secret(&mut connection_secrets, &config.id, "init_script", config.init_script.as_deref().unwrap_or(""));
         for (index, layer) in config.transport_layers.iter().enumerate() {
             match layer {
@@ -659,12 +692,26 @@ async fn build_sensitive_payload(
                 }
             }
         }
-        push_secret(&mut connection_secrets, &config.id, "redis_sentinel_password", &config.redis_sentinel_password);
-        if let Some(connection_string) = &config.connection_string {
-            push_secret(&mut connection_secrets, &config.id, "connection_string", connection_string);
+        if config.remember_password {
+            push_secret(
+                &mut connection_secrets,
+                &config.id,
+                REDIS_SENTINEL_PASSWORD_KEY,
+                &config.redis_sentinel_password,
+            );
         }
-        push_mq_external_config_secrets(&mut connection_secrets, config);
-        push_nacos_external_config_secrets(&mut connection_secrets, config);
+        if let Some(connection_string) = &config.connection_string {
+            let stored = if config.remember_password {
+                connection_string.clone()
+            } else {
+                connection_string_without_password(connection_string)
+            };
+            push_secret(&mut connection_secrets, &config.id, CONNECTION_STRING_KEY, &stored);
+        }
+        push_mq_external_config_secrets(&mut connection_secrets, config, config.remember_password);
+        if config.remember_password {
+            push_nacos_external_config_secrets(&mut connection_secrets, config);
+        }
     }
 
     Ok(SensitiveSyncPayload {
@@ -675,19 +722,27 @@ async fn build_sensitive_payload(
     })
 }
 
-fn push_mq_external_config_secrets(secrets: &mut Vec<ConnectionSecretSnapshot>, config: &ConnectionConfig) {
+fn push_mq_external_config_secrets(
+    secrets: &mut Vec<ConnectionSecretSnapshot>,
+    config: &ConnectionConfig,
+    include_auth_secrets: bool,
+) {
     let Some(external_config) = config.external_config.as_ref() else {
         return;
     };
-    if let Some(auth) = external_config.get("auth").and_then(serde_json::Value::as_object) {
-        match auth.get("kind").and_then(serde_json::Value::as_str) {
-            Some("token") => push_json_secret(secrets, &config.id, MQ_AUTH_TOKEN_KEY, auth, "token"),
-            Some("basic") => push_json_secret(secrets, &config.id, MQ_AUTH_PASSWORD_KEY, auth, "password"),
-            Some("apiKey") | Some("api_key") | Some("apikey") => {
-                push_json_secret(secrets, &config.id, MQ_AUTH_API_KEY_VALUE_KEY, auth, "value")
+    if include_auth_secrets {
+        if let Some(auth) = external_config.get("auth").and_then(serde_json::Value::as_object) {
+            match auth.get("kind").and_then(serde_json::Value::as_str) {
+                Some("token") => push_json_secret(secrets, &config.id, MQ_AUTH_TOKEN_KEY, auth, "token"),
+                Some("basic") => push_json_secret(secrets, &config.id, MQ_AUTH_PASSWORD_KEY, auth, "password"),
+                Some("apiKey") | Some("api_key") | Some("apikey") => {
+                    push_json_secret(secrets, &config.id, MQ_AUTH_API_KEY_VALUE_KEY, auth, "value")
+                }
+                Some("oauth2") => {
+                    push_json_secret(secrets, &config.id, MQ_AUTH_CLIENT_SECRET_KEY, auth, "clientSecret")
+                }
+                _ => {}
             }
-            Some("oauth2") => push_json_secret(secrets, &config.id, MQ_AUTH_CLIENT_SECRET_KEY, auth, "clientSecret"),
-            _ => {}
         }
     }
     if let Some(signing) = external_config.get("tokenSigning").and_then(serde_json::Value::as_object) {
@@ -1048,7 +1103,10 @@ mod tests {
         webdav_sync_secrets_status, ApplySnapshotOptions, ConnectionSecretSnapshot, SensitiveSyncPayload,
     };
     use crate::ai::{AiApiStyle, AiAuthMethod, AiConfig, AiConfigItem};
-    use crate::connection_secrets::NACOS_AUTH_PASSWORD_KEY;
+    use crate::connection_secrets::{
+        CONNECTION_STRING_KEY, MAIN_PASSWORD_KEY, MQ_AUTH_PASSWORD_KEY, MQ_AUTH_TOKEN_KEY, NACOS_AUTH_PASSWORD_KEY,
+        REDIS_SENTINEL_PASSWORD_KEY,
+    };
     use crate::models::connection::{
         default_redis_key_separator, ConnectionConfig, DatabaseType, SshTunnelConfig, TransportLayerConfig,
     };
@@ -1106,6 +1164,7 @@ mod tests {
             port: 5432,
             username: "app".to_string(),
             password: password.to_string(),
+            remember_password: true,
             database: Some("app_db".to_string()),
             visible_databases: None,
             visible_schemas: None,
@@ -1160,6 +1219,7 @@ mod tests {
             port: 8848,
             username: "nacos".to_string(),
             password: String::new(),
+            remember_password: true,
             database: None,
             visible_databases: None,
             visible_schemas: None,
@@ -1251,6 +1311,7 @@ mod tests {
             port: 5432,
             username: "user".to_string(),
             password: "secret".to_string(),
+            remember_password: true,
             database: None,
             visible_databases: None,
             visible_schemas: None,
@@ -1486,6 +1547,129 @@ mod tests {
         assert!(decrypted.connection_secrets.iter().any(|secret| {
             secret.connection_id == "nacos" && secret.key == NACOS_AUTH_PASSWORD_KEY && secret.secret == "nacos-secret"
         }));
+    }
+
+    #[tokio::test]
+    async fn unremembered_snapshot_keeps_only_sanitized_connection_string_structure() {
+        let storage = Storage::open(&temp_db_path("unremembered-snapshot")).await.unwrap();
+        let mut connection = postgres_connection("unremembered", "main-secret");
+        connection.remember_password = false;
+        connection.redis_sentinel_password = "sentinel-secret".to_string();
+        connection.connection_string = Some(
+            "jdbc:dremio:direct=dremio.example.com:31010;schema=analytics;user=admin;password=dremio-secret;ssl=true"
+                .to_string(),
+        );
+        storage.save_connections(&[connection]).await.unwrap();
+
+        let snapshot = build_sync_snapshot(&storage, "test-version", None, Some("sync-pass")).await.unwrap();
+        let decrypted = decrypt_sensitive_payload(snapshot.encrypted_secrets.as_ref().unwrap(), "sync-pass").unwrap();
+
+        assert!(!decrypted.connection_secrets.iter().any(|secret| {
+            secret.connection_id == "unremembered"
+                && matches!(secret.key.as_str(), MAIN_PASSWORD_KEY | REDIS_SENTINEL_PASSWORD_KEY)
+        }));
+        assert!(decrypted.connection_secrets.iter().any(|secret| {
+            secret.connection_id == "unremembered"
+                && secret.key == CONNECTION_STRING_KEY
+                && secret.secret == "jdbc:dremio:direct=dremio.example.com:31010;schema=analytics;user=admin;ssl=true"
+        }));
+        let decrypted_json = serde_json::to_string(&decrypted).unwrap();
+        for secret in ["main-secret", "sentinel-secret", "dremio-secret"] {
+            assert!(!decrypted_json.contains(secret));
+        }
+    }
+
+    #[tokio::test]
+    async fn turso_url_parameter_tokens_never_enter_public_sync_metadata() {
+        let storage = Storage::open(&temp_db_path("turso-url-token-snapshot")).await.unwrap();
+        let mut remembered = postgres_connection("turso-remembered", "");
+        remembered.db_type = DatabaseType::Turso;
+        remembered.url_params = Some("mode=primary&authToken=remembered-token".to_string());
+        let mut forgotten = postgres_connection("turso-forgotten", "");
+        forgotten.db_type = DatabaseType::Turso;
+        forgotten.remember_password = false;
+        forgotten.url_params = Some("auth_token=discarded-token&mode=replica".to_string());
+        storage.save_connections(&[remembered, forgotten]).await.unwrap();
+
+        let snapshot = build_sync_snapshot(&storage, "test-version", None, Some("sync-pass")).await.unwrap();
+        let public_json = serde_json::to_string(&snapshot.connections).unwrap();
+        assert!(!public_json.contains("remembered-token"));
+        assert!(!public_json.contains("discarded-token"));
+        assert!(public_json.contains("mode=primary"));
+        assert!(public_json.contains("mode=replica"));
+
+        let decrypted = decrypt_sensitive_payload(snapshot.encrypted_secrets.as_ref().unwrap(), "sync-pass").unwrap();
+        assert!(decrypted.connection_secrets.iter().any(|secret| {
+            secret.connection_id == "turso-remembered"
+                && secret.key == MAIN_PASSWORD_KEY
+                && secret.secret == "remembered-token"
+        }));
+        let decrypted_json = serde_json::to_string(&decrypted).unwrap();
+        assert!(!decrypted_json.contains("discarded-token"));
+    }
+
+    #[tokio::test]
+    async fn applying_legacy_payload_cannot_restore_unremembered_auth_secrets() {
+        let source = Storage::open(&temp_db_path("legacy-payload-source")).await.unwrap();
+        let mut connection = postgres_connection("legacy", "");
+        connection.remember_password = false;
+        source.save_connections(&[connection]).await.unwrap();
+        let mut snapshot = build_sync_snapshot(&source, "test-version", None, None).await.unwrap();
+        snapshot.encrypted_secrets = Some(
+            encrypt_sensitive_payload(
+                &SensitiveSyncPayload {
+                    connection_secrets: vec![
+                        (MAIN_PASSWORD_KEY, "main-secret"),
+                        (REDIS_SENTINEL_PASSWORD_KEY, "sentinel-secret"),
+                        (MQ_AUTH_TOKEN_KEY, "mq-token-secret"),
+                        (MQ_AUTH_PASSWORD_KEY, "mq-password-secret"),
+                        (NACOS_AUTH_PASSWORD_KEY, "nacos-secret"),
+                        (
+                            CONNECTION_STRING_KEY,
+                            "mongodb://legacy-user:uri-secret@mongo-a:27017,mongo-b:27017/app?authSource=admin",
+                        ),
+                    ]
+                    .into_iter()
+                    .map(|(key, secret)| ConnectionSecretSnapshot {
+                        connection_id: "legacy".to_string(),
+                        key: key.to_string(),
+                        secret: secret.to_string(),
+                    })
+                    .collect(),
+                    ai_configs: None,
+                    ai_config: None,
+                    tunnel_profiles: None,
+                },
+                "sync-pass",
+            )
+            .unwrap(),
+        );
+
+        let target = Storage::open(&temp_db_path("legacy-payload-target")).await.unwrap();
+        apply_sync_snapshot(&target, &snapshot, ApplySnapshotOptions { secrets_passphrase: Some("sync-pass") })
+            .await
+            .unwrap();
+
+        for key in [
+            MAIN_PASSWORD_KEY,
+            REDIS_SENTINEL_PASSWORD_KEY,
+            MQ_AUTH_TOKEN_KEY,
+            MQ_AUTH_PASSWORD_KEY,
+            NACOS_AUTH_PASSWORD_KEY,
+        ] {
+            assert_eq!(target.get_secret("legacy", key).await.unwrap(), None, "stale secret key {key}");
+        }
+        assert_eq!(
+            target.get_secret("legacy", CONNECTION_STRING_KEY).await.unwrap().as_deref(),
+            Some("mongodb://legacy-user@mongo-a:27017,mongo-b:27017/app?authSource=admin")
+        );
+        let loaded = target.load_connections().await.unwrap();
+        assert_eq!(loaded[0].password, "");
+        assert_eq!(loaded[0].redis_sentinel_password, "");
+        assert_eq!(
+            loaded[0].connection_string.as_deref(),
+            Some("mongodb://legacy-user@mongo-a:27017,mongo-b:27017/app?authSource=admin")
+        );
     }
 
     #[tokio::test]

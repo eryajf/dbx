@@ -20,7 +20,7 @@ pub fn agent_connect_params(config: &ConnectionConfig, host: &str, port: u16, da
         database.to_string()
     };
     let connection_string = if config.db_type == DatabaseType::MongoDb {
-        config.connection_url_with_host(host, port)
+        mongo_agent_connection_string(config, host, port)
     } else if config.db_type == DatabaseType::Oracle {
         oracle_jdbc_connection_string(config, host, port, database)
     } else if config.db_type == DatabaseType::OceanbaseOracle {
@@ -72,6 +72,38 @@ pub fn agent_connect_params(config: &ConnectionConfig, host: &str, port: u16, da
         );
     }
     params
+}
+
+fn mongo_agent_connection_string(config: &ConnectionConfig, host: &str, port: u16) -> String {
+    let connection_string = config.connection_url_with_host(host, port);
+    if config.remember_password || config.username.trim().is_empty() {
+        return connection_string;
+    }
+
+    mongo_uri_with_runtime_credentials(&connection_string, &config.username, &config.password)
+}
+
+fn mongo_uri_with_runtime_credentials(uri: &str, username: &str, password: &str) -> String {
+    let Some(authority_start) = uri.find("://").map(|index| index + 3) else {
+        return uri.to_string();
+    };
+    if !uri[..authority_start].eq_ignore_ascii_case("mongodb://")
+        && !uri[..authority_start].eq_ignore_ascii_case("mongodb+srv://")
+    {
+        return uri.to_string();
+    }
+
+    let authority_end =
+        uri[authority_start..].find(['/', '?', '#']).map(|offset| authority_start + offset).unwrap_or(uri.len());
+    let authority = &uri[authority_start..authority_end];
+    let hosts = authority.rsplit_once('@').map(|(_, hosts)| hosts).unwrap_or(authority);
+    if hosts.is_empty() {
+        return uri.to_string();
+    }
+
+    let username = utf8_percent_encode(username, NON_ALPHANUMERIC);
+    let password = utf8_percent_encode(password, NON_ALPHANUMERIC);
+    format!("{}{username}:{password}@{hosts}{}", &uri[..authority_start], &uri[authority_end..])
 }
 
 fn oracle_uses_sysdba(config: &ConnectionConfig) -> bool {
@@ -594,6 +626,7 @@ mod tests {
             port: 3306,
             username: "user".to_string(),
             password: "secret".to_string(),
+            remember_password: true,
             database: database.map(str::to_string),
             visible_databases: None,
             visible_schemas: None,

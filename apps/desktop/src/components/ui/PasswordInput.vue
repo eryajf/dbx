@@ -4,6 +4,8 @@ import { useI18n } from "vue-i18n";
 import { Eye, EyeOff } from "@lucide/vue";
 import { Input } from "@/components/ui/input";
 
+defineOptions({ inheritAttrs: false });
+
 const model = defineModel<string>();
 
 const props = withDefaults(
@@ -24,11 +26,15 @@ const props = withDefaults(
 const visible = ref(false);
 const { t } = useI18n();
 const toggleLabel = computed(() => (visible.value ? props.hideLabel || t("common.hidePassword") : props.showLabel || t("common.showPassword")));
+
+function syncModelFromInput(event: Event) {
+  model.value = (event.target as HTMLInputElement).value;
+}
 </script>
 
 <template>
   <div :class="props.class" class="relative">
-    <Input v-model="model" :type="visible ? 'text' : 'password'" :placeholder="placeholder" :disabled="disabled" :class="[props.inputClass, props.showToggle ? 'pr-8' : undefined]" v-bind="$attrs" />
+    <Input v-model="model" :type="visible ? 'text' : 'password'" :placeholder="placeholder" :disabled="disabled" :class="[props.inputClass, props.showToggle ? 'pr-8' : undefined]" v-bind="$attrs" @input="syncModelFromInput" />
     <button v-if="props.showToggle" type="button" :disabled="disabled" class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-50" :aria-label="toggleLabel" :title="toggleLabel" @click="visible = !visible">
       <Eye v-if="!visible" class="size-3.5" />
       <EyeOff v-else class="size-3.5" />

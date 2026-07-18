@@ -11,6 +11,7 @@ pub use dbx_core::connection::{
     metadata_connection_config, prestosql_jdbc_config_for_endpoint, probe_connection_endpoint,
     redacted_connection_url_for_endpoint, AppState, MysqlMode, PoolKind,
 };
+use dbx_core::connection_secrets::turso_auth_token_from_url_params;
 use dbx_core::database_capabilities;
 use dbx_core::db;
 use dbx_core::db::agent_driver::AgentMethod;
@@ -165,14 +166,15 @@ mod tests {
     #[cfg(feature = "sqlite-sqlcipher")]
     use super::connect_sqlite_from_config;
     use super::{
-        mark_mongo_legacy_driver, mongo_legacy_connect_params, MONGO_LEGACY_DRIVER_LABEL, MONGO_LEGACY_DRIVER_PROFILE,
+        connection_runtime_driver_profile_inner, mark_mongo_legacy_driver, mongo_legacy_connect_params,
+        MONGO_LEGACY_DRIVER_LABEL, MONGO_LEGACY_DRIVER_PROFILE,
     };
     use dbx_core::models::connection::{ConnectionConfig, DatabaseType};
+    use dbx_core::{connection::AppState, storage::Storage};
     #[cfg(feature = "mq-admin")]
     use {
         super::{load_connection_configs, save_connection_configs},
-        dbx_core::connection::{AppState, PoolKind},
-        dbx_core::storage::Storage,
+        dbx_core::connection::PoolKind,
     };
 
     fn mongodb_config() -> ConnectionConfig {
@@ -188,6 +190,7 @@ mod tests {
             port: 27017,
             username: "mongouser".to_string(),
             password: "secret".to_string(),
+            remember_password: true,
             database: Some("RestCloud_V45PUB_Gateway".to_string()),
             visible_databases: None,
             visible_schemas: None,
@@ -229,6 +232,30 @@ mod tests {
             production_databases: vec![],
             database_info: None,
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_driver_profile_reads_memory_without_reloading_disk_config() {
+        let dir = std::env::temp_dir().join(format!("dbx-runtime-driver-profile-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage = Storage::open(&dir.join("storage.db")).await.unwrap();
+        let state = AppState::new_with_plugin_dir(storage, dir.join("plugins"));
+        let mut config = mongodb_config();
+        config.driver_profile = Some(MONGO_LEGACY_DRIVER_PROFILE.to_string());
+        config.password = "one-time-password".to_string();
+        config.remember_password = false;
+        state.configs.write().await.insert(config.id.clone(), config.clone());
+
+        assert_eq!(
+            connection_runtime_driver_profile_inner(&state, &config.id).await.as_deref(),
+            Some(MONGO_LEGACY_DRIVER_PROFILE)
+        );
+        assert_eq!(
+            state.configs.read().await.get(&config.id).map(|current| current.password.as_str()),
+            Some("one-time-password")
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(feature = "sqlite-sqlcipher")]
@@ -747,7 +774,16 @@ async fn test_connection_with_info_inner(
                     return Ok(ConnectionTestResult::success("Connection successful (via legacy driver)"));
                 }
 
-                let native_err = match db::mongo_driver::connect(&url, connect_timeout, idle_timeout).await {
+                let native_err = match db::mongo_driver::connect_with_password_policy(
+                    &url,
+                    connect_timeout,
+                    idle_timeout,
+                    config.remember_password,
+                    &config.username,
+                    &config.password,
+                )
+                .await
+                {
                     Ok(client) => {
                         match db::mongo_driver::test_connection(&client, connect_timeout, config.effective_database())
                             .await
@@ -849,21 +885,7 @@ async fn test_connection_with_info_inner(
                 let auth_token = if !config.password.is_empty() {
                     config.password.clone()
                 } else {
-                    config
-                        .url_params
-                        .as_deref()
-                        .and_then(|p| {
-                            p.trim()
-                                .trim_start_matches('?')
-                                .split('&')
-                                .filter_map(|pair| pair.split_once('='))
-                                .find(|(key, _)| {
-                                    let k = key.trim().to_ascii_lowercase();
-                                    k == "auth_token" || k == "authtoken" || k == "auth-token"
-                                })
-                                .map(|(_, value)| value.trim().to_string())
-                        })
-                        .unwrap_or_default()
+                    config.url_params.as_deref().and_then(turso_auth_token_from_url_params).unwrap_or_default()
                 };
                 let client = db::turso_driver::TursoClient::new(&url, &auth_token, config.ssl, connect_timeout)?;
                 db::turso_driver::test_connection(&client, connect_timeout)
@@ -1043,7 +1065,16 @@ pub async fn connect_db(
                 state.ensure_current_connection_attempt(&id, Some(attempt)).await?;
                 PoolKind::Agent(std::sync::Arc::new(tokio::sync::Mutex::new(client)))
             } else {
-                let native_err = match db::mongo_driver::connect(&url, connect_timeout, idle_timeout).await {
+                let native_err = match db::mongo_driver::connect_with_password_policy(
+                    &url,
+                    connect_timeout,
+                    idle_timeout,
+                    db_config.remember_password,
+                    &db_config.username,
+                    &db_config.password,
+                )
+                .await
+                {
                     Ok(client) => {
                         state.ensure_current_connection_attempt(&id, Some(attempt)).await?;
                         match db::mongo_driver::test_connection(
@@ -1161,21 +1192,7 @@ pub async fn connect_db(
             let auth_token = if !db_config.password.is_empty() {
                 db_config.password.clone()
             } else {
-                db_config
-                    .url_params
-                    .as_deref()
-                    .and_then(|p| {
-                        p.trim()
-                            .trim_start_matches('?')
-                            .split('&')
-                            .filter_map(|pair| pair.split_once('='))
-                            .find(|(key, _)| {
-                                let k = key.trim().to_ascii_lowercase();
-                                k == "auth_token" || k == "authtoken" || k == "auth-token"
-                            })
-                            .map(|(_, value)| value.trim().to_string())
-                    })
-                    .unwrap_or_default()
+                db_config.url_params.as_deref().and_then(turso_auth_token_from_url_params).unwrap_or_default()
             };
             let client = db::turso_driver::TursoClient::new(&url, &auth_token, db_config.ssl, connect_timeout)?;
             db::turso_driver::test_connection(&client, connect_timeout).await?;
@@ -1247,6 +1264,18 @@ pub async fn connect_db(
     state.configs.write().await.insert(id.clone(), connected_config);
 
     Ok(id)
+}
+
+#[tauri::command]
+pub async fn connection_runtime_driver_profile(
+    state: State<'_, Arc<AppState>>,
+    connection_id: String,
+) -> Result<Option<String>, String> {
+    Ok(connection_runtime_driver_profile_inner(state.inner(), &connection_id).await)
+}
+
+async fn connection_runtime_driver_profile_inner(state: &AppState, connection_id: &str) -> Option<String> {
+    state.configs.read().await.get(connection_id).and_then(|config| config.driver_profile.clone())
 }
 
 #[tauri::command]

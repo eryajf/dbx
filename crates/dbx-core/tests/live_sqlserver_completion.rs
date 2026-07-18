@@ -24,6 +24,7 @@ fn live_sqlserver_config(id: &str, database: &str) -> dbx_core::models::connecti
         port: std::env::var("DBX_LIVE_SQLSERVER_PORT").ok().and_then(|value| value.parse().ok()).unwrap_or(1433),
         username: std::env::var("DBX_LIVE_SQLSERVER_USER").unwrap_or_else(|_| "sa".to_string()),
         password: std::env::var("DBX_LIVE_SQLSERVER_PASSWORD").expect("DBX_LIVE_SQLSERVER_PASSWORD"),
+        remember_password: true,
         database: Some(database.to_string()),
         visible_databases: None,
         visible_schemas: None,

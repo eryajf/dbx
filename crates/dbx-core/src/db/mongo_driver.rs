@@ -1,6 +1,6 @@
 use mongodb::{
     bson::{doc, oid::ObjectId, Bson, DateTime, Document},
-    options::{ClientOptions, GridFsBucketOptions, IndexOptions, UpdateModifications},
+    options::{ClientOptions, Credential, GridFsBucketOptions, IndexOptions, UpdateModifications},
     Client, Cursor, Database, IndexModel,
 };
 use serde::{Deserialize, Serialize};
@@ -42,12 +42,49 @@ pub struct MongoCollectionStatsResult {
 }
 
 pub async fn connect(url: &str, timeout: Duration, idle_timeout: Duration) -> Result<Client, String> {
+    connect_with_credential_override(url, timeout, idle_timeout, None).await
+}
+
+/// Connect using the credential source selected by the connection's password policy.
+///
+/// Remembered connections treat credentials embedded in the URI as authoritative. Only
+/// unremembered connections may replace parsed URI credentials with the username and
+/// one-time password supplied by the runtime password prompt.
+pub async fn connect_with_password_policy(
+    url: &str,
+    timeout: Duration,
+    idle_timeout: Duration,
+    remember_password: bool,
+    username: &str,
+    password: &str,
+) -> Result<Client, String> {
+    let credential_override = credential_override_for_password_policy(remember_password, username, password);
+    connect_with_credential_override(url, timeout, idle_timeout, credential_override).await
+}
+
+fn credential_override_for_password_policy<'a>(
+    remember_password: bool,
+    username: &'a str,
+    password: &'a str,
+) -> Option<(&'a str, &'a str)> {
+    (!remember_password && !username.trim().is_empty()).then_some((username, password))
+}
+
+async fn connect_with_credential_override(
+    url: &str,
+    timeout: Duration,
+    idle_timeout: Duration,
+    credential_override: Option<(&str, &str)>,
+) -> Result<Client, String> {
     let url = normalize_mongo_uri_direct_connection(url);
     let is_multi_host = is_multi_host_mongo_uri(&url);
     let parse_timeout = if is_multi_host { std::cmp::max(timeout * 2, Duration::from_secs(10)) } else { timeout };
 
     with_connection_timeout("MongoDB", parse_timeout, async {
         let mut options = ClientOptions::parse(&url).await.map_err(|e| format!("MongoDB connection failed: {e}"))?;
+        if let Some((username, password)) = credential_override {
+            apply_credential_override(&mut options, username, password);
+        }
         options.connect_timeout = Some(timeout);
         options.server_selection_timeout =
             if is_multi_host { Some(std::cmp::max(timeout * 2, Duration::from_secs(10))) } else { Some(timeout) };
@@ -67,6 +104,12 @@ pub async fn connect(url: &str, timeout: Duration, idle_timeout: Duration) -> Re
         Client::with_options(options).map_err(|e| format!("MongoDB connection failed: {e}"))
     })
     .await
+}
+
+fn apply_credential_override(options: &mut ClientOptions, username: &str, password: &str) {
+    let credential = options.credential.get_or_insert_with(Credential::default);
+    credential.username = Some(username.to_string());
+    credential.password = Some(password.to_string());
 }
 
 fn normalize_mongo_uri_direct_connection(uri: &str) -> String {
@@ -1817,6 +1860,49 @@ fn expand_object_id_string_array(items: &[serde_json::Value]) -> Bson {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mongodb::options::AuthMechanism;
+
+    #[test]
+    fn remembered_password_policy_keeps_uri_credentials_authoritative() {
+        let mut uri_credential = Credential::default();
+        uri_credential.username = Some("uri-user".to_string());
+        uri_credential.password = Some("uri-password".to_string());
+        uri_credential.source = Some("admin".to_string());
+        let mut options = ClientOptions::default();
+        options.credential = Some(uri_credential);
+
+        if let Some((username, password)) =
+            credential_override_for_password_policy(true, "stale-form-user", "stale-form-password")
+        {
+            apply_credential_override(&mut options, username, password);
+        }
+
+        let credential = options.credential.expect("credential");
+        assert_eq!(credential.username.as_deref(), Some("uri-user"));
+        assert_eq!(credential.password.as_deref(), Some("uri-password"));
+        assert_eq!(credential.source.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn unremembered_password_policy_uses_runtime_credentials_without_losing_auth_source() {
+        let mut saved_credential = Credential::default();
+        saved_credential.username = Some("saved-user".to_string());
+        saved_credential.password = Some("saved-password".to_string());
+        saved_credential.source = Some("admin".to_string());
+        saved_credential.mechanism = Some(AuthMechanism::ScramSha1);
+        let mut options = ClientOptions::default();
+        options.credential = Some(saved_credential);
+
+        let (username, password) = credential_override_for_password_policy(false, "runtime-user", "runtime-password")
+            .expect("unremembered connection should use runtime credentials");
+        apply_credential_override(&mut options, username, password);
+
+        let credential = options.credential.expect("credential");
+        assert_eq!(credential.username.as_deref(), Some("runtime-user"));
+        assert_eq!(credential.password.as_deref(), Some("runtime-password"));
+        assert_eq!(credential.source.as_deref(), Some("admin"));
+        assert_eq!(credential.mechanism, Some(AuthMechanism::ScramSha1));
+    }
 
     #[test]
     fn parse_aggregate_options_document_keeps_official_fields() {

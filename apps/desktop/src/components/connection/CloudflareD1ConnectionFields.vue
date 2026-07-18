@@ -2,11 +2,12 @@
 import { useI18n } from "vue-i18n";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import PasswordInput from "@/components/ui/PasswordInput.vue";
+import RememberPasswordInput from "@/components/connection/RememberPasswordInput.vue";
 
 const accountId = defineModel<string>("accountId", { required: true });
 const databaseId = defineModel<string | undefined>("databaseId");
 const apiToken = defineModel<string>("apiToken", { required: true });
+const rememberPassword = defineModel<boolean>("rememberPassword", { default: true });
 const { t } = useI18n();
 </script>
 
@@ -23,7 +24,7 @@ const { t } = useI18n();
 
   <div class="grid grid-cols-4 items-center gap-4">
     <Label class="justify-self-start text-left">{{ t("connection.d1ApiToken") }}</Label>
-    <PasswordInput v-model="apiToken" class="col-span-3" placeholder="Cloudflare API Token" />
+    <RememberPasswordInput v-model="apiToken" v-model:remember="rememberPassword" class="col-span-3" placeholder="Cloudflare API Token" />
   </div>
 
   <div class="grid grid-cols-4 items-start gap-4">
