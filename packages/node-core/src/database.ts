@@ -5,10 +5,18 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { sqlSafetyFromEnv } from "./sql-safety.js";
+import { evaluateSqlSafety, sqlSafetyFromEnv, type SqlSafetyOptions } from "./sql-safety.js";
 import { isDirectQueryType } from "./diagnostics.js";
 import { bridgePortFilePath } from "./paths.js";
 import { parseRedisCommandArgv, classifyRedisCommand, type RedisCommandOptions, type RedisCommandResult, type RedisCommandSafety } from "./redis-command.js";
+import {
+  clampConnectionSqlSafety,
+  clampMcpSqlSafety,
+  connectionReadOnlyReason,
+  isMcpConnectionReadOnly,
+  mcpReadOnlyReason,
+} from "./mcp-policy.js";
+import { supportsHashLineComments } from "./sql-risk.js";
 import {
   chainedMethodCallPattern,
   describeMongoCommandParseFailure,
@@ -65,6 +73,7 @@ export interface QueryResult {
 export interface QueryOptions {
   maxRows?: number;
   timeoutMs?: number;
+  safety?: SqlSafetyOptions;
 }
 
 const MAX_ROWS = 100;
@@ -823,7 +832,8 @@ function quoteSqliteIdentifier(identifier: string): string {
 }
 
 function sqliteQuery(config: ConnectionConfig, sql: string, options?: QueryOptions): QueryResult {
-  const db = new Database(sqlitePath(config), { readonly: !sqlSafetyFromEnv().allowWrites });
+  const safety = options?.safety ? clampMcpSqlSafety(config, options.safety) : clampConnectionSqlSafety(config, sqlSafetyFromEnv());
+  const db = new Database(sqlitePath(config), { readonly: !safety.allowWrites });
   try {
     const stmt = db.prepare(sql);
     if (stmt.reader) {
@@ -879,6 +889,18 @@ async function rqliteRequest(config: ConnectionConfig, endpoint: "/db/query" | "
 }
 
 export async function executeQuery(config: ConnectionConfig, sql: string, options?: QueryOptions): Promise<QueryResult> {
+  const mcpRequest = options?.safety !== undefined;
+  const safety = mcpRequest ? clampMcpSqlSafety(config, options.safety!) : clampConnectionSqlSafety(config, sqlSafetyFromEnv());
+  const readOnly = mcpRequest ? isMcpConnectionReadOnly(config) : config.read_only === true;
+  const readOnlyReason = mcpRequest ? mcpReadOnlyReason(config) : connectionReadOnlyReason(config);
+  if (config.db_type !== "mongodb" && readOnly) {
+    const decision = evaluateSqlSafety(sql, {
+      ...safety,
+      allowMultipleStatements: true,
+      hashLineComments: supportsHashLineComments(config.db_type),
+    });
+    if (!decision.allowed) throw new Error(readOnlyReason);
+  }
   if (hasActiveSshLayer(config)) {
     const result = await withTimeout(
       bridgeDataRequest<BridgeQueryResult>("/data/execute-query", {
@@ -909,8 +931,8 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     }
     const aggregate = parseMongoAggregateCommand(sql);
     if (aggregate) {
-      const safety = evaluateMongoAggregateSafety(aggregate, sqlSafetyFromEnv());
-      if (!safety.allowed) throw new Error(safety.reason);
+      const decision = evaluateMongoAggregateSafety(aggregate, safety);
+      if (!decision.allowed) throw new Error(readOnly ? readOnlyReason : decision.reason);
       const result = await withTimeout(mongoAggregateDocuments(config, aggregate.collection, aggregate.pipeline, resolveMaxRows(options), aggregate.options), resolveTimeoutMs(options));
       return mongoDocumentsToQueryResult(result.documents.slice(0, resolveMaxRows(options)), result.total);
     }
@@ -931,8 +953,8 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     }
     const write = parseMongoWriteCommand(sql);
     if (write) {
-      const safety = evaluateMongoWriteSafety(write, sqlSafetyFromEnv());
-      if (!safety.allowed) throw new Error(safety.reason);
+      const decision = evaluateMongoWriteSafety(write, safety);
+      if (!decision.allowed) throw new Error(readOnly ? readOnlyReason : decision.reason);
       const result = await withTimeout(executeMongoWrite(config, write), resolveTimeoutMs(options));
       if (write.kind === "createIndex") {
         return {
@@ -990,6 +1012,9 @@ async function executeRedisCommandDirect(config: ConnectionConfig, db: number, c
   const argv = parseRedisCommandArgv(commandText);
   const command = argv[0].toUpperCase();
   const safety = classifyRedisCommand(command) as RedisCommandSafety;
+  if (config.read_only && safety !== "allowed") {
+    throw new Error(connectionReadOnlyReason(config));
+  }
   if (!options?.skipSafetyCheck && safety === "blocked") {
     throw new Error("Redis command is blocked for safety. Enable dangerous commands with DBX_MCP_ALLOW_DANGEROUS_SQL=1.");
   }

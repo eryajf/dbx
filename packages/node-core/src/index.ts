@@ -5,6 +5,7 @@ export * from "./database.js";
 export * from "./diagnostics.js";
 export * from "./entrypoint.js";
 export * from "./format.js";
+export * from "./mcp-policy.js";
 export * from "./paths.js";
 export * from "./production-safety.js";
 export * from "./redis-command.js";

@@ -159,6 +159,7 @@ export interface ConnectionConfig {
   external_config?: unknown;
   one_time?: boolean;
   read_only?: boolean;
+  mcp_access?: "disabled" | "read_only" | "read_write";
   /** Explicit production marker for every database reachable through this connection. */
   is_production?: boolean;
   /** Database-level production markers for multi-database connections. */

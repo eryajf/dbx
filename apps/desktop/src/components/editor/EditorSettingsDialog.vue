@@ -1411,11 +1411,48 @@ const mcpCopied = ref<"" | McpCopyKind>("");
 const mcpConfigTab = ref<McpConfigTab>("claude");
 const MCP_READONLY_STORAGE_KEY = "dbx-mcp-config-readonly";
 const MCP_ALLOW_DANGEROUS_STORAGE_KEY = "dbx-mcp-config-allow-dangerous";
+const MCP_SCOPE_CONNECTION_STORAGE_KEY = "dbx-mcp-config-scope-connection";
+const MCP_MULTI_SCOPE_LEGACY_SENTINEL = "__dbx_multi_scope_requires_updated_server__";
 const mcpReadonlyMode = ref(localStorage.getItem(MCP_READONLY_STORAGE_KEY) === "true");
 const mcpAllowDangerous = ref(localStorage.getItem(MCP_ALLOW_DANGEROUS_STORAGE_KEY) === "true");
+
+function initialMcpScopeConnectionIds(): string[] {
+  const stored = localStorage.getItem(MCP_SCOPE_CONNECTION_STORAGE_KEY);
+  if (!stored || stored === "__all__") return [];
+  try {
+    const parsed = JSON.parse(stored);
+    if (Array.isArray(parsed)) return [...new Set(parsed.filter((id): id is string => typeof id === "string" && !!id.trim()))];
+  } catch {
+    // Migrate the previous single-connection value.
+  }
+  return [stored];
+}
+
+const mcpScopeConnectionIds = ref<string[]>(initialMcpScopeConnectionIds());
 const mcpInstalling = ref(false);
 const mcpInstallMessage = ref("");
 const mcpInstallError = ref(false);
+const mcpSelectableConnections = computed(() => connectionStore.connections.filter((connection) => (connection.mcp_access || "read_write") !== "disabled"));
+const mcpMissingScopeConnectionIds = computed(() => mcpScopeConnectionIds.value.filter((id) => !mcpSelectableConnections.value.some((connection) => connection.id === id)));
+
+function setAllMcpScopeConnections() {
+  mcpScopeConnectionIds.value = [];
+}
+
+function onMcpScopeConnectionToggle(connectionId: string, event: Event) {
+  const input = event.target as HTMLInputElement;
+  const checked = input.checked;
+  const selected = new Set(mcpScopeConnectionIds.value);
+  if (checked) selected.add(connectionId);
+  else {
+    if (selected.size === 1) {
+      input.checked = true;
+      return;
+    }
+    selected.delete(connectionId);
+  }
+  mcpScopeConnectionIds.value = [...selected];
+}
 
 const mcpEnvEntries = computed<McpEnvEntry[]>(() => {
   const entries: McpEnvEntry[] = [];
@@ -1424,6 +1461,14 @@ const mcpEnvEntries = computed<McpEnvEntry[]>(() => {
   }
   if (!mcpReadonlyMode.value && mcpAllowDangerous.value) {
     entries.push(["DBX_MCP_ALLOW_DANGEROUS_SQL", "1"]);
+  }
+  if (mcpScopeConnectionIds.value.length === 1) {
+    entries.push(["DBX_MCP_SCOPE_CONNECTION_ID", mcpScopeConnectionIds.value[0]]);
+  } else if (mcpScopeConnectionIds.value.length > 1) {
+    entries.push(["DBX_MCP_SCOPE_CONNECTION_IDS", mcpScopeConnectionIds.value.join(",")]);
+    // Older MCP servers only understand the singular variable. Keep them
+    // fail-closed instead of letting an unsupported multi-scope expose all connections.
+    entries.push(["DBX_MCP_SCOPE_CONNECTION_ID", MCP_MULTI_SCOPE_LEGACY_SENTINEL]);
   }
   return entries;
 });
@@ -1468,6 +1513,14 @@ watch(mcpReadonlyMode, (value) => {
   localStorage.setItem(MCP_READONLY_STORAGE_KEY, String(value));
   if (value) mcpAllowDangerous.value = false;
 });
+
+watch(
+  mcpScopeConnectionIds,
+  (value) => {
+    localStorage.setItem(MCP_SCOPE_CONNECTION_STORAGE_KEY, JSON.stringify(value));
+  },
+  { deep: true },
+);
 
 watch(mcpAllowDangerous, (value) => {
   localStorage.setItem(MCP_ALLOW_DANGEROUS_STORAGE_KEY, String(value));
@@ -4807,6 +4860,29 @@ onUnmounted(cleanupPreviewEditor);
 
               <div class="space-y-2">
                 <p class="text-xs text-muted-foreground">{{ t("settings.mcpConfigOptionsHint") }}</p>
+                <div class="space-y-2 rounded-md border bg-muted/20 px-3 py-2">
+                  <div class="space-y-1">
+                    <Label>{{ t("settings.mcpScopeConnection") }}</Label>
+                    <p class="text-xs text-muted-foreground">{{ t("settings.mcpScopeConnectionDescription") }}</p>
+                  </div>
+                  <div class="grid max-h-48 gap-1 overflow-y-auto rounded-md border bg-background p-1.5">
+                    <button type="button" :class="['flex items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted/60', mcpScopeConnectionIds.length === 0 ? 'bg-muted/70 font-medium' : '']" @click="setAllMcpScopeConnections">
+                      <Check :class="['h-3.5 w-3.5', mcpScopeConnectionIds.length === 0 ? 'opacity-100' : 'opacity-0']" />
+                      <span>{{ t("settings.mcpScopeAllConnections") }}</span>
+                    </button>
+                    <Separator />
+                    <label v-for="connection in mcpSelectableConnections" :key="connection.id" class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/60">
+                      <input type="checkbox" :checked="mcpScopeConnectionIds.includes(connection.id)" @change="onMcpScopeConnectionToggle(connection.id, $event)" />
+                      <span class="min-w-0 truncate">{{ connection.name }} · {{ connection.db_type }} · {{ connection.host }}:{{ connection.port }}</span>
+                    </label>
+                    <label v-for="connectionId in mcpMissingScopeConnectionIds" :key="`missing-${connectionId}`" class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-amber-600 hover:bg-muted/60 dark:text-amber-400">
+                      <input type="checkbox" checked @change="onMcpScopeConnectionToggle(connectionId, $event)" />
+                      <span class="min-w-0 truncate">{{ t("settings.mcpScopeConnectionUnavailable") }} · {{ connectionId }}</span>
+                    </label>
+                  </div>
+                  <p v-if="mcpScopeConnectionIds.length > 0" class="text-xs text-muted-foreground">{{ t("settings.mcpScopeSelectedCount", { count: mcpScopeConnectionIds.length }) }}</p>
+                  <p v-if="mcpMissingScopeConnectionIds.length > 0" class="text-xs text-amber-600 dark:text-amber-400">{{ t("settings.mcpScopeConnectionUnavailableDescription", { count: mcpMissingScopeConnectionIds.length }) }}</p>
+                </div>
                 <div class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
                   <div class="space-y-1">
                     <Label for="mcp-readonly-mode">{{ t("settings.mcpReadonlyMode") }}</Label>

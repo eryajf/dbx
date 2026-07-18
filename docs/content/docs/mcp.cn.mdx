@@ -249,6 +249,27 @@ MCP 查询执行默认非常保守：
 
 设置 `DBX_MCP_ALLOW_WRITES=1` 可以允许写入语句。只有在受控环境并且确实需要破坏性 SQL 时，才设置 `DBX_MCP_ALLOW_DANGEROUS_SQL=1`。
 
+### 连接策略与会话范围
+
+在 DBX 连接的“高级”设置中可以选择 **MCP 访问权限**：
+
+| 策略 | MCP 行为 |
+| ---- | -------- |
+| 禁用 | MCP 不会列出该连接，也无法通过连接 ID 或名称访问 |
+| 只读 | 允许读取元数据和查询，始终阻止写入 |
+| 读写 | 使用 MCP 会话的 SQL 安全选项；旧连接默认使用此模式 |
+
+DBX 中持久化的策略是最终约束。启用了 DBX“只读模式”的连接通过 MCP 访问时也始终只读。环境变量可以进一步收紧会话，但不能授予被 DBX 拒绝的连接访问权或写权限。
+
+若只想为若干指定连接生成客户端配置，可在 DBX 的 MCP 设置页多选，或手工设置稳定连接 ID：
+
+```bash
+DBX_MCP_SCOPE_CONNECTION_IDS=connection-id-1,connection-id-2
+DBX_MCP_SCOPE_CONNECTION_ID=__dbx_multi_scope_requires_updated_server__
+```
+
+只选择一个连接时，DBX 仍会生成 `DBX_MCP_SCOPE_CONNECTION_ID` 以兼容旧版本。选择多个连接时，DBX 还会生成上方所示的无效单选 ID：新版服务端优先读取复数列表，旧版服务端则安全地匹配不到连接，而不会把会话当作未设置 scope。复数 ID 列表优先于单数 ID，ID scope 优先于兼容旧配置的 `DBX_MCP_SCOPE_CONNECTION_NAME`。scope 包含多个连接时，访问具体连接的工具必须传入 `connection_id` 或 `connection_name`。scope 只收窄单个客户端会话；长期安全边界应使用连接策略。存在受管的禁用/只读策略时，MCP 也会禁用连接新增和删除操作，连接管理需在 DBX 中完成。
+
 ### 桌面模式与 Web 模式
 
 | 模式         | 如何选择           | 说明                                                     |

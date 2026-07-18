@@ -249,6 +249,27 @@ MCP query execution is intentionally conservative:
 
 Set `DBX_MCP_ALLOW_WRITES=1` to allow write statements. Set `DBX_MCP_ALLOW_DANGEROUS_SQL=1` only in controlled environments where destructive SQL is expected.
 
+### Connection Policy And Session Scope
+
+Open a connection's **Advanced** settings in DBX and choose its **MCP access** policy:
+
+| Policy           | MCP behavior                                                        |
+| ---------------- | ------------------------------------------------------------------- |
+| Disabled         | Hidden from MCP and unavailable by connection ID or name            |
+| Read only        | Metadata and read queries are allowed; writes are always blocked    |
+| Read and write   | Uses the MCP session SQL safety options; default for old connections |
+
+The persisted DBX policy is authoritative. A connection with DBX **Read Only** enabled also remains read-only through MCP. Environment variables can make a session more restrictive, but cannot grant access or write permissions denied by DBX.
+
+To generate a client config for selected connections, choose them on DBX's MCP settings page, or set their stable IDs manually:
+
+```bash
+DBX_MCP_SCOPE_CONNECTION_IDS=connection-id-1,connection-id-2
+DBX_MCP_SCOPE_CONNECTION_ID=__dbx_multi_scope_requires_updated_server__
+```
+
+DBX continues to generate `DBX_MCP_SCOPE_CONNECTION_ID` when exactly one connection is selected. For multiple connections, it also emits the invalid singular ID shown above: updated servers prefer the plural list, while older servers fail closed instead of treating the session as unscoped. The plural ID list takes precedence over the singular ID, and ID scope takes precedence over the legacy `DBX_MCP_SCOPE_CONNECTION_NAME`. With multiple scoped connections, tools that access a connection require `connection_id` or `connection_name`. Scope only narrows one client session; use the connection policy for the durable security boundary. Managed disabled/read-only policies also disable MCP connection add/remove operations, so connection management stays in DBX.
+
 ### Desktop And Web Mode
 
 | Mode               | How It Is Selected | Notes                                                                          |

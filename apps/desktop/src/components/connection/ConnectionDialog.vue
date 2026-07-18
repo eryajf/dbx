@@ -245,6 +245,7 @@ const defaultForm = (): ConnectionForm => ({
   external_config: undefined,
   init_script: undefined,
   read_only: false,
+  mcp_access: "read_write",
   is_production: false,
   production_databases: [],
   visible_databases: undefined,
@@ -1606,6 +1607,7 @@ watch(
         attached_databases: config.attached_databases || [],
         init_script: config.init_script,
         read_only: config.read_only || false,
+        mcp_access: config.mcp_access || "read_write",
         is_production: config.is_production || false,
         production_databases: config.production_databases || [],
         visible_databases: config.visible_databases,
@@ -2596,6 +2598,7 @@ function connectionConfigForSubmit(id: string, generatedName = ""): ConnectionCo
   }
   if (!config.one_time) config.one_time = undefined;
   if (!config.read_only) config.read_only = undefined;
+  if (config.mcp_access === "read_write") config.mcp_access = undefined;
   if (isSingleDatabase(config.db_type) && config.production_databases?.length) {
     // Single-database drivers expose schemas or internal names, not independently selectable databases.
     config.is_production = true;
@@ -5645,6 +5648,22 @@ function openExternalUrl(url: string) {
                     <input type="checkbox" v-model="form.read_only" class="mr-0" />
                     <span class="text-xs text-muted-foreground">{{ t("connection.readOnlyHint") }}</span>
                   </label>
+                </div>
+                <div class="grid grid-cols-4 items-start gap-4">
+                  <Label :class="[connectionLabelSmallClass, 'pt-2']">{{ t("connection.mcpAccess") }}</Label>
+                  <div class="col-span-3 grid gap-1.5">
+                    <Select v-model="form.mcp_access">
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="disabled">{{ t("connection.mcpAccessDisabled") }}</SelectItem>
+                        <SelectItem value="read_only">{{ t("connection.mcpAccessReadOnly") }}</SelectItem>
+                        <SelectItem value="read_write">{{ t("connection.mcpAccessReadWrite") }}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p class="text-xs leading-5 text-muted-foreground">{{ t("connection.mcpAccessHint") }}</p>
+                  </div>
                 </div>
                 <div class="grid grid-cols-4 items-start gap-4 rounded-[6px] border border-red-500/25 bg-red-500/[0.035] px-3 py-2.5">
                   <Label :class="[connectionLabelSmallClass, 'pt-0.5 text-red-700 dark:text-red-300']">

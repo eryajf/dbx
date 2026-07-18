@@ -96,7 +96,7 @@ See the [DBX CLI README](../cli/README.md) for command details.
 
 | Tool                        | Description                                          |
 | --------------------------- | ---------------------------------------------------- |
-| `dbx_list_connections`      | List all database connections configured in DBX      |
+| `dbx_list_connections`      | List connections available to the current MCP session |
 | `dbx_add_connection`        | Add a new database connection                        |
 | `dbx_remove_connection`     | Remove a database connection                         |
 | `dbx_list_tables`           | List tables and views for a connection               |
@@ -123,6 +123,25 @@ DBX_MCP_ALLOW_DANGEROUS_SQL=1
 ```
 
 Redis connections use `dbx_execute_redis_command` instead of `dbx_execute_query`. Redis write commands honor `DBX_MCP_ALLOW_WRITES`; dangerous Redis commands such as `KEYS`, `FLUSHALL`, and `EVAL` require `DBX_MCP_ALLOW_DANGEROUS_SQL=1`.
+
+### Connection-level MCP policy and session scope
+
+Each DBX connection has an **MCP access** policy in its Advanced settings:
+
+- `Disabled`: the connection is hidden from MCP and cannot be resolved by ID or name.
+- `Read only`: MCP can inspect metadata and run read queries, but cannot write.
+- `Read and write`: MCP follows the session SQL safety options. This is the default for existing connections.
+
+DBX connection policy is authoritative. The connection's general **Read Only** option is stronger than MCP access, and client environment variables can only tighten these policies. For example, `DBX_MCP_ALLOW_WRITES=1` cannot make a DBX-managed read-only connection writable.
+
+To expose selected connections to a client session, use the stable IDs shown by `dbx_list_connections`:
+
+```bash
+DBX_MCP_SCOPE_CONNECTION_IDS=connection-id-1,connection-id-2
+DBX_MCP_SCOPE_CONNECTION_ID=__dbx_multi_scope_requires_updated_server__
+```
+
+For one connection, the legacy `DBX_MCP_SCOPE_CONNECTION_ID` is still supported and is what DBX generates for maximum compatibility. For multiple connections, DBX also emits the invalid singular ID shown above: updated servers prefer the plural list, while older servers fail closed instead of treating the session as unscoped. `DBX_MCP_SCOPE_CONNECTION_NAME` also remains available, but IDs are recommended. The plural ID list takes precedence over the singular ID, and any ID scope takes precedence over the name. When multiple connections are scoped, connection-taking tools require `connection_id` or `connection_name` instead of silently choosing one. Session scope is a convenience restriction, not a replacement for the persisted connection policy. When any connection has a managed disabled/read-only MCP policy, MCP connection add/remove tools refuse changes; manage connections in DBX instead.
 
 ## SQL Diagnostics Privacy
 
@@ -263,7 +282,7 @@ dbx query local "select 1" --json
 
 | 工具                        | 说明                                  |
 | --------------------------- | ------------------------------------- |
-| `dbx_list_connections`      | 列出 DBX 中所有已配置的数据库连接     |
+| `dbx_list_connections`      | 列出当前 MCP 会话可访问的数据库连接   |
 | `dbx_add_connection`        | 添加新的数据库连接                    |
 | `dbx_remove_connection`     | 删除数据库连接                        |
 | `dbx_list_tables`           | 列出指定连接的表和视图                |
@@ -290,6 +309,25 @@ DBX_MCP_ALLOW_DANGEROUS_SQL=1
 ```
 
 Redis 连接使用 `dbx_execute_redis_command`，不通过 `dbx_execute_query` 执行。Redis 写命令遵循 `DBX_MCP_ALLOW_WRITES`；`KEYS`、`FLUSHALL`、`EVAL` 等危险 Redis 命令需要设置 `DBX_MCP_ALLOW_DANGEROUS_SQL=1`。
+
+#### 连接级 MCP 策略与会话范围
+
+每个 DBX 连接都可以在“高级”设置中配置 **MCP 访问权限**：
+
+- `禁用`：MCP 不会列出该连接，也无法通过 ID 或名称访问。
+- `只读`：MCP 可以读取元数据和执行查询，但不能写入。
+- `读写`：MCP 按会话 SQL 安全选项执行；旧连接默认使用此模式。
+
+DBX 中保存的连接策略是最终约束。连接自身的“只读模式”比 MCP 权限更强，客户端环境变量只能进一步收紧权限。例如，`DBX_MCP_ALLOW_WRITES=1` 无法把 DBX 管理的只读连接变成可写。
+
+如果一个客户端会话只应看到若干指定连接，请使用 `dbx_list_connections` 返回的稳定连接 ID：
+
+```bash
+DBX_MCP_SCOPE_CONNECTION_IDS=connection-id-1,connection-id-2
+DBX_MCP_SCOPE_CONNECTION_ID=__dbx_multi_scope_requires_updated_server__
+```
+
+只选择一个连接时，DBX 为最大化兼容性仍会生成 `DBX_MCP_SCOPE_CONNECTION_ID`。选择多个连接时，DBX 还会生成上方所示的无效单选 ID：新版服务端优先读取复数列表，旧版服务端则安全地匹配不到连接，而不会把会话当作未设置 scope。旧的 `DBX_MCP_SCOPE_CONNECTION_NAME` 也继续可用，但推荐使用 ID。复数 ID 列表优先于单数 ID，任何 ID scope 都优先于名称。scope 包含多个连接时，访问具体连接的工具必须传入 `connection_id` 或 `connection_name`，不会静默选择第一个连接。会话 scope 只是便捷的收窄手段，不能替代持久化连接策略。当任一连接配置了禁用或只读 MCP 策略时，MCP 的连接新增/删除工具会拒绝修改，请回到 DBX 管理连接。
 
 ### 工作原理
 

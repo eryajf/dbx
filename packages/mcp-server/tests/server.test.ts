@@ -158,6 +158,158 @@ test("scoped MCP lists only the active connection", async () => {
   assert.doesNotMatch(result.content[0].text, /other/);
 });
 
+test("disabled MCP connections are hidden and cannot be resolved by id", async () => {
+  const disabled: ConnectionConfig = { ...connection, mcp_access: "disabled" };
+  const scopedBackend: Backend = {
+    ...backend,
+    loadConnections: async () => [disabled],
+  };
+  const server = createDbxMcpServer(scopedBackend, { isWebMode: true });
+
+  const listed = await (server as any)._registeredTools.dbx_list_connections.handler({});
+  const resolved = await (server as any)._registeredTools.dbx_list_tables.handler({ connection_id: disabled.id });
+
+  assert.match(listed.content[0].text, /No MCP-enabled connections/);
+  assert.equal(resolved.isError, true);
+  assert.match(resolved.content[0].text, /CONNECTION_OUT_OF_SCOPE:/);
+});
+
+test("connection MCP read-only policy overrides a writable client environment", async () => {
+  let executed = false;
+  const readOnly: ConnectionConfig = { ...connection, mcp_access: "read_only" };
+  const scopedBackend: Backend = {
+    ...backend,
+    loadConnections: async () => [readOnly],
+    executeQuery: async () => {
+      executed = true;
+      return { columns: [], rows: [], row_count: 1 };
+    },
+  };
+
+  const result = await withScopedEnv({ DBX_MCP_ALLOW_WRITES: "1" }, () => {
+    const server = createDbxMcpServer(scopedBackend, { isWebMode: true });
+    return (server as any)._registeredTools.dbx_execute_query.handler({
+      connection_id: readOnly.id,
+      sql: "update users set name = 'x' where id = 1",
+    });
+  });
+
+  assert.equal(executed, false);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /CONNECTION_READ_ONLY:/);
+});
+
+test("connection id scope takes precedence over a conflicting name scope", async () => {
+  const other: ConnectionConfig = { ...connection, id: "2", name: "other" };
+  const scopedBackend: Backend = {
+    ...backend,
+    loadConnections: async () => [connection, other],
+  };
+
+  const result = await withScopedEnv({ DBX_MCP_SCOPE_CONNECTION_ID: "1", DBX_MCP_SCOPE_CONNECTION_NAME: "other" }, () => {
+    const server = createDbxMcpServer(scopedBackend, { isWebMode: true });
+    return (server as any)._registeredTools.dbx_list_connections.handler({});
+  });
+
+  assert.match(result.content[0].text, /local/);
+  assert.doesNotMatch(result.content[0].text, /other/);
+});
+
+test("plural connection scope lists every selected connection and excludes others", async () => {
+  const other: ConnectionConfig = { ...connection, id: "2", name: "other" };
+  const excluded: ConnectionConfig = { ...connection, id: "3", name: "excluded" };
+  const scopedBackend: Backend = {
+    ...backend,
+    loadConnections: async () => [connection, other, excluded],
+  };
+
+  const result = await withScopedEnv({ DBX_MCP_SCOPE_CONNECTION_IDS: "1, 2" }, () => {
+    const server = createDbxMcpServer(scopedBackend, { isWebMode: true });
+    return (server as any)._registeredTools.dbx_list_connections.handler({});
+  });
+
+  assert.match(result.content[0].text, /local/);
+  assert.match(result.content[0].text, /other/);
+  assert.doesNotMatch(result.content[0].text, /excluded/);
+});
+
+test("multiple scoped connections require an explicit connection for connection-taking tools", async () => {
+  const other: ConnectionConfig = { ...connection, id: "2", name: "other" };
+  const scopedBackend: Backend = {
+    ...backend,
+    loadConnections: async () => [connection, other],
+  };
+
+  const result = await withScopedEnv({ DBX_MCP_SCOPE_CONNECTION_IDS: "1,2" }, () => {
+    const server = createDbxMcpServer(scopedBackend, { isWebMode: true });
+    return (server as any)._registeredTools.dbx_list_tables.handler({});
+  });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /CONNECTION_REQUIRED:/);
+});
+
+test("multiple scoped connections resolve an explicitly selected connection", async () => {
+  const other: ConnectionConfig = { ...connection, id: "2", name: "other" };
+  let usedConnectionId = "";
+  const scopedBackend: Backend = {
+    ...backend,
+    loadConnections: async () => [connection, other],
+    listTables: async (config) => {
+      usedConnectionId = config.id;
+      return [{ name: "users", type: "BASE TABLE" }];
+    },
+  };
+
+  await withScopedEnv({ DBX_MCP_SCOPE_CONNECTION_IDS: "1,2" }, () => {
+    const server = createDbxMcpServer(scopedBackend, { isWebMode: true });
+    return (server as any)._registeredTools.dbx_list_tables.handler({ connection_id: "2" });
+  });
+
+  assert.equal(usedConnectionId, "2");
+});
+
+test("plural connection scope takes precedence over singular id and name scope", async () => {
+  const other: ConnectionConfig = { ...connection, id: "2", name: "other" };
+  const excluded: ConnectionConfig = { ...connection, id: "3", name: "excluded" };
+  const scopedBackend: Backend = {
+    ...backend,
+    loadConnections: async () => [connection, other, excluded],
+  };
+
+  const result = await withScopedEnv(
+    {
+      DBX_MCP_SCOPE_CONNECTION_IDS: "1,2",
+      DBX_MCP_SCOPE_CONNECTION_ID: "3",
+      DBX_MCP_SCOPE_CONNECTION_NAME: "excluded",
+    },
+    () => {
+      const server = createDbxMcpServer(scopedBackend, { isWebMode: true });
+      return (server as any)._registeredTools.dbx_list_connections.handler({});
+    },
+  );
+
+  assert.match(result.content[0].text, /local/);
+  assert.match(result.content[0].text, /other/);
+  assert.doesNotMatch(result.content[0].text, /excluded/);
+});
+
+test("managed MCP policies disable MCP connection management", async () => {
+  const readOnly: ConnectionConfig = { ...connection, mcp_access: "read_only" };
+  const scopedBackend: Backend = {
+    ...backend,
+    loadConnections: async () => [readOnly],
+  };
+  const server = createDbxMcpServer(scopedBackend, { isWebMode: true });
+
+  const result = await (server as any)._registeredTools.dbx_remove_connection.handler({
+    connection_name: readOnly.name,
+  });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /MCP_POLICY_MANAGED:/);
+});
+
 test("scoped MCP rejects out-of-scope connection tool calls", async () => {
   const result = await withScopedEnv({ DBX_MCP_SCOPE_CONNECTION_ID: "1" }, () => {
     const server = createDbxMcpServer(backend, { isWebMode: true });

@@ -20,7 +20,15 @@ import {
   type MongoWriteCommand,
 } from "./database.js";
 import type { RedisCommandOptions, RedisCommandResult } from "./redis-command.js";
-import { sqlSafetyFromEnv } from "./sql-safety.js";
+import { evaluateSqlSafety, sqlSafetyFromEnv } from "./sql-safety.js";
+import {
+  clampConnectionSqlSafety,
+  clampMcpSqlSafety,
+  connectionReadOnlyReason,
+  isMcpConnectionReadOnly,
+  mcpReadOnlyReason,
+} from "./mcp-policy.js";
+import { supportsHashLineComments } from "./sql-risk.js";
 
 let sessionCookie: string | null = null;
 let authChecked = false;
@@ -206,6 +214,18 @@ export async function describeTable(config: ConnectionConfig, table: string, sch
 }
 
 export async function executeQuery(config: ConnectionConfig, sql: string, options?: QueryOptions): Promise<QueryResult> {
+  const mcpRequest = options?.safety !== undefined;
+  const safety = mcpRequest ? clampMcpSqlSafety(config, options.safety!) : clampConnectionSqlSafety(config, sqlSafetyFromEnv());
+  const readOnly = mcpRequest ? isMcpConnectionReadOnly(config) : config.read_only === true;
+  const readOnlyReason = mcpRequest ? mcpReadOnlyReason(config) : connectionReadOnlyReason(config);
+  if (config.db_type !== "mongodb" && readOnly) {
+    const decision = evaluateSqlSafety(sql, {
+      ...safety,
+      allowMultipleStatements: true,
+      hashLineComments: supportsHashLineComments(config.db_type),
+    });
+    if (!decision.allowed) throw new Error(readOnlyReason);
+  }
   await ensureConnected(config);
   if (config.db_type === "mongodb") {
     if (parseMongoVersionCommand(sql)) {
@@ -254,8 +274,8 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     }
     const aggregate = parseMongoAggregateCommand(sql);
     if (aggregate) {
-      const safety = evaluateMongoAggregateSafety(aggregate, sqlSafetyFromEnv());
-      if (!safety.allowed) throw new Error(safety.reason);
+      const decision = evaluateMongoAggregateSafety(aggregate, safety);
+      if (!decision.allowed) throw new Error(readOnly ? readOnlyReason : decision.reason);
       const res = await apiFetch("/api/mongo/aggregate-documents", {
         method: "POST",
         body: JSON.stringify({
@@ -316,8 +336,8 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     }
     const write = parseMongoWriteCommand(sql);
     if (write) {
-      const safety = evaluateMongoWriteSafety(write, sqlSafetyFromEnv());
-      if (!safety.allowed) throw new Error(safety.reason);
+      const decision = evaluateMongoWriteSafety(write, safety);
+      if (!decision.allowed) throw new Error(readOnly ? readOnlyReason : decision.reason);
       const result = await executeMongoWrite(config, write);
       if (write.kind === "createIndex") {
         return { columns: ["name"], rows: [{ name: result.indexName ?? "" }], row_count: 1 };

@@ -610,6 +610,7 @@ mod tests {
             external_config: None,
             one_time: false,
             read_only: false,
+            mcp_access: Default::default(),
             is_production: false,
             production_databases: vec!["prod_app".to_string()],
             database_info: None,

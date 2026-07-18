@@ -597,6 +597,7 @@ mod tests {
             jdbc_driver_paths: Vec::new(),
             one_time: false,
             read_only,
+            mcp_access: Default::default(),
             is_production: false,
             production_databases: Vec::new(),
             database_info: None,

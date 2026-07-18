@@ -5,22 +5,31 @@ import { createRequire } from "node:module";
 import { z } from "zod";
 import {
   buildSchemaContext,
+  classifySqlRisk,
   createBackend,
-  evaluateRedisCommandSafety,
   evaluateMongoAggregateSafety,
+  evaluateMongoWriteSafety,
+  evaluateRedisCommandSafety,
   evaluateSqlSafety,
+  effectiveMcpSqlSafety,
   formatCell,
   formatSchemaContext,
+  hasManagedMcpPolicy,
+  isMcpConnectionEnabled,
+  isMcpConnectionReadOnly,
+  isSqlRiskMutation,
   isMainModule,
+  mcpAccessMode,
+  mcpReadOnlyReason,
   mdTable,
   notifyReload,
   parseMongoAggregateCommand,
+  parseMongoWriteCommand,
   assessProductionSql,
   isLikelyMongoMutation,
   isProductionDatabase,
   postBridge,
   logSqlDiagnostic,
-  sqlSafetyFromEnv,
   splitSqlStatements,
   supportsHashLineComments,
   type Backend,
@@ -97,7 +106,7 @@ export const DBX_CONNECTION_TYPE_DESCRIPTION =
 const FILE_CAPABLE_CONNECTION_TYPES = new Set(["sqlite", "duckdb", "access", "h2"]);
 
 interface McpScope {
-  connectionId?: string;
+  connectionIds: string[];
   connectionName?: string;
   database?: string;
 }
@@ -107,26 +116,39 @@ function scopedValue(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function scopedConnectionIds(value: string | undefined): string[] {
+  if (!value?.trim()) return [];
+  return [...new Set(value.split(",").map((id) => id.trim()).filter(Boolean))];
+}
+
 function mcpScopeFromEnv(): McpScope {
+  const connectionIds = scopedConnectionIds(process.env.DBX_MCP_SCOPE_CONNECTION_IDS);
+  const legacyConnectionId = scopedValue(process.env.DBX_MCP_SCOPE_CONNECTION_ID);
+  if (connectionIds.length === 0 && legacyConnectionId) connectionIds.push(legacyConnectionId);
   return {
-    connectionId: scopedValue(process.env.DBX_MCP_SCOPE_CONNECTION_ID),
+    connectionIds,
     connectionName: scopedValue(process.env.DBX_MCP_SCOPE_CONNECTION_NAME),
     database: scopedValue(process.env.DBX_MCP_SCOPE_DATABASE),
   };
 }
 
 function scopeEnabled(scope: McpScope): boolean {
-  return !!(scope.connectionId || scope.connectionName);
+  return scope.connectionIds.length > 0 || !!scope.connectionName;
 }
 
 function connectionMatchesScope(config: ConnectionConfig, scope: McpScope): boolean {
-  return (!!scope.connectionId && config.id === scope.connectionId) || (!!scope.connectionName && config.name === scope.connectionName);
+  if (scope.connectionIds.length > 0) return scope.connectionIds.includes(config.id);
+  return !!scope.connectionName && config.name === scope.connectionName;
 }
 
 async function loadScopedConnections(backend: Backend, scope: McpScope): Promise<ConnectionConfig[]> {
-  const connections = await backend.loadConnections();
+  const connections = (await backend.loadConnections()).filter(isMcpConnectionEnabled);
   if (!scopeEnabled(scope)) return connections;
   return connections.filter((config) => connectionMatchesScope(config, scope));
+}
+
+async function connectionManagementBlocked(backend: Backend): Promise<boolean> {
+  return (await backend.loadConnections()).some(hasManagedMcpPolicy);
 }
 
 async function resolveConnection(backend: Backend, scope: McpScope, requestedId?: string, requestedName?: string): Promise<{ config?: ConnectionConfig; error?: ReturnType<typeof toolError> }> {
@@ -135,6 +157,9 @@ async function resolveConnection(backend: Backend, scope: McpScope, requestedId?
     const connections = await backend.loadConnections();
     const config = connections.find((c) => c.id === requestedId.trim());
     if (!config) return { error: toolError("CONNECTION_NOT_FOUND", `Connection with id "${requestedId}" not found.`) };
+    if (!isMcpConnectionEnabled(config)) {
+      return { error: toolError("CONNECTION_OUT_OF_SCOPE", `Connection "${requestedId}" is not available to MCP.`) };
+    }
     // In scoped mode, verify the resolved connection is within the scope.
     if (scopeEnabled(scope) && !connectionMatchesScope(config, scope)) {
       return { error: toolError("CONNECTION_OUT_OF_SCOPE", `Connection "${requestedId}" is outside this DBX AI session scope.`) };
@@ -144,7 +169,7 @@ async function resolveConnection(backend: Backend, scope: McpScope, requestedId?
 
   if (!scopeEnabled(scope)) {
     if (!requestedName?.trim()) return { error: toolError("CONNECTION_NOT_FOUND", "Connection name is required.") };
-    const connections = await backend.loadConnections();
+    const connections = (await backend.loadConnections()).filter(isMcpConnectionEnabled);
     const matching = connections.filter((c) => c.name.toLowerCase() === requestedName.trim().toLowerCase());
     if (matching.length === 0) return { error: toolError("CONNECTION_NOT_FOUND", `Connection "${requestedName}" not found.`) };
     if (matching.length > 1) {
@@ -156,12 +181,22 @@ async function resolveConnection(backend: Backend, scope: McpScope, requestedId?
     return { config: matching[0] };
   }
 
-  const [scopedConfig] = await loadScopedConnections(backend, scope);
-  if (!scopedConfig) return { error: toolError("CONNECTION_NOT_FOUND", "Scoped DBX connection was not found.") };
-  if (requestedName?.trim() && requestedName !== scopedConfig.name && requestedName !== scopedConfig.id) {
-    return { error: toolError("CONNECTION_OUT_OF_SCOPE", `Connection "${requestedName}" is outside this DBX AI session scope.`) };
+  const scopedConnections = await loadScopedConnections(backend, scope);
+  if (scopedConnections.length === 0) return { error: toolError("CONNECTION_NOT_FOUND", "No scoped DBX connections were found.") };
+  if (requestedName?.trim()) {
+    const value = requestedName.trim();
+    const matching = scopedConnections.filter((config) => config.id === value || config.name.toLowerCase() === value.toLowerCase());
+    if (matching.length === 0) {
+      return { error: toolError("CONNECTION_OUT_OF_SCOPE", `Connection "${requestedName}" is outside this DBX AI session scope.`) };
+    }
+    if (matching.length > 1) {
+      const lines = matching.map((config) => `- ${config.id}: ${config.db_type} @ ${config.host}:${config.port}`);
+      return { error: toolError("AMBIGUOUS_CONNECTION", `Multiple scoped connections found with name "${requestedName}". Please specify connection_id:\n${lines.join("\n")}`) };
+    }
+    return { config: matching[0] };
   }
-  return { config: scopedConfig };
+  if (scopedConnections.length === 1) return { config: scopedConnections[0] };
+  return { error: toolError("CONNECTION_REQUIRED", "This MCP session includes multiple DBX connections. Specify connection_id or connection_name.") };
 }
 
 export function createDbxMcpServer(backend: Backend, options: { isWebMode?: boolean } = {}): McpServer {
@@ -173,11 +208,11 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
     version: DBX_MCP_PACKAGE_VERSION,
   });
 
-  server.tool("dbx_list_connections", "List all database connections configured in DBX", {}, async () => {
+  server.tool("dbx_list_connections", "List database connections available to this MCP session", {}, async () => {
     const connections = await loadScopedConnections(backend, scope);
-    if (connections.length === 0) return text("No connections configured in DBX.");
-    const rows = connections.map((c) => [c.id, c.name, c.db_type, c.host, String(c.port), c.database || ""]);
-    return text(mdTable(["ID", "Name", "Type", "Host", "Port", "Database"], rows));
+    if (connections.length === 0) return text("No MCP-enabled connections are available in DBX.");
+    const rows = connections.map((c) => [c.id, c.name, c.db_type, c.host, String(c.port), c.database || "", mcpAccessMode(c)]);
+    return text(mdTable(["ID", "Name", "Type", "Host", "Port", "Database", "MCP Access"], rows));
   });
 
   server.tool(
@@ -240,16 +275,33 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
       if (scopedConfig.db_type === "redis") {
         return toolError("REDIS_COMMAND_REQUIRED", "Redis connections do not accept SQL through dbx_execute_query. Use dbx_execute_redis_command with a Redis command such as GET key or INFO.");
       }
+      const safetyOptions = effectiveMcpSqlSafety(scopedConfig);
       if (scopedConfig.db_type !== "mongodb") {
         const hashLineComments = supportsHashLineComments(scopedConfig.db_type);
-        const safety = evaluateSqlSafety(sql, { ...sqlSafetyFromEnv(), allowMultipleStatements: true, hashLineComments });
+        const risk = classifySqlRisk(sql, { hashLineComments }).risk;
+        if (isMcpConnectionReadOnly(scopedConfig) && isSqlRiskMutation(risk)) {
+          return toolError("CONNECTION_READ_ONLY", mcpReadOnlyReason(scopedConfig));
+        }
+        const safety = evaluateSqlSafety(sql, { ...safetyOptions, allowMultipleStatements: true, hashLineComments });
         if (!safety.allowed) return toolError("SQL_BLOCKED", safety.reason ?? "SQL blocked.");
         const production = assessProductionSql(sql, scopedConfig, database ?? scope.database ?? scopedConfig.database);
         if (production.active && production.isMutation) {
           return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot execute writes against a production database. Return the SQL for a user to review and run in DBX.");
         }
-      } else if (isProductionDatabase(scopedConfig, database ?? scope.database ?? scopedConfig.database) && isLikelyMongoMutation(sql)) {
-        return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot execute writes against a production database. Return the command for a user to review and run in DBX.");
+      } else {
+        const aggregate = parseMongoAggregateCommand(sql);
+        const write = parseMongoWriteCommand(sql);
+        const mongoSafety = aggregate
+          ? evaluateMongoAggregateSafety(aggregate, safetyOptions)
+          : write
+            ? evaluateMongoWriteSafety(write, safetyOptions)
+            : undefined;
+        if (mongoSafety && !mongoSafety.allowed) {
+          return toolError(isMcpConnectionReadOnly(scopedConfig) ? "CONNECTION_READ_ONLY" : "SQL_BLOCKED", isMcpConnectionReadOnly(scopedConfig) ? mcpReadOnlyReason(scopedConfig) : (mongoSafety.reason ?? "Query blocked."));
+        }
+        if (isProductionDatabase(scopedConfig, database ?? scope.database ?? scopedConfig.database) && isLikelyMongoMutation(sql)) {
+          return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot execute writes against a production database. Return the command for a user to review and run in DBX.");
+        }
       }
       // MongoDB shell commands don't fit the SQL safety evaluator; the backend
       // (node-core executeQuery) applies command-aware read/write gating.
@@ -257,7 +309,7 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
         const statements = scopedConfig.db_type === "mongodb" ? [sql] : splitSqlStatements(sql, { hashLineComments: supportsHashLineComments(scopedConfig.db_type) });
         const results = [];
         for (const statement of statements) {
-          results.push(await backend.executeQuery(withDatabase(scopedConfig, database ?? scope.database), statement));
+          results.push(await backend.executeQuery(withDatabase(scopedConfig, database ?? scope.database), statement, { safety: safetyOptions }));
         }
         if (results.length === 1) return labeledText(scopedConfig, formatQueryToolResult(results[0]).content[0].text);
         return labeledText(scopedConfig, results.map((result, index) => formatQueryToolResult(result, `Statement ${index + 1}`).content[0].text).join("\n\n"));
@@ -287,8 +339,10 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
       if (!backend.executeRedisCommand) {
         return toolError("UNSUPPORTED_BACKEND", "This DBX backend does not support Redis command execution.");
       }
-      const safety = evaluateRedisCommandSafety(command, sqlSafetyFromEnv());
-      if (!safety.allowed) return toolError("REDIS_COMMAND_BLOCKED", safety.reason ?? "Redis command blocked.");
+      const safety = evaluateRedisCommandSafety(command, effectiveMcpSqlSafety(scopedConfig));
+      if (!safety.allowed) {
+        return toolError(isMcpConnectionReadOnly(scopedConfig) ? "CONNECTION_READ_ONLY" : "REDIS_COMMAND_BLOCKED", isMcpConnectionReadOnly(scopedConfig) ? mcpReadOnlyReason(scopedConfig) : (safety.reason ?? "Redis command blocked."));
+      }
       if (isProductionDatabase(scopedConfig, String(defaultRedisDb(scopedConfig, scope, db))) && safety.safety !== "allowed") {
         return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot execute write or dangerous Redis commands against a production database.");
       }
@@ -345,6 +399,9 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
         driver_profile: z.string().optional().describe("Driver profile (e.g. 'gbase8a', 'gbase8s')"),
       },
       async ({ name, db_type, host, port, username, password, database, ssl, driver_profile }) => {
+        if (await connectionManagementBlocked(backend)) {
+          return toolError("MCP_POLICY_MANAGED", "MCP connection management is disabled while DBX contains a disabled or read-only MCP connection policy.");
+        }
         const existing = await backend.findConnection(name);
         if (existing) return text(`Connection "${name}" already exists.`);
         const DEFAULT_PORTS: Record<string, number> = {
@@ -383,6 +440,9 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
         connection_id: z.string().optional().describe("Unique ID of the DBX connection (use this to remove by id instead of name)"),
       },
       async ({ connection_name, connection_id }) => {
+        if (await connectionManagementBlocked(backend)) {
+          return toolError("MCP_POLICY_MANAGED", "MCP connection management is disabled while DBX contains a disabled or read-only MCP connection policy.");
+        }
         if (connection_id?.trim()) {
           if (backend.removeConnectionById) {
             const removed = await backend.removeConnectionById(connection_id.trim());
@@ -427,24 +487,10 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
         schema: z.string().optional().describe("Schema name"),
       },
       async ({ connection_id, connection_name, table, database, schema }) => {
-        let config: ConnectionConfig | undefined;
-        if (connection_id?.trim()) {
-          const connections = await backend.loadConnections();
-          config = connections.find((c) => c.id === connection_id.trim());
-          if (!config) return toolError("CONNECTION_NOT_FOUND", `Connection with id "${connection_id}" not found.`);
-        } else if (connection_name?.trim()) {
-          const connections = await backend.loadConnections();
-          const matching = connections.filter((c) => c.name.toLowerCase() === connection_name.toLowerCase());
-          if (matching.length === 0) return toolError("CONNECTION_NOT_FOUND", `Connection "${connection_name}" not found.`);
-          if (matching.length > 1) {
-            const lines = matching.map((c) => `- ${c.id}: ${c.db_type} @ ${c.host}:${c.port}`);
-            return toolError("AMBIGUOUS_CONNECTION", `Multiple connections found with name "${connection_name}". Please specify connection_id:\n${lines.join("\n")}`);
-          }
-          config = matching[0];
-        } else {
-          return toolError("CONNECTION_NOT_FOUND", "Either connection_id or connection_name is required.");
-        }
-        return bridgeRequest("/open-table", { connection_id: config.id, connection_name: config.name, table, database, schema }, `Opened ${table} in DBX`);
+        const { config, error } = await resolveConnection(backend, scope, connection_id, connection_name);
+        if (error) return error;
+        const resolvedConfig = config!;
+        return bridgeRequest("/open-table", { connection_id: resolvedConfig.id, connection_name: resolvedConfig.name, table, database, schema }, `Opened ${table} in DBX`);
       },
     );
 
@@ -458,53 +504,48 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
         database: z.string().optional().describe("Database name"),
       },
       async ({ connection_id, connection_name, sql, database }) => {
-        let config: ConnectionConfig | undefined;
-        if (connection_id?.trim()) {
-          const connections = await backend.loadConnections();
-          config = connections.find((c) => c.id === connection_id.trim());
-          if (!config) return toolError("CONNECTION_NOT_FOUND", `Connection with id "${connection_id}" not found.`);
-        } else if (connection_name?.trim()) {
-          const connections = await backend.loadConnections();
-          const matching = connections.filter((c) => c.name.toLowerCase() === connection_name.toLowerCase());
-          if (matching.length === 0) return toolError("CONNECTION_NOT_FOUND", `Connection "${connection_name}" not found.`);
-          if (matching.length > 1) {
-            const lines = matching.map((c) => `- ${c.id}: ${c.db_type} @ ${c.host}:${c.port}`);
-            return toolError("AMBIGUOUS_CONNECTION", `Multiple connections found with name "${connection_name}". Please specify connection_id:\n${lines.join("\n")}`);
-          }
-          config = matching[0];
-        } else {
-          return toolError("CONNECTION_NOT_FOUND", "Either connection_id or connection_name is required.");
-        }
-        const safetyOptions = sqlSafetyFromEnv();
-        if (config?.db_type === "mongodb") {
+        const { config, error } = await resolveConnection(backend, scope, connection_id, connection_name);
+        if (error) return error;
+        const resolvedConfig = config!;
+        const safetyOptions = effectiveMcpSqlSafety(resolvedConfig);
+        if (resolvedConfig.db_type === "mongodb") {
           const aggregate = parseMongoAggregateCommand(sql);
-          if (aggregate) {
-            const safety = evaluateMongoAggregateSafety(aggregate, safetyOptions);
-            if (!safety.allowed) return toolError("SQL_BLOCKED", safety.reason ?? "Query blocked.");
+          const write = parseMongoWriteCommand(sql);
+          const safety = aggregate
+            ? evaluateMongoAggregateSafety(aggregate, safetyOptions)
+            : write
+              ? evaluateMongoWriteSafety(write, safetyOptions)
+              : undefined;
+          if (safety && !safety.allowed) {
+            return toolError(isMcpConnectionReadOnly(resolvedConfig) ? "CONNECTION_READ_ONLY" : "SQL_BLOCKED", isMcpConnectionReadOnly(resolvedConfig) ? mcpReadOnlyReason(resolvedConfig) : (safety.reason ?? "Query blocked."));
           }
         } else {
-          const hashLineComments = supportsHashLineComments(config?.db_type);
+          const hashLineComments = supportsHashLineComments(resolvedConfig.db_type);
+          const risk = classifySqlRisk(sql, { hashLineComments }).risk;
+          if (isMcpConnectionReadOnly(resolvedConfig) && isSqlRiskMutation(risk)) {
+            return toolError("CONNECTION_READ_ONLY", mcpReadOnlyReason(resolvedConfig));
+          }
           const safety = evaluateSqlSafety(sql, { ...safetyOptions, allowMultipleStatements: true, hashLineComments });
           if (!safety.allowed) return toolError("SQL_BLOCKED", safety.reason ?? "SQL blocked.");
         }
-        if (config?.db_type === "mongodb") {
-          if (isProductionDatabase(config, database ?? scope.database ?? config.database) && isLikelyMongoMutation(sql)) {
+        if (resolvedConfig.db_type === "mongodb") {
+          if (isProductionDatabase(resolvedConfig, database ?? scope.database ?? resolvedConfig.database) && isLikelyMongoMutation(sql)) {
             return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot send writes against a production database to DBX.");
           }
         } else {
-          const production = assessProductionSql(sql, config, database ?? scope.database ?? config.database);
+          const production = assessProductionSql(sql, resolvedConfig, database ?? scope.database ?? resolvedConfig.database);
           if (production.active && production.isMutation) {
             return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot send writes against a production database to DBX.");
           }
         }
         // MongoDB shell commands bypass the SQL safety evaluator; pass MCP
         // safety flags to the desktop executor for command-aware gating.
-        logSqlDiagnostic("dbx_execute_in_app", sql, { connection_id: config!.id, connection_name: config!.name, database });
+        logSqlDiagnostic("dbx_execute_in_app", sql, { connection_id: resolvedConfig.id, connection_name: resolvedConfig.name, database });
         return bridgeRequest(
           "/execute-query",
           {
-            connection_id: config!.id,
-            connection_name: config!.name,
+            connection_id: resolvedConfig.id,
+            connection_name: resolvedConfig.name,
             sql,
             database,
             allow_writes: safetyOptions.allowWrites,

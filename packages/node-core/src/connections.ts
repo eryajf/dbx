@@ -31,6 +31,7 @@ export interface ConnectionConfig {
   redis_cluster_nodes?: string;
   redis_key_separator?: string;
   read_only?: boolean;
+  mcp_access?: "disabled" | "read_only" | "read_write";
   is_production?: boolean;
   production_databases?: string[];
 }
