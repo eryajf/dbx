@@ -291,6 +291,7 @@ export function expandSmokeCommand(command, recipe, environment = process.env) {
 
 function ensureBootstrap(recipe) {
   if (!recipe.bootstrap) return;
+  // Keep one-shot setup synchronous after Compose health checks so --wait cannot return before credentials exist.
   const checkCommand = expandSmokeCommand(recipe.bootstrap.check.command, recipe);
   const check = tryRunCompose(recipe, ['exec', '-T', recipe.service, ...checkCommand]);
   if (check.ok && check.output.includes(recipe.bootstrap.check.expect)) return;

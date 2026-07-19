@@ -43,7 +43,7 @@ etcd 会创建密码为 `123456` 的 `root` 用户、授予 root 角色并开启
 DB_PORT=2379 ETCD_PEER_PORT=2380 make db DB=etcd@3.7
 ```
 
-Qdrant 将 `123456` 作为管理员 API Key，通过 HTTP 请求头 `api-key` 传递，而不是用户名密码。HTTP 和 gRPC 默认主机端口分别为 `6334`、`6335`。如需使用上游 Docker 命令中的端口，可执行：
+Qdrant 将 `123456` 作为管理员 API Key。在 DBX 中请将用户名留空，并把 API Key 填入密码字段，驱动会通过 HTTP 请求头 `api-key` 发送。HTTP 和 gRPC 默认主机端口分别为 `6334`、`6335`。如需使用上游 Docker 命令中的端口，可执行：
 
 ```bash
 DB_PORT=6333 QDRANT_GRPC_PORT=6334 make db DB=qdrant@1.8

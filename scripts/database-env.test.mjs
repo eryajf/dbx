@@ -165,14 +165,22 @@ test('initializes both Nacos versions with the shared administrator credentials'
     assert.equal(recipe.connection.username, 'nacos');
     assert.equal(recipe.connection.password, '123456');
     assert.equal(recipe.connection.namespace, 'public');
+    assert.equal(recipe.bootstrap.check.expect, 'accessToken');
+    assert.equal(recipe.bootstrap.steps.length, 1);
+    assert.match(recipe.bootstrap.steps[0].command.join(' '), /administrator initialized/);
+
+    const compose = readFileSync(join(recipe.directory, 'compose.yaml'), 'utf8');
+    assert.doesNotMatch(compose, /^  initialize:/m);
+    assert.doesNotMatch(compose, /tail -f \/dev\/null/);
+    assert.deepEqual(validateRecipe(recipe), []);
   }
 });
 
 test('configures Qdrant with the shared API key', () => {
   const recipe = discoverRecipes().find((item) => recipeSelector(item) === 'qdrant@1.8');
-  assert.equal(recipe.connection.username, 'api_key');
+  assert.equal(recipe.connection.username, '');
   assert.equal(recipe.connection.password, '123456');
-  assert.equal(recipe.connection.apiKey, '123456');
+  assert.equal(recipe.connection.apiKey, undefined);
 });
 
 test('bootstraps etcd with the shared root credentials', () => {
@@ -187,6 +195,13 @@ test('bootstraps ZooKeeper with the shared Digest credentials', () => {
   assert.equal(recipe.connection.username, 'root');
   assert.equal(recipe.connection.password, '123456');
   assert.equal(recipe.connection.authScheme, 'digest');
+});
+
+test('keeps existing authenticated bootstrap recipes valid', () => {
+  for (const selector of ['etcd@3.7', 'zookeeper@3.9']) {
+    const recipe = discoverRecipes().find((item) => recipeSelector(item) === selector);
+    assert.deepEqual(validateRecipe(recipe), []);
+  }
 });
 
 test('marks the unauthenticated Kafka and Pulsar development recipes explicitly', () => {

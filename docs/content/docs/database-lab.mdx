@@ -43,7 +43,7 @@ etcd creates the `root` user with password `123456`, grants the root role, then 
 DB_PORT=2379 ETCD_PEER_PORT=2380 make db DB=etcd@3.7
 ```
 
-Qdrant uses `123456` as its administrator API key, passed as the `api-key` HTTP header rather than a username/password pair. Its HTTP and gRPC ports default to `6334` and `6335`. To use the ports in the upstream Docker command, run:
+Qdrant uses `123456` as its administrator API key. In DBX, leave the username empty and enter the key as the password so the driver sends it in the `api-key` HTTP header. Its HTTP and gRPC ports default to `6334` and `6335`. To use the ports in the upstream Docker command, run:
 
 ```bash
 DB_PORT=6333 QDRANT_GRPC_PORT=6334 make db DB=qdrant@1.8
