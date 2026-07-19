@@ -40,6 +40,22 @@ const TRANSACTION_KEYWORDS = new Set(["begin", "start", "commit", "rollback", "a
 const EXPLAIN_OPTION_KEYWORDS = new Set(["explain", "analyze", "analyse", "verbose", "query", "plan", "format", "type", "costs", "buffers", "timing", "summary", "settings", "wal", "generic_plan"]);
 const PRIMARY_STATEMENT_KEYWORDS = new Set([...READ_KEYWORDS, ...WRITE_KEYWORDS, ...DDL_KEYWORDS, ...TRANSACTION_KEYWORDS, "with", "copy", "pragma", "use", "set"]);
 const SAFE_READ_PRAGMA_NAMES = new Set(["table_info", "table_xinfo", "index_list", "index_info", "foreign_key_list", "database_list", "compile_options", "data_version"]);
+const SIDE_EFFECT_SELECT_FUNCTIONS = new Set([
+  "lo_create",
+  "lo_import",
+  "lo_unlink",
+  "nextval",
+  "pg_advisory_lock",
+  "pg_advisory_unlock",
+  "pg_advisory_unlock_all",
+  "pg_advisory_xact_lock",
+  "pg_cancel_backend",
+  "pg_reload_conf",
+  "pg_terminate_backend",
+  "pg_try_advisory_lock",
+  "pg_try_advisory_xact_lock",
+  "setval",
+]);
 const RISK_ORDER: Record<SqlRiskLevel, number> = { read: 0, write: 1, ddl: 2, transaction: 3, unknown: 4 };
 
 export function splitSqlStatementsForSafety(sql: string, options?: SqlTextOptions): string[] {
@@ -136,11 +152,11 @@ function classifyTokens(tokens: SqlRiskToken[]): SqlRiskStatementAssessment {
   const firstKeyword = useful.find((token) => /^[a-z_]/i.test(token.text))?.normalized;
   if (!firstKeyword) return { risk: "unknown" };
   if (READ_KEYWORDS.has(firstKeyword)) {
-    return { risk: firstKeyword === "select" && hasTopLevelSelectInto(useful) ? "write" : "read", firstKeyword };
+    return { risk: firstKeyword === "select" && selectTokensAreWriteCapable(useful) ? "write" : "read", firstKeyword };
   }
   if (firstKeyword === "with") return { risk: highestRiskInTokens(useful) ?? "read", firstKeyword };
   if (firstKeyword === "explain") return classifyExplainTokens(useful);
-  if (firstKeyword === "copy") return { risk: classifyCopyTokens(useful), firstKeyword };
+  if (firstKeyword === "copy") return { risk: "write", firstKeyword };
   if (firstKeyword === "pragma") return { risk: classifyPragmaTokens(useful), firstKeyword };
   if (firstKeyword === "use") return { risk: "read", firstKeyword };
   if (WRITE_KEYWORDS.has(firstKeyword)) return { risk: "write", firstKeyword };
@@ -158,12 +174,6 @@ function classifyExplainTokens(tokens: SqlRiskToken[]): SqlRiskStatementAssessme
   return { risk: inner.risk, firstKeyword: inner.firstKeyword ?? "explain" };
 }
 
-function classifyCopyTokens(tokens: SqlRiskToken[]): SqlRiskLevel {
-  if (tokens.some((token) => token.normalized === "from")) return "write";
-  if (tokens.some((token) => token.normalized === "to")) return "read";
-  return "unknown";
-}
-
 function classifyPragmaTokens(tokens: SqlRiskToken[]): SqlRiskLevel {
   const name = tokens.find((token, index) => index > 0 && /^[a-z_]/i.test(token.text))?.normalized;
   if (name && SAFE_READ_PRAGMA_NAMES.has(name) && !tokens.some((token) => token.text === "=")) return "read";
@@ -171,12 +181,38 @@ function classifyPragmaTokens(tokens: SqlRiskToken[]): SqlRiskLevel {
 }
 
 function highestRiskInTokens(tokens: SqlRiskToken[]): SqlRiskLevel | undefined {
-  let result: SqlRiskLevel | undefined;
+  let result: SqlRiskLevel | undefined = selectTokensAreWriteCapable(tokens) ? "write" : undefined;
   for (const token of tokens) {
     const risk = WRITE_KEYWORDS.has(token.normalized) ? "write" : DDL_KEYWORDS.has(token.normalized) ? "ddl" : TRANSACTION_KEYWORDS.has(token.normalized) ? "transaction" : undefined;
     if (risk && (!result || RISK_ORDER[risk] > RISK_ORDER[result])) result = risk;
   }
   return result;
+}
+
+function selectTokensAreWriteCapable(tokens: SqlRiskToken[]): boolean {
+  return hasTopLevelSelectInto(tokens) || hasTopLevelLockingClause(tokens) || callsKnownSideEffectFunction(tokens);
+}
+
+function callsKnownSideEffectFunction(tokens: SqlRiskToken[]): boolean {
+  return tokens.some((token, index) => SIDE_EFFECT_SELECT_FUNCTIONS.has(token.normalized) && tokens[index + 1]?.text === "(");
+}
+
+function hasTopLevelLockingClause(tokens: SqlRiskToken[]): boolean {
+  let depth = 0;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index]?.text === "(") depth += 1;
+    else if (tokens[index]?.text === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && tokens[index]?.normalized === "for") {
+      const clause = tokens.slice(index + 1, index + 4).map((token) => token.normalized);
+      if (
+        clause[0] === "update"
+        || clause[0] === "share"
+        || (clause[0] === "no" && clause[1] === "key" && clause[2] === "update")
+        || (clause[0] === "key" && clause[1] === "share")
+      ) return true;
+    }
+  }
+  return false;
 }
 
 function hasTopLevelSelectInto(tokens: SqlRiskToken[]): boolean {

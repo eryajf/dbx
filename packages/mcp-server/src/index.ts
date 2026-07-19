@@ -14,12 +14,10 @@ import {
   effectiveMcpSqlSafety,
   formatCell,
   formatSchemaContext,
-  hasManagedMcpPolicy,
-  isMcpConnectionEnabled,
-  isMcpConnectionReadOnly,
+  isConnectionAllowedByMcpPolicy,
+  isMcpReadOnly,
   isSqlRiskMutation,
   isMainModule,
-  mcpAccessMode,
   mcpReadOnlyReason,
   mdTable,
   notifyReload,
@@ -27,13 +25,17 @@ import {
   parseMongoWriteCommand,
   assessProductionSql,
   isLikelyMongoMutation,
+  mongoAggregateWriteStage,
+  mongoAggregateTargetsProductionDatabase,
   isProductionDatabase,
   postBridge,
   logSqlDiagnostic,
   splitSqlStatements,
   supportsHashLineComments,
+  supportsSqlQuery,
   type Backend,
   type ConnectionConfig,
+  type McpGlobalPolicy,
   type QueryResult,
   type RedisCommandResult,
 } from "@dbx-app/node-core";
@@ -48,6 +50,24 @@ function text(s: string) {
 
 function toolError(code: string, message: string) {
   return { ...text(`${code}: ${message}`), isError: true };
+}
+
+const BACKEND_POLICY_ERROR_CODES = [
+  "MCP_POLICY_UNAVAILABLE",
+  "MCP_READ_ONLY",
+  "CONNECTION_OUT_OF_SCOPE",
+  "CONNECTION_READ_ONLY",
+  "PRODUCTION_DATABASE_READ_ONLY",
+  "PRODUCTION_WRITE_BLOCKED",
+  "SQL_BLOCKED",
+  "REDIS_COMMAND_BLOCKED",
+] as const;
+
+function backendPolicyToolError(message: string): ReturnType<typeof toolError> | undefined {
+  const code = BACKEND_POLICY_ERROR_CODES.find((candidate) => message.includes(`${candidate}:`));
+  if (!code) return undefined;
+  const marker = `${code}:`;
+  return toolError(code, message.slice(message.indexOf(marker) + marker.length).trim());
 }
 
 function withDatabase(config: ConnectionConfig, database?: string): ConnectionConfig {
@@ -141,48 +161,83 @@ function connectionMatchesScope(config: ConnectionConfig, scope: McpScope): bool
   return !!scope.connectionName && config.name === scope.connectionName;
 }
 
-async function loadScopedConnections(backend: Backend, scope: McpScope): Promise<ConnectionConfig[]> {
-  const connections = (await backend.loadConnections()).filter(isMcpConnectionEnabled);
+async function loadMcpPolicy(backend: Backend): Promise<{ policy?: McpGlobalPolicy; error?: ReturnType<typeof toolError> }> {
+  try {
+    return { policy: await backend.loadMcpGlobalPolicy() };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: backendPolicyToolError(message) ?? toolError("MCP_POLICY_UNAVAILABLE", message) };
+  }
+}
+
+async function loadScopedConnections(backend: Backend, scope: McpScope, policy: McpGlobalPolicy): Promise<ConnectionConfig[]> {
+  const connections = (await backend.loadConnections()).filter((config) => isConnectionAllowedByMcpPolicy(config, policy));
   if (!scopeEnabled(scope)) return connections;
   return connections.filter((config) => connectionMatchesScope(config, scope));
 }
 
-async function connectionManagementBlocked(backend: Backend): Promise<boolean> {
-  return (await backend.loadConnections()).some(hasManagedMcpPolicy);
+function readOnlyToolError(config: ConnectionConfig, policy: McpGlobalPolicy): ReturnType<typeof toolError> {
+  return toolError(policy.readOnly ? "MCP_READ_ONLY" : "CONNECTION_READ_ONLY", mcpReadOnlyReason(config, policy));
 }
 
-async function resolveConnection(backend: Backend, scope: McpScope, requestedId?: string, requestedName?: string): Promise<{ config?: ConnectionConfig; error?: ReturnType<typeof toolError> }> {
+async function connectionManagementError(backend: Backend): Promise<ReturnType<typeof toolError> | undefined> {
+  const loaded = await loadMcpPolicy(backend);
+  if (loaded.error) return loaded.error;
+  if (loaded.policy!.readOnly) {
+    return toolError("MCP_READ_ONLY", "DBX global MCP read-only mode is enabled. Connection management is not allowed.");
+  }
+  return undefined;
+}
+
+async function resolveConnection(
+  backend: Backend,
+  scope: McpScope,
+  requestedId?: string,
+  requestedName?: string,
+): Promise<{ config?: ConnectionConfig; policy?: McpGlobalPolicy; error?: ReturnType<typeof toolError> }> {
+  const loaded = await loadMcpPolicy(backend);
+  if (loaded.error) return { error: loaded.error };
+  const policy = loaded.policy!;
+  const connections = await backend.loadConnections();
   // connection_id takes priority over connection_name when both are provided.
   if (requestedId?.trim()) {
-    const connections = await backend.loadConnections();
     const config = connections.find((c) => c.id === requestedId.trim());
     if (!config) return { error: toolError("CONNECTION_NOT_FOUND", `Connection with id "${requestedId}" not found.`) };
-    if (!isMcpConnectionEnabled(config)) {
+    if (!isConnectionAllowedByMcpPolicy(config, policy)) {
       return { error: toolError("CONNECTION_OUT_OF_SCOPE", `Connection "${requestedId}" is not available to MCP.`) };
     }
     // In scoped mode, verify the resolved connection is within the scope.
     if (scopeEnabled(scope) && !connectionMatchesScope(config, scope)) {
       return { error: toolError("CONNECTION_OUT_OF_SCOPE", `Connection "${requestedId}" is outside this DBX AI session scope.`) };
     }
-    return { config };
+    return { config, policy };
   }
 
   if (!scopeEnabled(scope)) {
     if (!requestedName?.trim()) return { error: toolError("CONNECTION_NOT_FOUND", "Connection name is required.") };
-    const connections = (await backend.loadConnections()).filter(isMcpConnectionEnabled);
-    const matching = connections.filter((c) => c.name.toLowerCase() === requestedName.trim().toLowerCase());
-    if (matching.length === 0) return { error: toolError("CONNECTION_NOT_FOUND", `Connection "${requestedName}" not found.`) };
+    const named = connections.filter((c) => c.name.toLowerCase() === requestedName.trim().toLowerCase());
+    const matching = named.filter((config) => isConnectionAllowedByMcpPolicy(config, policy));
+    if (matching.length === 0) {
+      const code = named.length > 0 ? "CONNECTION_OUT_OF_SCOPE" : "CONNECTION_NOT_FOUND";
+      return { error: toolError(code, `Connection "${requestedName}" ${named.length > 0 ? "is not available to MCP" : "not found"}.`) };
+    }
     if (matching.length > 1) {
       const lines = matching.map((c) => `- ${c.id}: ${c.db_type} @ ${c.host}:${c.port}`);
       return {
         error: toolError("AMBIGUOUS_CONNECTION", `Multiple connections found with name "${requestedName}". Please specify connection_id:\n${lines.join("\n")}`),
       };
     }
-    return { config: matching[0] };
+    return { config: matching[0], policy };
   }
 
-  const scopedConnections = await loadScopedConnections(backend, scope);
-  if (scopedConnections.length === 0) return { error: toolError("CONNECTION_NOT_FOUND", "No scoped DBX connections were found.") };
+  const sessionScopedConnections = connections.filter((config) => connectionMatchesScope(config, scope));
+  const scopedConnections = sessionScopedConnections.filter((config) => isConnectionAllowedByMcpPolicy(config, policy));
+  if (scopedConnections.length === 0) {
+    const code = sessionScopedConnections.length > 0 ? "CONNECTION_OUT_OF_SCOPE" : "CONNECTION_NOT_FOUND";
+    return { error: toolError(code, sessionScopedConnections.length > 0
+      ? "The DBX AI session scope is outside the global MCP connection allowlist."
+      : "No scoped DBX connections were found.") };
+  }
   if (requestedName?.trim()) {
     const value = requestedName.trim();
     const matching = scopedConnections.filter((config) => config.id === value || config.name.toLowerCase() === value.toLowerCase());
@@ -193,10 +248,51 @@ async function resolveConnection(backend: Backend, scope: McpScope, requestedId?
       const lines = matching.map((config) => `- ${config.id}: ${config.db_type} @ ${config.host}:${config.port}`);
       return { error: toolError("AMBIGUOUS_CONNECTION", `Multiple scoped connections found with name "${requestedName}". Please specify connection_id:\n${lines.join("\n")}`) };
     }
-    return { config: matching[0] };
+    return { config: matching[0], policy };
   }
-  if (scopedConnections.length === 1) return { config: scopedConnections[0] };
+  if (scopedConnections.length === 1) return { config: scopedConnections[0], policy };
   return { error: toolError("CONNECTION_REQUIRED", "This MCP session includes multiple DBX connections. Specify connection_id or connection_name.") };
+}
+
+function validateQueryPolicy(
+  config: ConnectionConfig,
+  policy: McpGlobalPolicy,
+  sql: string,
+  database: string | undefined,
+  allowMultipleStatements = false,
+): { safety?: ReturnType<typeof effectiveMcpSqlSafety>; error?: ReturnType<typeof toolError> } {
+  const safety = effectiveMcpSqlSafety(config, policy);
+  if (config.db_type === "mongodb") {
+    const aggregate = parseMongoAggregateCommand(sql);
+    const write = parseMongoWriteCommand(sql);
+    const mutation = !!write || !!(aggregate && mongoAggregateWriteStage(aggregate.pipeline)) || isLikelyMongoMutation(sql);
+    if (mutation && isMcpReadOnly(config, policy)) return { error: readOnlyToolError(config, policy) };
+    const decision = aggregate
+      ? evaluateMongoAggregateSafety(aggregate, safety)
+      : write
+        ? evaluateMongoWriteSafety(write, safety)
+        : undefined;
+    if (decision && !decision.allowed) return { error: toolError("SQL_BLOCKED", decision.reason ?? "Query blocked.") };
+    const targetDatabase = database ?? config.database;
+    const targetsProduction = aggregate
+      ? mongoAggregateTargetsProductionDatabase(config, targetDatabase, aggregate.pipeline)
+      : isProductionDatabase(config, targetDatabase);
+    if (mutation && targetsProduction) {
+      return { error: toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot execute writes against a production database. Return the command for a user to review and run in DBX.") };
+    }
+    return { safety };
+  }
+
+  const hashLineComments = supportsHashLineComments(config.db_type);
+  const risk = classifySqlRisk(sql, { hashLineComments }).risk;
+  if (isSqlRiskMutation(risk) && isMcpReadOnly(config, policy)) return { error: readOnlyToolError(config, policy) };
+  const decision = evaluateSqlSafety(sql, { ...safety, allowMultipleStatements, hashLineComments });
+  if (!decision.allowed) return { error: toolError("SQL_BLOCKED", decision.reason ?? "SQL blocked.") };
+  const production = assessProductionSql(sql, config, database ?? config.database);
+  if (production.active && production.isMutation) {
+    return { error: toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot execute writes against a production database. Return the SQL for a user to review and run in DBX.") };
+  }
+  return { safety };
 }
 
 export function createDbxMcpServer(backend: Backend, options: { isWebMode?: boolean } = {}): McpServer {
@@ -209,10 +305,19 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
   });
 
   server.tool("dbx_list_connections", "List database connections available to this MCP session", {}, async () => {
-    const connections = await loadScopedConnections(backend, scope);
+    const loaded = await loadMcpPolicy(backend);
+    if (loaded.error) return loaded.error;
+    const connections = await loadScopedConnections(backend, scope, loaded.policy!);
     if (connections.length === 0) return text("No MCP-enabled connections are available in DBX.");
-    const rows = connections.map((c) => [c.id, c.name, c.db_type, c.host, String(c.port), c.database || "", mcpAccessMode(c)]);
-    return text(mdTable(["ID", "Name", "Type", "Host", "Port", "Database", "MCP Access"], rows));
+    const rows = connections.map((c) => {
+      const access = isMcpReadOnly(c, loaded.policy!)
+        ? "read_only"
+        : loaded.policy!.allowDangerousSql
+          ? "high_risk_write"
+          : "safe_write";
+      return [c.id, c.name, c.db_type, c.host, String(c.port), c.database || "", access];
+    });
+    return text(mdTable(["ID", "Name", "Type", "Host", "Port", "Database", "Access"], rows));
   });
 
   server.tool(
@@ -269,52 +374,42 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
     },
     async ({ connection_id, connection_name, database, sql }) => {
       logSqlDiagnostic("dbx_execute_query", sql, { connection_id, connection_name, database });
-      const { config, error } = await resolveConnection(backend, scope, connection_id, connection_name);
+      const { config, policy, error } = await resolveConnection(backend, scope, connection_id, connection_name);
       if (error) return error;
       const scopedConfig = config!;
       if (scopedConfig.db_type === "redis") {
         return toolError("REDIS_COMMAND_REQUIRED", "Redis connections do not accept SQL through dbx_execute_query. Use dbx_execute_redis_command with a Redis command such as GET key or INFO.");
       }
-      const safetyOptions = effectiveMcpSqlSafety(scopedConfig);
-      if (scopedConfig.db_type !== "mongodb") {
-        const hashLineComments = supportsHashLineComments(scopedConfig.db_type);
-        const risk = classifySqlRisk(sql, { hashLineComments }).risk;
-        if (isMcpConnectionReadOnly(scopedConfig) && isSqlRiskMutation(risk)) {
-          return toolError("CONNECTION_READ_ONLY", mcpReadOnlyReason(scopedConfig));
-        }
-        const safety = evaluateSqlSafety(sql, { ...safetyOptions, allowMultipleStatements: true, hashLineComments });
-        if (!safety.allowed) return toolError("SQL_BLOCKED", safety.reason ?? "SQL blocked.");
-        const production = assessProductionSql(sql, scopedConfig, database ?? scope.database ?? scopedConfig.database);
-        if (production.active && production.isMutation) {
-          return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot execute writes against a production database. Return the SQL for a user to review and run in DBX.");
-        }
-      } else {
-        const aggregate = parseMongoAggregateCommand(sql);
-        const write = parseMongoWriteCommand(sql);
-        const mongoSafety = aggregate
-          ? evaluateMongoAggregateSafety(aggregate, safetyOptions)
-          : write
-            ? evaluateMongoWriteSafety(write, safetyOptions)
-            : undefined;
-        if (mongoSafety && !mongoSafety.allowed) {
-          return toolError(isMcpConnectionReadOnly(scopedConfig) ? "CONNECTION_READ_ONLY" : "SQL_BLOCKED", isMcpConnectionReadOnly(scopedConfig) ? mcpReadOnlyReason(scopedConfig) : (mongoSafety.reason ?? "Query blocked."));
-        }
-        if (isProductionDatabase(scopedConfig, database ?? scope.database ?? scopedConfig.database) && isLikelyMongoMutation(sql)) {
-          return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot execute writes against a production database. Return the command for a user to review and run in DBX.");
-        }
-      }
-      // MongoDB shell commands don't fit the SQL safety evaluator; the backend
-      // (node-core executeQuery) applies command-aware read/write gating.
       try {
         const statements = scopedConfig.db_type === "mongodb" ? [sql] : splitSqlStatements(sql, { hashLineComments: supportsHashLineComments(scopedConfig.db_type) });
+        if (statements.length === 0) return toolError("SQL_BLOCKED", "SQL is empty.");
+        if (scopedConfig.db_type !== "mongodb" && statements.length > 1) {
+          const batchValidation = validateQueryPolicy(scopedConfig, policy!, sql, database ?? scope.database, true);
+          if (batchValidation.error) return batchValidation.error;
+        }
         const results = [];
-        for (const statement of statements) {
-          results.push(await backend.executeQuery(withDatabase(scopedConfig, database ?? scope.database), statement, { safety: safetyOptions }));
+        for (let index = 0; index < statements.length; index++) {
+          // Re-resolve policy and scope immediately before every statement so a
+          // setting change takes effect within an existing MCP process.
+          const refreshed = await resolveConnection(backend, scope, connection_id, connection_name);
+          if (refreshed.error) return refreshed.error;
+          const statement = statements[index];
+          const targetDatabase = database ?? scope.database;
+          const validation = validateQueryPolicy(refreshed.config!, refreshed.policy!, statement, targetDatabase);
+          if (validation.error) {
+            if (statements.length > 1 && validation.error.content[0]?.type === "text") {
+              validation.error.content[0].text = validation.error.content[0].text.replace(": ", `: Statement ${index + 1}: `);
+            }
+            return validation.error;
+          }
+          results.push(await backend.executeQuery(withDatabase(refreshed.config!, targetDatabase), statement, { safety: validation.safety }));
         }
         if (results.length === 1) return labeledText(scopedConfig, formatQueryToolResult(results[0]).content[0].text);
         return labeledText(scopedConfig, results.map((result, index) => formatQueryToolResult(result, `Statement ${index + 1}`).content[0].text).join("\n\n"));
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
+        const policyError = backendPolicyToolError(msg);
+        if (policyError) return policyError;
         return toolError("QUERY_ERROR", msg);
       }
     },
@@ -330,7 +425,7 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
       command: z.string().describe("Redis command to execute, for example: GET mykey, INFO, or DBSIZE"),
     },
     async ({ connection_id, connection_name, db, command }) => {
-      const { config, error } = await resolveConnection(backend, scope, connection_id, connection_name);
+      const { config, policy, error } = await resolveConnection(backend, scope, connection_id, connection_name);
       if (error) return error;
       const scopedConfig = config!;
       if (scopedConfig.db_type !== "redis") {
@@ -339,9 +434,11 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
       if (!backend.executeRedisCommand) {
         return toolError("UNSUPPORTED_BACKEND", "This DBX backend does not support Redis command execution.");
       }
-      const safety = evaluateRedisCommandSafety(command, effectiveMcpSqlSafety(scopedConfig));
+      const safety = evaluateRedisCommandSafety(command, effectiveMcpSqlSafety(scopedConfig, policy!));
       if (!safety.allowed) {
-        return toolError(isMcpConnectionReadOnly(scopedConfig) ? "CONNECTION_READ_ONLY" : "REDIS_COMMAND_BLOCKED", isMcpConnectionReadOnly(scopedConfig) ? mcpReadOnlyReason(scopedConfig) : (safety.reason ?? "Redis command blocked."));
+        return isMcpReadOnly(scopedConfig, policy!)
+          ? readOnlyToolError(scopedConfig, policy!)
+          : toolError("REDIS_COMMAND_BLOCKED", safety.reason ?? "Redis command blocked.");
       }
       if (isProductionDatabase(scopedConfig, String(defaultRedisDb(scopedConfig, scope, db))) && safety.safety !== "allowed") {
         return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot execute write or dangerous Redis commands against a production database.");
@@ -349,10 +446,13 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
       try {
         const result = await backend.executeRedisCommand(scopedConfig, defaultRedisDb(scopedConfig, scope, db), command, {
           skipSafetyCheck: safety.skipSafetyCheck,
+          mcpRequest: true,
         });
         return labeledText(scopedConfig, formatRedisCommandToolResult(result).content[0].text);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
+        const policyError = backendPolicyToolError(msg);
+        if (policyError) return policyError;
         return toolError("REDIS_COMMAND_ERROR", msg);
       }
     },
@@ -399,9 +499,8 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
         driver_profile: z.string().optional().describe("Driver profile (e.g. 'gbase8a', 'gbase8s')"),
       },
       async ({ name, db_type, host, port, username, password, database, ssl, driver_profile }) => {
-        if (await connectionManagementBlocked(backend)) {
-          return toolError("MCP_POLICY_MANAGED", "MCP connection management is disabled while DBX contains a disabled or read-only MCP connection policy.");
-        }
+        const managementError = await connectionManagementError(backend);
+        if (managementError) return managementError;
         const existing = await backend.findConnection(name);
         if (existing) return text(`Connection "${name}" already exists.`);
         const DEFAULT_PORTS: Record<string, number> = {
@@ -415,6 +514,8 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
         };
         const resolvedPort = port ?? DEFAULT_PORTS[db_type] ?? (FILE_CAPABLE_CONNECTION_TYPES.has(db_type) ? 0 : undefined);
         if (resolvedPort === undefined) return text("Port is required for this database type.");
+        const refreshedManagementError = await connectionManagementError(backend);
+        if (refreshedManagementError) return refreshedManagementError;
         const config = await backend.addConnection({
           name,
           db_type,
@@ -426,7 +527,7 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
           ssl,
           driver_profile,
           ssh_enabled: false,
-        } as Omit<ConnectionConfig, "id">);
+        } as Omit<ConnectionConfig, "id">, { mcpRequest: true });
         await notifyReload();
         return text(`Connection "${config.name}" added (id: ${config.id}).`);
       },
@@ -440,36 +541,17 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
         connection_id: z.string().optional().describe("Unique ID of the DBX connection (use this to remove by id instead of name)"),
       },
       async ({ connection_name, connection_id }) => {
-        if (await connectionManagementBlocked(backend)) {
-          return toolError("MCP_POLICY_MANAGED", "MCP connection management is disabled while DBX contains a disabled or read-only MCP connection policy.");
-        }
-        if (connection_id?.trim()) {
-          if (backend.removeConnectionById) {
-            const removed = await backend.removeConnectionById(connection_id.trim());
-            if (!removed) return toolError("CONNECTION_NOT_FOUND", `Connection with id "${connection_id}" not found.`);
-            await notifyReload();
-            return text(`Connection with id "${connection_id}" removed.`);
-          }
-          // Fallback: resolve by id then remove by name
-          const connections = await backend.loadConnections();
-          const config = connections.find((c) => c.id === connection_id.trim());
-          if (!config) return toolError("CONNECTION_NOT_FOUND", `Connection with id "${connection_id}" not found.`);
-          const removed = await backend.removeConnection(config.name);
-          if (!removed) return toolError("CONNECTION_NOT_FOUND", `Connection "${config.name}" could not be removed.`);
-          await notifyReload();
-          return text(`Connection "${config.name}" (id: ${config.id}) removed.`);
-        }
-        const allConnections = await backend.loadConnections();
-        const matching = allConnections.filter((c) => c.name.toLowerCase() === connection_name.toLowerCase());
-        if (matching.length === 0) return toolError("CONNECTION_NOT_FOUND", `Connection "${connection_name}" not found.`);
-        if (matching.length > 1) {
-          const lines = matching.map((c) => `- ${c.id}: ${c.db_type} @ ${c.host}:${c.port}`);
-          return toolError("AMBIGUOUS_CONNECTION", `Multiple connections found with name "${connection_name}". Please specify connection_id:\n${lines.join("\n")}`);
-        }
-        const removed = await backend.removeConnection(connection_name);
-        if (!removed) return toolError("CONNECTION_NOT_FOUND", `Connection "${connection_name}" not found.`);
+        const resolved = await resolveConnection(backend, scope, connection_id, connection_name);
+        if (resolved.error) return resolved.error;
+        const target = resolved.config!;
+        const managementError = await connectionManagementError(backend);
+        if (managementError) return managementError;
+        const removed = backend.removeConnectionById
+          ? await backend.removeConnectionById(target.id, { mcpRequest: true })
+          : await backend.removeConnection(target.name, { mcpRequest: true });
+        if (!removed) return toolError("CONNECTION_NOT_FOUND", `Connection "${target.name}" (id: ${target.id}) not found.`);
         await notifyReload();
-        return text(`Connection "${connection_name}" removed.`);
+        return text(`Connection "${target.name}" (id: ${target.id}) removed.`);
       },
     );
   }
@@ -504,42 +586,19 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
         database: z.string().optional().describe("Database name"),
       },
       async ({ connection_id, connection_name, sql, database }) => {
-        const { config, error } = await resolveConnection(backend, scope, connection_id, connection_name);
+        const { config, policy, error } = await resolveConnection(backend, scope, connection_id, connection_name);
         if (error) return error;
         const resolvedConfig = config!;
-        const safetyOptions = effectiveMcpSqlSafety(resolvedConfig);
-        if (resolvedConfig.db_type === "mongodb") {
-          const aggregate = parseMongoAggregateCommand(sql);
-          const write = parseMongoWriteCommand(sql);
-          const safety = aggregate
-            ? evaluateMongoAggregateSafety(aggregate, safetyOptions)
-            : write
-              ? evaluateMongoWriteSafety(write, safetyOptions)
-              : undefined;
-          if (safety && !safety.allowed) {
-            return toolError(isMcpConnectionReadOnly(resolvedConfig) ? "CONNECTION_READ_ONLY" : "SQL_BLOCKED", isMcpConnectionReadOnly(resolvedConfig) ? mcpReadOnlyReason(resolvedConfig) : (safety.reason ?? "Query blocked."));
-          }
-        } else {
-          const hashLineComments = supportsHashLineComments(resolvedConfig.db_type);
-          const risk = classifySqlRisk(sql, { hashLineComments }).risk;
-          if (isMcpConnectionReadOnly(resolvedConfig) && isSqlRiskMutation(risk)) {
-            return toolError("CONNECTION_READ_ONLY", mcpReadOnlyReason(resolvedConfig));
-          }
-          const safety = evaluateSqlSafety(sql, { ...safetyOptions, allowMultipleStatements: true, hashLineComments });
-          if (!safety.allowed) return toolError("SQL_BLOCKED", safety.reason ?? "SQL blocked.");
+        if (!supportsSqlQuery(resolvedConfig.db_type)) {
+          const replacement = resolvedConfig.db_type === "redis" ? "dbx_execute_redis_command" : "dbx_execute_query";
+          return toolError(
+            "UNSUPPORTED_OPERATION",
+            `dbx_execute_and_show only supports SQL connections. Use ${replacement} for ${resolvedConfig.db_type}.`,
+          );
         }
-        if (resolvedConfig.db_type === "mongodb") {
-          if (isProductionDatabase(resolvedConfig, database ?? scope.database ?? resolvedConfig.database) && isLikelyMongoMutation(sql)) {
-            return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot send writes against a production database to DBX.");
-          }
-        } else {
-          const production = assessProductionSql(sql, resolvedConfig, database ?? scope.database ?? resolvedConfig.database);
-          if (production.active && production.isMutation) {
-            return toolError("PRODUCTION_WRITE_BLOCKED", "MCP cannot send writes against a production database to DBX.");
-          }
-        }
-        // MongoDB shell commands bypass the SQL safety evaluator; pass MCP
-        // safety flags to the desktop executor for command-aware gating.
+        const targetDatabase = database ?? scope.database;
+        const validation = validateQueryPolicy(resolvedConfig, policy!, sql, targetDatabase, true);
+        if (validation.error) return validation.error;
         logSqlDiagnostic("dbx_execute_in_app", sql, { connection_id: resolvedConfig.id, connection_name: resolvedConfig.name, database });
         return bridgeRequest(
           "/execute-query",
@@ -548,10 +607,8 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
             connection_name: resolvedConfig.name,
             sql,
             database,
-            allow_writes: safetyOptions.allowWrites,
-            allow_dangerous: safetyOptions.allowDangerous,
           },
-          "Query sent to DBX",
+          "Query executed and shown in DBX",
         );
       },
     );
@@ -563,7 +620,30 @@ export function createDbxMcpServer(backend: Backend, options: { isWebMode?: bool
 async function bridgeRequest(path: string, body: Record<string, unknown>, successMsg: string) {
   const res = await postBridge(path, body);
   if (res.ok) return text(successMsg);
-  const message = res.text.startsWith("DBX is not running") ? res.text : `Failed: ${res.text}`;
+  let errorText = res.text;
+  try {
+    const payload = JSON.parse(res.text) as unknown;
+    if (payload && typeof payload === "object" && !Array.isArray(payload) && typeof (payload as { error?: unknown }).error === "string") {
+      errorText = (payload as { error: string }).error;
+    }
+  } catch {
+    // The desktop bridge also uses plain-text errors for a few UI endpoints.
+  }
+  for (const code of [
+    "MCP_POLICY_UNAVAILABLE",
+    "MCP_READ_ONLY",
+    "CONNECTION_OUT_OF_SCOPE",
+    "CONNECTION_READ_ONLY",
+    "PRODUCTION_DATABASE_READ_ONLY",
+    "SQL_BLOCKED",
+    "UNSUPPORTED_OPERATION",
+    "QUERY_ERROR",
+  ] as const) {
+    const marker = `${code}:`;
+    const markerIndex = errorText.indexOf(marker);
+    if (markerIndex >= 0) return toolError(code, errorText.slice(markerIndex + marker.length).trim());
+  }
+  const message = errorText.startsWith("DBX is not running") ? errorText : `Failed: ${errorText}`;
   return toolError("DBX_NOT_RUNNING", message);
 }
 

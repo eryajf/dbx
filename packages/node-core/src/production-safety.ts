@@ -86,6 +86,90 @@ export function isProductionDatabase(config: ConnectionConfig | undefined, datab
   return !!selected && (config.production_databases ?? []).some((name) => normalizeProductionDatabase(name) === selected);
 }
 
+interface MongoAggregateWriteTargets {
+  hasWriteStage: boolean;
+  databases: string[];
+  uncertain: boolean;
+}
+
+/**
+ * Checks the destination database of MongoDB $out/$merge stages. Those stages
+ * may write to a different database than the one used to read the pipeline.
+ */
+export function mongoAggregateTargetsProductionDatabase(
+  config: ConnectionConfig | undefined,
+  activeDatabase: string | undefined,
+  pipelineJson: string,
+): boolean {
+  if (!config) return false;
+  if (isProductionDatabase(config, activeDatabase)) return true;
+
+  const targets = mongoAggregateWriteTargets(pipelineJson, activeDatabase);
+  if (!targets.hasWriteStage) return false;
+  if (targets.uncertain) return true;
+  return targets.databases.some((database) => isProductionDatabase(config, database));
+}
+
+function mongoAggregateWriteTargets(pipelineJson: string, activeDatabase: string | undefined): MongoAggregateWriteTargets {
+  let pipeline: unknown;
+  try {
+    pipeline = JSON.parse(pipelineJson);
+  } catch {
+    return { hasWriteStage: true, databases: [], uncertain: true };
+  }
+  if (!Array.isArray(pipeline)) return { hasWriteStage: true, databases: [], uncertain: true };
+
+  const databases = new Set<string>();
+  let hasWriteStage = false;
+  let uncertain = false;
+  const currentDatabase = String(activeDatabase ?? "").trim();
+
+  const addCurrentDatabase = () => {
+    if (currentDatabase) databases.add(currentDatabase);
+    else uncertain = true;
+  };
+
+  for (const stage of pipeline) {
+    if (!stage || typeof stage !== "object" || Array.isArray(stage)) continue;
+    const document = stage as Record<string, unknown>;
+    if (Object.prototype.hasOwnProperty.call(document, "$out")) {
+      hasWriteStage = true;
+      const target = document.$out;
+      if (typeof target === "string") {
+        addCurrentDatabase();
+      } else if (target && typeof target === "object" && !Array.isArray(target)) {
+        const database = (target as Record<string, unknown>).db;
+        if (typeof database === "string" && database.trim()) databases.add(database);
+        else uncertain = true;
+      } else {
+        uncertain = true;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(document, "$merge")) {
+      hasWriteStage = true;
+      const target = document.$merge;
+      if (typeof target === "string") {
+        addCurrentDatabase();
+      } else if (target && typeof target === "object" && !Array.isArray(target)) {
+        const into = (target as Record<string, unknown>).into;
+        if (typeof into === "string") {
+          addCurrentDatabase();
+        } else if (into && typeof into === "object" && !Array.isArray(into)) {
+          const database = (into as Record<string, unknown>).db;
+          if (typeof database === "string" && database.trim()) databases.add(database);
+          else uncertain = true;
+        } else {
+          uncertain = true;
+        }
+      } else {
+        uncertain = true;
+      }
+    }
+  }
+
+  return { hasWriteStage, databases: [...databases], uncertain };
+}
+
 /**
  * Finds writes that target a marked production database, including a MySQL
  * USE switch or a qualified database.table reference in a statement batch.
@@ -94,7 +178,9 @@ export function assessProductionSql(sql: string, config: ConnectionConfig | unde
   const targetText = sqlTargetSafetyText(sql);
   const statements = splitTargetStatements(targetText.text);
   const hashLineComments = supportsHashLineComments(config?.db_type);
-  const isMutation = isSqlRiskMutation(classifySqlRisk(sql, { hashLineComments }).risk);
+  // USE changes pooled connection state. Treat it as a mutation for MCP
+  // production safety even though it does not modify rows by itself.
+  const isMutation = isSqlRiskMutation(classifySqlRisk(sql, { hashLineComments }).risk) || statements.some((statement) => USE_RE.test(statement));
   if (!isMutation || !config) return { active: isProductionDatabase(config, activeDatabase), isMutation, databases: [] };
   if (config.is_production) return { active: true, isMutation, databases: [] };
   if (isProductionDatabase(config, activeDatabase)) return { active: true, isMutation, databases: activeDatabase ? [activeDatabase] : [] };
@@ -120,6 +206,7 @@ function referencedDatabases(statements: string[], dbType: string, hashLineComme
     const useMatch = statement.match(USE_RE);
     if (useMatch?.[1]) {
       useDatabase = normalizeTargetDatabase(useMatch[1], quotedIdentifiers);
+      if (useDatabase) databases.add(useDatabase);
       continue;
     }
     if (!statementIsMutation) continue;

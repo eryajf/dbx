@@ -143,10 +143,45 @@ jobs:
             git push origin "refs/tags/${TAG}:refs/tags/${TAG}"
           fi
 
+  publish-mongo-shell:
+    name: Publish mongo-shell
+    runs-on: ubuntu-latest
+    needs: prepare
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.13.0
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Publish mongo-shell
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./packages/mongo-shell/package.json').version")"
+          if npm view "@dbx-app/mongo-shell@${VERSION}" version >/dev/null 2>&1; then
+            echo "@dbx-app/mongo-shell@${VERSION} already exists on npm; skipping."
+            exit 0
+          fi
+          pnpm --filter @dbx-app/mongo-shell publish --access public --provenance --no-git-checks
+
   publish-node-core:
     name: Publish node-core
     runs-on: ubuntu-latest
-    needs: prepare
+    needs: [prepare, publish-mongo-shell]
     outputs:
       published-or-existing: ${{ steps.publish.outputs.published_or_existing }}
 

@@ -1,294 +1,207 @@
-# MCP 访问策略与全局只读交接说明
+# MCP 中央访问策略交接说明
 
 ## 文档状态
 
 - 日期：2026-07-18
 - 分支：`issue_3696`
 - 关联 Issue：[#3696](https://github.com/t8y2/dbx/issues/3696)、[#3800](https://github.com/t8y2/dbx/issues/3800)
-- 用途：记录当前实现、测试结论、最新产品决策和后续开发步骤，便于在另一台电脑继续开发。
+- 状态：中央策略已实现，自动化检查通过；仍需使用真实数据库完成发布前人工验证。
+- 评审：软件 QA 与数据库专项复核均通过，`IS_PASS: YES`。
 
-## 最新产品决策
+## 最终产品决策
 
-DBX“设置 → MCP”中的“只读模式”应当是用户启用 MCP 全局只读的主要入口。
+MCP 权限集中在“设置 → MCP”管理，不再给每个连接增加 `disabled`、`read_only`、`read_write` 三态选项。
 
-用户不应为了让 MCP 整体只读，再逐个打开连接并配置只读。连接级 `mcp_access` 可以保留为高级、可选的纵深防护能力，用于禁用某个连接或让个别连接永久只读，但它不应成为启用全局只读的必需步骤。
-
-期望语义：
-
-1. 在 MCP 设置页打开“只读模式”后，所有 MCP 会话都不能通过 DBX 写入。
-2. 客户端设置 `DBX_MCP_ALLOW_WRITES=1` 不能覆盖 DBX 中已经打开的全局只读。
-3. 关闭全局只读后，连接级 `disabled`、`read_only` 和 DBX 通用连接只读仍然生效。
-4. 客户端环境变量只能进一步收紧权限，不能放宽 DBX 管理的策略。
-5. 会话连接范围继续支持多选，范围选择与读写权限彼此独立。
-
-建议的最终权限关系：
-
-```text
-effective_write_allowed =
-  client_allows_writes
-  AND global_mcp_policy_allows_writes
-  AND connection_mcp_policy_allows_writes
-  AND connection_general_policy_allows_writes
-  AND production_policy_allows_writes
-```
-
-任意一层拒绝写入，最终都必须拒绝。
-
-## 当前实现状态
-
-### 已实现
-
-- `ConnectionConfig` 新增 `mcp_access`：`disabled`、`read_only`、`read_write`。
-- 旧连接缺少该字段时默认按 `read_write` 处理。
-- MCP Server 会隐藏 `disabled` 连接，并阻止按 ID 或名称解析。
-- 连接级 MCP 只读已覆盖 SQL、MongoDB 和 Redis 的主要写入路径。
-- DBX 通用连接只读比 MCP 权限更强。
-- 客户端环境变量经过连接策略收紧，不能放宽连接级只读。
-- 会话连接范围已改为多选：
-  - 单选生成 `DBX_MCP_SCOPE_CONNECTION_ID`。
-  - 多选生成逗号分隔的 `DBX_MCP_SCOPE_CONNECTION_IDS`。
-  - 多连接会话不指定连接时返回 `CONNECTION_REQUIRED`。
-- 多选配置增加旧版 fail-closed 哨兵：
-
-```text
-DBX_MCP_SCOPE_CONNECTION_IDS=id-1,id-2
-DBX_MCP_SCOPE_CONNECTION_ID=__dbx_multi_scope_requires_updated_server__
-```
-
-新版 MCP Server 优先读取复数范围；旧版只会读取无效单选 ID，因此不会把不支持的多选配置误判为“未限制范围”。
-
-### 当前“只读模式”的实际行为
-
-MCP 设置页的“只读模式”目前只保存在前端 `localStorage`：
-
-```text
-dbx-mcp-config-readonly
-```
-
-打开开关后，页面只会在下方生成的客户端配置文本中附加：
-
-```text
-DBX_MCP_ALLOW_WRITES=0
-```
-
-它不会：
-
-- 自动修改外部 AI 客户端已经保存的 MCP 配置。
-- 自动重启外部 MCP Server 进程。
-- 保存成 MCP Server 可以直接读取的 DBX 全局策略。
-- 修改某个连接的 `mcp_access`。
-
-这与用户对“DBX 中已经打开只读”的直觉不一致，是下一步需要解决的核心体验问题。
-
-## 已完成的人工测试与结论
-
-测试使用本地工作区构建产物：
-
-```text
-command = /Users/eryajf/.nvm/versions/node/v22.21.1/bin/node
-args = /Users/eryajf/code/github/dbx-er/packages/mcp-server/dist/index.js
-```
-
-测试客户端环境变量为：
-
-```text
-DBX_MCP_ALLOW_WRITES=1
-DBX_MCP_SCOPE_CONNECTION_ID=d2d50c5a-1cef-4cf3-80c0-70234014049d
-```
-
-目标连接 `mysql-localhost` 的 MCP 权限仍是 `read_write`。因此 MCP 成功向 `aa.field_types_test` 新增了三条数据，ID 为 7、8、9。
-
-该结果符合当前实现，并不表示连接级只读拦截失效：
-
-- MCP 设置页虽然打开了“只读模式”，但外部客户端仍明确传入 `DBX_MCP_ALLOW_WRITES=1`。
-- 目标连接本身仍为 `mcp_access=read_write`。
-- MCP Server 同时收到“客户端允许写”和“连接允许写”，所以最终允许写入。
-
-这次测试证明了当前 UI 容易让用户误认为设置开关已经实时约束 MCP Server。
-
-## 下一步推荐方案
-
-### P0：增加 DBX 管理的全局 MCP 策略
-
-将 MCP 设置页的“只读模式”从纯配置生成器选项升级为 DBX 持久化安全策略。
-
-建议增加全局字段：
-
-```text
-mcp_read_only: boolean
-```
-
-默认值为 `false`，保持旧用户兼容。
-
-建议存入 SQLite 的 `app_settings.settings_json`。该表同时被桌面应用和本地 MCP Server 使用，适合作为 DBX 管理策略的单一事实来源。不要继续只存 `localStorage`。
-
-涉及位置：
-
-- Rust 设置模型与存储：
-  - `crates/dbx-core/src/storage.rs`
-  - `src-tauri/src/commands/app_settings.rs`
-- 前端设置模型：
-  - `apps/desktop/src/stores/settingsStore.ts`
-  - `apps/desktop/src/components/editor/EditorSettingsDialog.vue`
-- Node 本地存储读取：
-  - `packages/node-core/src/connections.ts`，或新增独立的 `mcp-settings.ts`
-- MCP 策略合并：
-  - `packages/node-core/src/mcp-policy.ts`
-  - `packages/mcp-server/src/index.ts`
-
-推荐让 MCP Server 在工具调用时读取最新全局策略，避免 DBX 中切换只读后必须重启 MCP 进程。如果考虑性能，可以做短时间缓存，但必须提供明确的失效机制。
-
-### P0：统一策略合并入口
-
-不要在 SQL、MongoDB、Redis 工具中分别拼装判断。建议扩展 `mcp-policy.ts`，统一计算：
+DBX 持久化一份中央策略：
 
 ```ts
 interface McpGlobalPolicy {
   readOnly: boolean;
-}
-
-effectiveMcpSqlSafety(config, globalPolicy, env)
-```
-
-优先级建议：
-
-1. `mcp_access=disabled`：不可见、不可访问。
-2. DBX 通用连接 `read_only=true`：禁止所有写入。
-3. 连接 `mcp_access=read_only`：禁止 MCP 写入。
-4. 全局 `mcp_read_only=true`：禁止所有 MCP 写入。
-5. 客户端 `DBX_MCP_ALLOW_WRITES=0`：收紧为只读。
-6. 客户端 `DBX_MCP_ALLOW_WRITES=1`：只有以上 DBX 策略都允许时才能写。
-7. 生产库保护继续作为独立的最终约束。
-
-### P0：调整 MCP 设置页文案和状态
-
-全局策略实现后：
-
-- “只读模式”文案应明确表示它会约束所有 MCP 客户端，而不仅是生成示例配置。
-- 生成的客户端配置仍可附加 `DBX_MCP_ALLOW_WRITES=0`，作为对旧 MCP Server 的兼容保护。
-- UI 保存失败时必须回滚开关并提示错误，不能只更新本地视觉状态。
-- 设置页应显示策略已保存，并说明 MCP 客户端环境变量无法覆盖该策略。
-
-连接编辑页中的“MCP 访问权限”建议保留，但文案应明确它是“单连接高级覆盖”：
-
-- `Disabled`：该连接完全不对 MCP 暴露。
-- `Read only`：即使全局允许写，该连接仍只读。
-- `Read and write`：服从全局 MCP 策略，不代表一定允许写。
-
-### P1：覆盖 Web 模式
-
-本地 MCP Server 可以直接读取 SQLite `app_settings`。Web 模式不能假设读取同一份本地文件，需要通过后端接口获得全局策略。
-
-建议扩展 `Backend`：
-
-```ts
-loadMcpGlobalPolicy(): Promise<McpGlobalPolicy>
-```
-
-- Desktop backend：从 `app_settings` 读取。
-- Web backend：调用 DBX Web API。
-- 测试 backend：显式返回默认策略。
-
-不能只修桌面直连路径，否则 Web MCP 仍会绕过设置页的全局只读。
-
-### P1：修复 npm 发布链路
-
-当前 npm 状态：
-
-- `@dbx-app/mcp-server@0.4.31` 已发布。
-- `@dbx-app/node-core@0.4.31` 已发布。
-- `@dbx-app/node-core@0.4.31` 依赖 `@dbx-app/mongo-shell@^0.1.0`。
-- `@dbx-app/mongo-shell@0.1.0` 未发布，并且工作区 package 标记为 `private: true`。
-
-因此全局升级 MCP Server 会在安装依赖时遇到 404。
-
-后续需要在以下方案中选择一种：
-
-1. 将 `mongo-shell` 改为可发布包，并加入 Node packages release workflow；或
-2. 将其构建产物打包进 `node-core`，不再作为 npm 运行时依赖。
-
-修复前继续使用工作区本地构建产物验证。
-
-## 本地继续开发方式
-
-在新电脑拉取分支并安装依赖：
-
-```bash
-cd /path/to/dbx
-pnpm install
-pnpm --filter @dbx-app/mcp-server build
-```
-
-客户端不要指向全局 `dbx-mcp-server`，而应指向当前工作区产物：
-
-```json
-{
-  "mcpServers": {
-    "dbx-local": {
-      "command": "/absolute/path/to/node",
-      "args": ["/absolute/path/to/dbx/packages/mcp-server/dist/index.js"]
-    }
-  }
+  allowDangerousSql: boolean;
+  allowedConnectionIds: string[] | null;
 }
 ```
 
-每次修改 `mcp-server`、`node-core` 或 `mongo-shell` 后重新构建，并重启对应 MCP 会话。
+UI 使用单一的“权限模式”选择器，内部仍以两个布尔字段兼容现有存储：
 
-本地构建仍可能显示版本 `0.4.30`，因为 MCP Server 报告的是工作区 `packages/mcp-server/package.json` 中的版本号。这不能用于判断是否运行了最新工作区代码，应以启动参数中的绝对 `dist/index.js` 路径为准。
+| UI 模式 | 内部模式值 | `readOnly` | `allowDangerousSql` |
+| ------- | ---------- | ---------- | ------------------- |
+| 只读 | `read_only` | `true` | `false` |
+| 数据读写 | `safe_write` | `false` | `false` |
+| 完全访问 | `high_risk_write` | `false` | `true` |
 
-## 后续验证清单
+- `allowedConnectionIds=null`：允许全部连接。
+- `allowedConnectionIds=[]`：不允许任何连接。
+- 非空数组：只允许其中的稳定连接 ID。
+- `readOnly=true`：仅允许 DBX 静态分类为读取的请求，阻止已识别的 MCP 数据库写入及连接新增、删除，`allowDangerousSql` 此时不生效。
+- `readOnly=false && allowDangerousSql=false`：数据读写，允许普通 `INSERT`、带有效过滤条件的 `UPDATE`/`DELETE`、MongoDB 带可验证有效过滤条件的更新/删除，以及 Redis 普通写入和明确键删除。
+- `readOnly=false && allowDangerousSql=true`：完全访问，在数据读写基础上允许全表 `UPDATE`/`DELETE`、DDL、`TRUNCATE`、MongoDB 清空/结构变更、Redis `FLUSH*` 及等价破坏性操作。
+- 通用连接 `read_only=true` 继续作为单连接写保护，并同时约束 DBX 与 MCP。
+- 生产库保护始终是权限上限，不能被高风险操作开关覆盖。
+- 新版 MCP Server 忽略客户端读写和高风险操作环境变量；当前生成配置不再包含权限或连接范围环境变量。旧客户端 scope 仅作为兼容层继续读取，并且只能收紧连接范围。
 
-### 全局只读
+最终连接范围：
 
-1. 所有连接保持 `mcp_access=read_write`。
-2. 在 DBX MCP 设置页打开全局只读。
-3. 客户端故意设置 `DBX_MCP_ALLOW_WRITES=1`。
-4. `SELECT 1` 成功。
-5. `UPDATE test_table SET id = id WHERE 1 = 0` 返回只读错误。
-6. 不逐个修改连接也能对多个连接生效。
+```text
+effective_connections =
+  stored_connections
+  INTERSECT global_allowed_connection_ids
+```
 
-### 连接级覆盖
+旧配置若仍声明客户端 scope，会在上述结果上继续取交集，但它不再是当前配置方式的一部分。
 
-1. 关闭全局只读。
-2. 连接 A 设置 `read_only`，连接 B 保持 `read_write`。
-3. 客户端设置 `DBX_MCP_ALLOW_WRITES=1`。
-4. A 写入返回 `CONNECTION_READ_ONLY`。
-5. B 的安全写入允许执行。
-6. 连接 C 设置 `disabled` 后不出现在 `dbx_list_connections` 中，也不能按 ID 访问。
+最终写权限：
 
-### 会话收紧
+```text
+effective_write_allowed =
+  NOT global_mcp_read_only
+  AND NOT connection_read_only
+  AND NOT production_protected
+```
 
-1. 全局只读关闭，连接为 `read_write`。
-2. 客户端设置 `DBX_MCP_ALLOW_WRITES=0`。
-3. 读取成功，写入返回 `SQL_BLOCKED`。
+高风险操作权限由 `allowDangerousSql` 决定，且仍受上述写权限约束。SQL 中仅出现 `WHERE` 不足以降级风险；缺少有效过滤条件以及 `WHERE TRUE`、`WHERE 1 = 1` 等无效条件仍按高风险操作处理。无法可靠分类的操作失败关闭。
 
-### 多选范围
+## 已实现内容
 
-1. 单选生成真实 `DBX_MCP_SCOPE_CONNECTION_ID`。
-2. 多选同时生成复数 ID 和旧版 fail-closed 哨兵。
-3. `dbx_list_connections` 只显示所选连接。
-4. 多连接时省略连接参数返回 `CONNECTION_REQUIRED`。
-5. 显式指定范围内连接后正常执行。
+### 持久化与 API
 
-### 数据库类型
+- 策略以 `app_settings.settings_json.mcp_global_policy` 原子保存，JSON 字段使用 `readOnly`、`allowDangerousSql`、`allowedConnectionIds`。
+- 缺少数据库、表、记录或策略字段时按未配置默认值处理：允许全部连接、允许数据读写。
+- JSON、SQLite 或 Web API 读取异常返回 `MCP_POLICY_UNAVAILABLE`，MCP 工具失败关闭。
+- Tauri 增加 `load_mcp_global_policy`、`save_mcp_global_policy` 命令。
+- Web 增加经现有认证中间件保护的 `GET/PUT /api/app-settings/mcp-policy`。
+- 通用 app settings 保存会保留并发写入的最新 MCP 策略，避免旧设置快照覆盖安全策略。
 
-对 SQL、MongoDB、Redis 分别验证：
+### MCP Server 与 Node backend
 
-- 读取命令允许。
-- 全局只读阻止写命令。
-- 连接级只读阻止写命令。
-- 客户端 `ALLOW_WRITES=1` 无法覆盖 DBX 策略。
+- `Backend` 增加 `loadMcpGlobalPolicy()`，桌面模式直接读取 SQLite，Web 模式调用策略 API。
+- 列表和连接解析始终应用中央 allowlist；旧配置中的客户端 scope 仅作为额外收窄条件兼容读取。
+- 按 ID 或名称访问范围外连接返回 `CONNECTION_OUT_OF_SCOPE`。
+- SQL 多语句在每条语句执行前重新读取策略；同一 MCP 进程无需重启即可响应设置切换。
+- SQL、MongoDB、Redis、`dbx_execute_and_show`、连接新增和删除均使用中央只读与高风险操作策略。
+- 删除连接前重新解析目标，不能按隐藏 ID 或名称删除 allowlist 外连接。
+- Web MCP 的 SQL、MongoDB、Redis 和连接保存请求携带 `X-DBX-MCP-Request: 1`，普通 Web UI 请求不携带，因此不受 MCP 全局只读影响。
+- Web MCP 连接新增、删除使用专用的单连接 `/api/connection/mcp/add` 与 `/api/connection/mcp/remove` 路由；服务端在同一 SQLite 事务中复核最新策略并只修改目标行，避免完整列表快照覆盖 Web UI 的并发连接修改。
 
-## 当前验证状态
+### Desktop bridge 与 Web 最终执行边界
 
-本轮代码由用户进行人工验证。助手没有运行测试、构建、lint 或格式化命令。
+- Desktop bridge 自身重新读取中央策略，不信任 Node 传入的 `allow_writes`、`allow_dangerous` 或 Redis `skip_safety_check`。
+- bridge 的连接解析、SQL、MongoDB 聚合/索引/文档写入、Redis 命令均检查 allowlist、全局只读、通用连接只读和生产库保护。
+- Web query、MongoDB 和 Redis 路由在检测到 MCP 来源标记时执行同样的末端校验。
+- MongoDB `$out`、`$merge` 只按顶层聚合阶段识别，避免普通字段值误报。
+- SQL 数据读写允许普通 `INSERT` 和带有效过滤条件的 `UPDATE`/`DELETE`；全表修改、DDL、`TRUNCATE` 以及无法可靠分类的写操作需要完全访问权限。
+- MongoDB 数据读写允许带可验证有效过滤条件的更新/删除；空过滤、`$where`/`$expr`/`$nor` 等不透明过滤器、`$out`/`$merge` 和结构变更需要完全访问权限。
+- Redis 数据读写允许已明确分类的普通键值写入和明确键删除；`FLUSHDB`、`FLUSHALL` 等全局破坏性命令需要完全访问权限，未知命令需要完全访问权限。
 
-提交前建议由用户根据时间选择执行：
+### 桌面与 Web 设置 UI
 
-```bash
-pnpm --filter @dbx-app/node-core test
-pnpm --filter @dbx-app/mcp-server test
+- MCP 设置页同时支持桌面和 Web 模式。
+- 两个底层布尔权限字段在 UI 中收敛为互斥的“只读 / 数据读写 / 完全访问”三级选择，内部模式值保持 `read_only / safe_write / high_risk_write` 兼容。
+- 权限选择器下方展示读取、范围可控的数据变更、全量/清空、结构与高风险管理、连接管理五类能力对照，并明确所有模式仍受连接 allowlist、连接只读、生产库保护和数据库账号权限约束。
+- 连接多选已升级为 DBX 权威 allowlist，并提供“所有连接”和“不允许任何连接”。
+- 策略保存期间禁用控件；保存失败回滚并提示；加载失败时禁用策略控件，避免显示可写假象。
+- 旧 `dbx-mcp-config-readonly=true` 只在后端策略尚未初始化时迁移为全局只读，保存成功后清理旧键。
+- 旧客户端 scope localStorage 不迁移为全局 allowlist，避免把单客户端偏好意外升级为全局限制。
+- 生成配置只包含启动 MCP Server 并连接当前 DBX 实例所需的运行参数；Web 模式包含 `DBX_WEB_URL` 和 `DBX_WEB_PASSWORD` 占位值，但不再生成读写、高风险操作或连接 scope 环境变量。
+- 旧 scope 环境变量仍由新版 Server 兼容读取，但 DBX 不再展示、生成或推荐；升级后可从客户端配置中删除。
+
+### 连接模型简化
+
+- Rust 与 TypeScript `ConnectionConfig` 已删除 `mcp_access`。
+- 连接编辑页、store、i18n、文档和 MCP 运行时不再包含连接级 MCP 三态。
+- 旧 JSON 中的 `mcp_access` 会被忽略，且后续序列化不再输出该字段；不会迁移为通用连接只读。
+
+### npm 发布链
+
+- `@dbx-app/mongo-shell` 已移除 `private` 标记。
+- package dry-run 会打包 `mongo-shell`。
+- `mcp-release.yml` 会先发布固定版本的 `mongo-shell`，再发布依赖它的 `node-core` 与 MCP Server。
+- 本轮只修复发布配置，没有实际向 npm 发布。
+
+## 自动化验证结果
+
+```text
 pnpm typecheck
+  PASS
+
+frontend MCP/settings focused tests
+  4 files, 117 tests passed
+
+@dbx-app/node-core
+  SQL/MongoDB/Redis/MCP policy focused: 6 files, 92 tests passed
+  final full-suite attempt: 147 passed, 7 blocked by sandbox localhost EPERM
+
+root Vitest full suite
+  3785 passed, 7 blocked by sandbox localhost EPERM
+
+@dbx-app/mcp-server
+  build passed, 3 files, 72 tests passed
+
+cargo check -p dbx-core -p dbx-web
+  PASS
+
+cargo check -p dbx
+  PASS
+
+cargo test -p dbx-core mcp_
+  12 relevant tests passed
+
+cargo test -p dbx-core sql_risk --lib
+  14 SQL risk tests passed
+
+cargo test -p dbx-core storage::tests --lib
+  44 storage tests passed
+
+cargo test -p dbx-core classifies_safe_confirmed_and_blocked_commands --lib
+  1 Redis risk test passed
+
+cargo test -p dbx mcp_
+  16 relevant tests passed
+
+cargo test -p dbx-web mcp_
+  5 matching tests passed
+
+cargo fmt --check
+  PASS
+
+pnpm publish:dry-run
+  mongo-shell, node-core, CLI and MCP Server built and packed successfully
+
+git diff --check
+  PASS
+
+pnpm lint
+  PASS
+
+pnpm build
+  PASS
 ```
 
-全局 MCP 只读持久化尚未实现；本文档记录的是下一阶段产品方向和实施计划，不应把当前设置页开关描述为已经具备全局强制策略。
+Node 全量测试中的 7 项需要绑定临时 localhost 端口，在受限 sandbox 中会以 `listen EPERM` 超时；node-core 其余 147 项及根目录其余 3785 项通过。本轮申请本地监听权限时审批服务返回 503，因此未能在沙箱外重跑这 7 项。受影响的是本地 HTTP/Redis/bridge 测试，与 MCP 风险判断无关；第二轮 Node 安全聚焦测试 92 项、前端/MongoDB/MCP 配置聚焦测试 117 项均全部通过。
+
+真实 MCP stdio 探针使用最新构建的绝对路径、`mysql-localhost` 和临时策略数据库副本，在同一 MCP 进程内完成动态策略验证：只读模式返回 `MCP_READ_ONLY`，且客户端写入/高风险环境变量即使为 `1` 也无法提权；数据读写模式下带有效条件的 `UPDATE` 通过策略层，无条件 `UPDATE`、`TRUNCATE` 和 `USE` 返回 `SQL_BLOCKED`；完全访问模式下无条件更新通过策略层；allowlist 切换为空集后连接列表立即隐藏并返回 `CONNECTION_OUT_OF_SCOPE`。所有写入探针均指向不存在的 `__dbx_mcp_probe_missing__` 表；沙箱禁止连接 `127.0.0.1:3306`，所以通过策略层的探针在驱动连接阶段返回 `EPERM`，未修改数据库数据。
+
+Tauri 测试仍会报告一个与本改造无关的既有 warning：`src-tauri/src/commands/sql_file.rs` 存在重复 `#[test]` 属性。
+
+## 发布前人工验证
+
+1. 所有连接保持普通配置，在 MCP 设置打开全局只读；即使旧客户端仍声明读写或高风险操作环境变量，也不得影响结果。
+2. 只读模式下 SQL `SELECT`、MongoDB find、Redis GET 成功；SQL/MongoDB/Redis 写入以及 MCP 连接增删均返回只读错误。
+3. 数据读写模式下，普通 `INSERT`、带有效过滤条件的 `UPDATE`/`DELETE`、MongoDB 带可验证有效过滤条件的更新/删除、Redis 已知普通写入和明确键删除成功。
+4. 数据读写模式下，全表 `UPDATE`/`DELETE`、`WHERE TRUE`/`WHERE 1 = 1`、DDL、`TRUNCATE`、MongoDB 空过滤清空/结构变更、Redis `FLUSH*` 均被拒绝。
+5. 完全访问模式下，上述高风险操作仅在连接非只读且未触发生产库保护时允许。
+6. 不重启 MCP 会话，切换任一策略后下一次请求立即应用新权限。
+7. allowlist 分别设置为全部、单个、多个、空集，确认列表与按 ID/名称解析符合交集语义。
+8. 对 Desktop 直连、需要 bridge 的连接和 Web 模式各执行一次三级权限验证。
+9. 直接向 bridge 传入 `allow_writes=true`、`allow_dangerous=true` 或 `skip_safety_check=true`，确认仍不能覆盖 DBX 中央策略。
+
+## 已知边界
+
+- 已经提交到数据库执行的单条语句或事务无法可靠撤销；策略约束下一条语句和后续请求。
+- MCP SQL 权限是应用层静态语句形状保护；此限制同样适用于只读模式，无法识别 `SELECT app_mutate_users()` 等用户自定义函数或 volatile 函数的所有副作用。
+- 数据读写不能阻止 Agent 先读取并枚举主键、再通过多次带条件语句逐条修改或删除全部数据。
+- 数据库账号最小权限仍是最终硬边界；MCP 策略不能替代数据库自身的授权、审计和凭据隔离。
+- `dbx_execute_and_show` 仅支持 SQL 连接；MongoDB 和 Redis 必须使用各自的执行工具。
+- 旧 MCP Server 不会读取中央策略，必须同时升级 DBX 应用与 MCP Server；当前生成配置不再为旧 Server 输出权限兼容环境变量。
+- MCP 策略不是数据库凭据吊销，不能阻止持有凭据的进程绕过 DBX 直接连接数据库。
+- Web 的 MCP 来源 header 用于区分 DBX Web UI 与 MCP 执行路径；真正的外部访问控制仍由现有 Web 认证负责。

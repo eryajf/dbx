@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { assessProductionSql, isLikelyMongoMutation, isProductionDatabase } from "../src/production-safety.js";
+import { assessProductionSql, isLikelyMongoMutation, isProductionDatabase, mongoAggregateTargetsProductionDatabase } from "../src/production-safety.js";
 import type { ConnectionConfig } from "../src/connections.js";
 
 interface ProductionSafetyCorpusCase {
@@ -39,6 +39,10 @@ describe("production safety", () => {
     expect(assessProductionSql("-- migrate\nUSE prod_app; /* delete old rows */ DELETE FROM users", connection(), "staging")).toMatchObject({ active: true, isMutation: true });
     expect(assessProductionSql("DELETE FROM prod_app.orders", connection(), "staging")).toMatchObject({ active: true, isMutation: true, databases: ["prod_app"] });
     expect(assessProductionSql("DROP DATABASE IF EXISTS prod_app", connection(), "staging")).toMatchObject({ active: true, isMutation: true, databases: ["prod_app"] });
+  });
+
+  it("blocks switching a pooled MCP session into a production database", () => {
+    expect(assessProductionSql("USE prod_app", connection(), "staging")).toMatchObject({ active: true, isMutation: true, databases: ["prod_app"] });
   });
 
   it("detects production writes hidden behind parser-sensitive SQL forms", () => {
@@ -104,5 +108,21 @@ describe("production safety", () => {
   it("recognizes Mongo write commands before MCP forwards them", () => {
     expect(isLikelyMongoMutation("db.orders.updateOne({_id: 1}, {$set: {status: 'paid'}})")).toBe(true);
     expect(isLikelyMongoMutation("db.orders.find({status: 'paid'})")).toBe(false);
+  });
+
+  it("checks explicit Mongo aggregate write destinations against production scope", () => {
+    const mongo = connection({ db_type: "mongodb", database: "staging", production_databases: ["production"] });
+
+    expect(mongoAggregateTargetsProductionDatabase(mongo, "staging", '[{"$out":{"db":"production","coll":"copied"}}]')).toBe(true);
+    expect(mongoAggregateTargetsProductionDatabase(mongo, "staging", '[{"$merge":{"into":{"db":"production","coll":"copied"}}}]')).toBe(true);
+    expect(mongoAggregateTargetsProductionDatabase(mongo, "staging", '[{"$out":"copied"}]')).toBe(false);
+    expect(mongoAggregateTargetsProductionDatabase(mongo, "production", '[{"$merge":{"into":"copied"}}]')).toBe(true);
+  });
+
+  it("fails closed for an indeterminate Mongo aggregate write destination", () => {
+    const mongo = connection({ db_type: "mongodb", database: undefined, production_databases: ["production"] });
+
+    expect(mongoAggregateTargetsProductionDatabase(mongo, undefined, '[{"$out":"copied"}]')).toBe(true);
+    expect(mongoAggregateTargetsProductionDatabase(mongo, "staging", '[{"$merge":{"whenMatched":"replace"}}]')).toBe(true);
   });
 });

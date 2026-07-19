@@ -3,7 +3,7 @@ title: MCP Integration
 description: Let AI coding agents query your databases through the Model Context Protocol.
 ---
 
-<Callout type="info">One line of config to let AI coding agents query your databases directly. Works with Claude Code, Cursor, Windsurf, and VS Code Copilot.</Callout>
+<Callout type="info">One line of config to let AI agents query your databases directly. Works with Claude Code, Cursor, Cherry Studio, Windsurf, and VS Code Copilot.</Callout>
 
 ## What is MCP?
 
@@ -44,6 +44,8 @@ AI Agent → MCP Server → Your Database → Results
     }
     ```
 
+    Manage the connection allowlist and all three permission modes centrally in **DBX Settings → MCP**. Normal client configs do not need permission or connection-scope environment variables.
+
     Windows portable builds need `DBX_DATA_DIR` set to the `data` directory next to `DBX.exe`:
 
     ```json
@@ -77,20 +79,26 @@ AI Agent → MCP Server → Your Database → Results
 
 ## Supported AI Agents
 
-| Agent             | Configuration                |
-| ----------------- | ---------------------------- |
-| Claude Code       | `.mcp.json` (native support) |
-| Cursor            | `.cursor/mcp.json`           |
-| Windsurf          | `.windsurfrules`             |
-| VS Code + Copilot | MCP extension                |
+| Agent             | Configuration                                                      |
+| ----------------- | ------------------------------------------------------------------ |
+| Claude Code       | Project-level `.mcp.json`                                          |
+| Cursor            | Project `.cursor/mcp.json` or global `~/.cursor/mcp.json`           |
+| TRAE              | Settings → MCP → Add → Add Manually                                |
+| Cherry Studio     | Settings → MCP Servers → Add Server → Import JSON                   |
+| VS Code + Copilot | Workspace `.vscode/mcp.json` or user-profile `mcp.json`             |
+| Windsurf          | `~/.codeium/windsurf/mcp_config.json`                               |
+| Codex             | `~/.codex/config.toml` or project-level `.codex/config.toml`        |
+| OpenCode          | `~/.config/opencode/opencode.json` or project-level `opencode.json` |
 
 ## Tools
 
 DBX MCP Server provides the following tools. Your AI agent calls them automatically based on your requests:
 
+Connection tools accept either a stable `connection_id` or `connection_name`; prefer the ID when names are duplicated. Tools can access only connections selected under **Settings → MCP → Allowed connections**.
+
 ### `dbx_list_connections`
 
-List all database connections configured in DBX.
+List the DBX connections currently allowed for MCP access.
 
 **Example:**
 
@@ -99,30 +107,34 @@ List all database connections configured in DBX.
 **Response:**
 
 ```
-| Name     | Type     | Host      | Port | Database |
-| -------- | -------- | --------- | ---- | -------- |
-| local-pg | postgres | 127.0.0.1 | 5432 |          |
-| prod-db  | mysql    | db.example| 3306 | myapp    |
+| ID              | Name     | Type     | Host       | Port | Database | Access     |
+| --------------- | -------- | -------- | ---------- | ---- | -------- | ---------- |
+| connection-id-1 | local-pg | postgres | 127.0.0.1  | 5432 |          | safe_write |
+| connection-id-2 | prod-db  | mysql    | db.example | 3306 | myapp    | read_only  |
 ```
 
 ### `dbx_list_tables`
 
 List tables and views for a connection.
 
-| Parameter         | Required | Description                   |
-| ----------------- | -------- | ----------------------------- |
-| `connection_name` | Yes      | DBX connection name           |
-| `schema`          | No       | Schema name (default: public) |
+| Parameter         | Required     | Description                          |
+| ----------------- | ------------ | ------------------------------------ |
+| `connection_id`   | One of these | Stable DBX connection ID (preferred) |
+| `connection_name` | One of these | DBX connection name                  |
+| `database`        | No           | Database name                        |
+| `schema`          | No           | Schema name (default: public)        |
 
 ### `dbx_describe_table`
 
 Get column definitions for a table. The AI uses this to understand your data structure before generating queries.
 
-| Parameter         | Required | Description                   |
-| ----------------- | -------- | ----------------------------- |
-| `connection_name` | Yes      | DBX connection name           |
-| `table`           | Yes      | Table name                    |
-| `schema`          | No       | Schema name (default: public) |
+| Parameter         | Required     | Description                          |
+| ----------------- | ------------ | ------------------------------------ |
+| `connection_id`   | One of these | Stable DBX connection ID (preferred) |
+| `connection_name` | One of these | DBX connection name                  |
+| `table`           | Yes          | Table name                           |
+| `database`        | No           | Database name                        |
+| `schema`          | No           | Schema name (default: public)        |
 
 **Response:**
 
@@ -139,21 +151,36 @@ Get column definitions for a table. The AI uses this to understand your data str
 
 Execute a SQL query and return results (max 100 rows).
 
-| Parameter         | Required | Description         |
-| ----------------- | -------- | ------------------- |
-| `connection_name` | Yes      | DBX connection name |
-| `sql`             | Yes      | SQL query           |
+| Parameter         | Required     | Description                          |
+| ----------------- | ------------ | ------------------------------------ |
+| `connection_id`   | One of these | Stable DBX connection ID (preferred) |
+| `connection_name` | One of these | DBX connection name                  |
+| `database`        | No           | Database name                        |
+| `sql`             | Yes          | SQL or MongoDB Shell command         |
+
+### `dbx_execute_redis_command`
+
+Execute a command on a Redis connection under the central DBX read-only, high-risk-operation, and production protections.
+
+| Parameter         | Required     | Description                          |
+| ----------------- | ------------ | ------------------------------------ |
+| `connection_id`   | One of these | Stable DBX connection ID (preferred) |
+| `connection_name` | One of these | DBX Redis connection name            |
+| `db`              | No           | Redis logical database number        |
+| `command`         | Yes          | Redis command text                   |
 
 ### `dbx_get_schema_context`
 
 Return compact table and column context for SQL generation.
 
-| Parameter         | Required | Description                                                  |
-| ----------------- | -------- | ------------------------------------------------------------ |
-| `connection_name` | Yes      | DBX connection name                                          |
-| `schema`          | No       | Schema name                                                  |
-| `tables`          | No       | Specific table names to include                              |
-| `max_tables`      | No       | Maximum number of tables to include; capped between 1 and 20 |
+| Parameter         | Required     | Description                                                  |
+| ----------------- | ------------ | ------------------------------------------------------------ |
+| `connection_id`   | One of these | Stable DBX connection ID (preferred)                         |
+| `connection_name` | One of these | DBX connection name                                          |
+| `database`        | No           | Database name                                                |
+| `schema`          | No           | Schema name                                                  |
+| `tables`          | No           | Specific table names to include                              |
+| `max_tables`      | No           | Maximum number of tables to include; capped between 1 and 20 |
 
 ### `dbx_add_connection`
 
@@ -164,7 +191,7 @@ Add a new database connection to DBX.
 | `name`     | Yes      | Connection name                                      |
 | `db_type`  | Yes      | Database type (postgres, mysql, sqlite, redis, etc.) |
 | `host`     | Yes      | Database host                                        |
-| `port`     | Yes      | Database port                                        |
+| `port`     | No       | Database port; some database types use a default     |
 | `username` | No       | Username                                             |
 | `password` | No       | Password                                             |
 | `database` | No       | Default database name                                |
@@ -178,9 +205,10 @@ Add a new database connection to DBX.
 
 Remove a database connection from DBX.
 
-| Parameter         | Required | Description                      |
-| ----------------- | -------- | -------------------------------- |
-| `connection_name` | Yes      | Name of the connection to remove |
+| Parameter         | Required | Description                                    |
+| ----------------- | -------- | ---------------------------------------------- |
+| `connection_name` | Yes      | Name of the connection to remove               |
+| `connection_id`   | No       | Stable ID used to disambiguate duplicate names |
 
 **Example:**
 
@@ -190,24 +218,26 @@ Remove a database connection from DBX.
 
 Open a table in DBX desktop app UI. **Requires DBX to be running.**
 
-| Parameter         | Required | Description         |
-| ----------------- | -------- | ------------------- |
-| `connection_name` | Yes      | DBX connection name |
-| `table`           | Yes      | Table name          |
-| `database`        | No       | Database name       |
-| `schema`          | No       | Schema name         |
+| Parameter         | Required     | Description                          |
+| ----------------- | ------------ | ------------------------------------ |
+| `connection_id`   | One of these | Stable DBX connection ID (preferred) |
+| `connection_name` | One of these | DBX connection name                  |
+| `table`           | Yes          | Table name                           |
+| `database`        | No           | Database name                        |
+| `schema`          | No           | Schema name                          |
 
 DBX opens a new tab with the table data and brings the window to front.
 
 ### `dbx_execute_and_show`
 
-Execute a SQL query in DBX desktop app UI. **Requires DBX to be running.**
+Execute a SQL query in DBX desktop app UI. **Requires DBX to be running and supports SQL connections only.**
 
-| Parameter         | Required | Description         |
-| ----------------- | -------- | ------------------- |
-| `connection_name` | Yes      | DBX connection name |
-| `sql`             | Yes      | SQL query           |
-| `database`        | No       | Database name       |
+| Parameter         | Required     | Description                          |
+| ----------------- | ------------ | ------------------------------------ |
+| `connection_id`   | One of these | Stable DBX connection ID (preferred) |
+| `connection_name` | One of these | DBX connection name                  |
+| `sql`             | Yes          | SQL query                            |
+| `database`        | No           | Database name                        |
 
 ## How It Works
 
@@ -239,36 +269,33 @@ MCP query support in desktop local mode is implemented for PostgreSQL, MySQL, an
 
 MCP query execution is intentionally conservative:
 
-| Rule                                                         | Default                                                    |
-| ------------------------------------------------------------ | ---------------------------------------------------------- |
-| Empty or unrecognized SQL                                    | Blocked                                                    |
-| Multiple SQL statements                                      | Allowed; each statement is checked and executed separately |
-| Non-read SQL                                                 | Blocked unless writes are explicitly allowed               |
-| `DROP`, `TRUNCATE`, or `ALTER`                               | Blocked unless dangerous SQL is explicitly allowed         |
-| `UPDATE` or `DELETE` without `WHERE` when writes are allowed | Blocked                                                    |
+| Rule | Default |
+| ---- | ------- |
+| Empty SQL or SQL that cannot be classified safely | Blocked |
+| Multiple SQL statements | Allowed; each statement is checked and executed separately |
+| Regular `INSERT` | Allowed when read-only mode is off |
+| `UPDATE` or `DELETE` with an effective filter | Allowed in Data read/write mode |
+| Table-wide `UPDATE`/`DELETE` without an effective filter, DDL, or `TRUNCATE` | Blocked unless high-risk operations are allowed |
 
-Set `DBX_MCP_ALLOW_WRITES=1` to allow write statements. Set `DBX_MCP_ALLOW_DANGEROUS_SQL=1` only in controlled environments where destructive SQL is expected.
+A syntactic `WHERE` is not sufficient by itself: ineffective filters such as `WHERE TRUE` and `WHERE 1 = 1` remain high risk. Updated MCP servers ignore `DBX_MCP_ALLOW_WRITES` and `DBX_MCP_ALLOW_DANGEROUS_SQL`. Write and high-risk permissions come exclusively from DBX MCP settings and are reloaded for every request.
 
-### Connection Policy And Session Scope
+DBX MCP permission enforcement is an application-layer statement-shape guard, not a substitute for database authorization. This limitation also applies to read-only mode: static classification cannot identify every side effect hidden in a user-defined or volatile function such as `SELECT app_mutate_users()`. It also cannot prevent an AI agent from enumerating keys first and then issuing many individually scoped changes. Use a read-only or least-privileged database account as the final enforcement boundary.
 
-Open a connection's **Advanced** settings in DBX and choose its **MCP access** policy:
+### DBX-managed MCP policy
 
-| Policy           | MCP behavior                                                        |
-| ---------------- | ------------------------------------------------------------------- |
-| Disabled         | Hidden from MCP and unavailable by connection ID or name            |
-| Read only        | Metadata and read queries are allowed; writes are always blocked    |
-| Read and write   | Uses the MCP session SQL safety options; default for old connections |
+Open **Settings → MCP** to manage the authoritative policy used by every MCP client:
 
-The persisted DBX policy is authoritative. A connection with DBX **Read Only** enabled also remains read-only through MCP. Environment variables can make a session more restrictive, but cannot grant access or write permissions denied by DBX.
+| Permission mode | Internal mode value | MCP behavior |
+| --------------- | ------------------- | ------------ |
+| Read only | `read_only` | Allows only requests DBX classifies as reads; recognized writes and connection changes are blocked |
+| Data read/write | `safe_write` | Regular `INSERT`, `UPDATE`/`DELETE` with an effective filter, MongoDB updates/deletes with a verifiably effective filter, and ordinary Redis writes or deletion of explicit keys |
+| Full access | `high_risk_write` | Also permits table-wide `UPDATE`/`DELETE`, DDL, `TRUNCATE`, MongoDB clearing/schema changes, Redis `FLUSH*`, and equivalent destructive operations |
 
-To generate a client config for selected connections, choose them on DBX's MCP settings page, or set their stable IDs manually:
+**Allowed connections** controls which stable connection IDs are visible and resolvable. The persisted DBX policy is the sole permission source and is reloaded for each request. A connection's general DBX **Read Only** option and production protection always remain upper bounds, even when high-risk operations are allowed.
 
-```bash
-DBX_MCP_SCOPE_CONNECTION_IDS=connection-id-1,connection-id-2
-DBX_MCP_SCOPE_CONNECTION_ID=__dbx_multi_scope_requires_updated_server__
-```
+Data read/write classification fails closed. Complementary null predicates and predicates made only from constants/functions, opaque MongoDB filters such as `$where`/`$expr`/`$nor`, and unknown Redis commands are not allowed merely because they appear to contain a condition; they require Full access.
 
-DBX continues to generate `DBX_MCP_SCOPE_CONNECTION_ID` when exactly one connection is selected. For multiple connections, it also emits the invalid singular ID shown above: updated servers prefer the plural list, while older servers fail closed instead of treating the session as unscoped. The plural ID list takes precedence over the singular ID, and ID scope takes precedence over the legacy `DBX_MCP_SCOPE_CONNECTION_NAME`. With multiple scoped connections, tools that access a connection require `connection_id` or `connection_name`. Scope only narrows one client session; use the connection policy for the durable security boundary. Managed disabled/read-only policies also disable MCP connection add/remove operations, so connection management stays in DBX.
+Normal client configs do not need permission or connection-scope environment variables. DBX-generated configs contain only the runtime settings required to start the MCP Server and connect it to the current DBX instance; Web mode therefore includes `DBX_WEB_URL` and a `DBX_WEB_PASSWORD` placeholder. Updated servers ignore the old write-permission variables. `DBX_MCP_SCOPE_CONNECTION_ID`, `DBX_MCP_SCOPE_CONNECTION_IDS`, and `DBX_MCP_SCOPE_CONNECTION_NAME` are read only for backward compatibility and can only narrow the central allowlist. DBX no longer generates or recommends these scope variables, so they can be removed from client configs after upgrading. Operational settings such as `DBX_DATA_DIR`, `DBX_WEB_URL`, and `DBX_WEB_PASSWORD` remain available for their documented deployment modes.
 
 ### Desktop And Web Mode
 
@@ -292,5 +319,5 @@ For DBX Web or Docker deployments that have password protection enabled, also se
 ## Requirements
 
 - [DBX](https://github.com/t8y2/dbx) installed with at least one connection configured
-- Node.js 18+
-- UI integration requires DBX v0.3.9+
+- Node.js 22.13.0 or newer
+- Upgrade both the DBX app and MCP Server when using the central access policy

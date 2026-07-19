@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import type { ConnectionConfig } from "./connections.js";
+import type { BackendMutationOptions } from "./backend.js";
 import type { TableInfo, ColumnInfo, QueryOptions, QueryResult } from "./database.js";
 import {
   collectionListToTableInfos,
@@ -23,10 +25,9 @@ import type { RedisCommandOptions, RedisCommandResult } from "./redis-command.js
 import { evaluateSqlSafety, sqlSafetyFromEnv } from "./sql-safety.js";
 import {
   clampConnectionSqlSafety,
-  clampMcpSqlSafety,
   connectionReadOnlyReason,
-  isMcpConnectionReadOnly,
-  mcpReadOnlyReason,
+  normalizeMcpGlobalPolicy,
+  type McpGlobalPolicy,
 } from "./mcp-policy.js";
 import { supportsHashLineComments } from "./sql-risk.js";
 
@@ -139,32 +140,45 @@ export async function loadConnections(): Promise<ConnectionConfig[]> {
   return res.json();
 }
 
+export async function loadMcpGlobalPolicy(): Promise<McpGlobalPolicy> {
+  const res = await apiFetch("/api/app-settings/mcp-policy");
+  return normalizeMcpGlobalPolicy(await res.json());
+}
+
 export async function findConnection(name: string): Promise<ConnectionConfig | undefined> {
   const connections = await loadConnections();
   return connections.find((c) => c.name.toLowerCase() === name.toLowerCase());
 }
 
-export async function addConnection(config: Omit<ConnectionConfig, "id">): Promise<ConnectionConfig> {
-  const res = await apiFetch("/api/connection/save", {
+export async function addConnection(config: Omit<ConnectionConfig, "id">, _options?: BackendMutationOptions): Promise<ConnectionConfig> {
+  const saved: ConnectionConfig = { ...config, id: randomUUID() };
+  const res = await apiFetch("/api/connection/mcp/add", {
     method: "POST",
-    body: JSON.stringify({ configs: [config] }),
+    body: JSON.stringify({ config: saved }),
   });
-  const saved = (await res.json()) as ConnectionConfig;
-  return saved;
+  return (await res.json()) as ConnectionConfig;
 }
 
-export async function removeConnection(name: string): Promise<boolean> {
-  const connection = await findConnection(name);
+export async function removeConnection(name: string, _options?: BackendMutationOptions): Promise<boolean> {
+  const connections = await loadConnections();
+  const connection = connections.find((config) => config.name.toLowerCase() === name.toLowerCase());
   if (!connection) return false;
-  await apiFetch(`/api/connection/delete?id=${encodeURIComponent(connection.id)}`, { method: "DELETE" });
-  return true;
+  const res = await apiFetch("/api/connection/mcp/remove", {
+    method: "POST",
+    body: JSON.stringify({ connectionId: connection.id }),
+  });
+  return (await res.json()) as boolean;
 }
 
-export async function removeConnectionById(id: string): Promise<boolean> {
-  const connection = await loadConnections().then((cs) => cs.find((c) => c.id === id));
+export async function removeConnectionById(id: string, _options?: BackendMutationOptions): Promise<boolean> {
+  const connections = await loadConnections();
+  const connection = connections.find((config) => config.id === id);
   if (!connection) return false;
-  await apiFetch(`/api/connection/delete?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-  return true;
+  const res = await apiFetch("/api/connection/mcp/remove", {
+    method: "POST",
+    body: JSON.stringify({ connectionId: id }),
+  });
+  return (await res.json()) as boolean;
 }
 
 async function ensureConnected(config: ConnectionConfig): Promise<void> {
@@ -215,9 +229,10 @@ export async function describeTable(config: ConnectionConfig, table: string, sch
 
 export async function executeQuery(config: ConnectionConfig, sql: string, options?: QueryOptions): Promise<QueryResult> {
   const mcpRequest = options?.safety !== undefined;
-  const safety = mcpRequest ? clampMcpSqlSafety(config, options.safety!) : clampConnectionSqlSafety(config, sqlSafetyFromEnv());
-  const readOnly = mcpRequest ? isMcpConnectionReadOnly(config) : config.read_only === true;
-  const readOnlyReason = mcpRequest ? mcpReadOnlyReason(config) : connectionReadOnlyReason(config);
+  const safety = clampConnectionSqlSafety(config, options?.safety ?? sqlSafetyFromEnv());
+  const readOnly = config.read_only === true;
+  const readOnlyReason = connectionReadOnlyReason(config);
+  const mcpHeaders = mcpRequest ? { "X-DBX-MCP-Request": "1" } : undefined;
   if (config.db_type !== "mongodb" && readOnly) {
     const decision = evaluateSqlSafety(sql, {
       ...safety,
@@ -231,6 +246,7 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     if (parseMongoVersionCommand(sql)) {
       const res = await apiFetch("/api/mongo/server-version", {
         method: "POST",
+        headers: mcpHeaders,
         body: JSON.stringify({
           connectionId: config.id,
           database: config.database || "",
@@ -243,6 +259,7 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     if (count) {
       const res = await apiFetch("/api/mongo/count-documents", {
         method: "POST",
+        headers: mcpHeaders,
         body: JSON.stringify({
           connectionId: config.id,
           database: config.database || "",
@@ -258,6 +275,7 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     if (find) {
       const res = await apiFetch("/api/mongo/find-documents", {
         method: "POST",
+        headers: mcpHeaders,
         body: JSON.stringify({
           connectionId: config.id,
           database: config.database || "",
@@ -278,6 +296,7 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
       if (!decision.allowed) throw new Error(readOnly ? readOnlyReason : decision.reason);
       const res = await apiFetch("/api/mongo/aggregate-documents", {
         method: "POST",
+        headers: mcpHeaders,
         body: JSON.stringify({
           connectionId: config.id,
           database: config.database || "",
@@ -294,6 +313,7 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     if (distinct) {
       const res = await apiFetch("/api/mongo/distinct", {
         method: "POST",
+        headers: mcpHeaders,
         body: JSON.stringify({
           connectionId: config.id,
           database: config.database || "",
@@ -309,6 +329,7 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     if (getIndexes) {
       const res = await apiFetch("/api/mongo/aggregate-documents", {
         method: "POST",
+        headers: mcpHeaders,
         body: JSON.stringify({
           connectionId: config.id,
           database: config.database || "",
@@ -324,6 +345,7 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     if (collectionStats) {
       const res = await apiFetch("/api/mongo/collection-stats", {
         method: "POST",
+        headers: mcpHeaders,
         body: JSON.stringify({
           connectionId: config.id,
           database: config.database || "",
@@ -338,7 +360,7 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
     if (write) {
       const decision = evaluateMongoWriteSafety(write, safety);
       if (!decision.allowed) throw new Error(readOnly ? readOnlyReason : decision.reason);
-      const result = await executeMongoWrite(config, write);
+      const result = await executeMongoWrite(config, write, mcpHeaders);
       if (write.kind === "createIndex") {
         return { columns: ["name"], rows: [{ name: result.indexName ?? "" }], row_count: 1 };
       }
@@ -353,6 +375,7 @@ export async function executeQuery(config: ConnectionConfig, sql: string, option
   }
   const res = await apiFetch("/api/query/execute", {
     method: "POST",
+    headers: mcpHeaders,
     body: JSON.stringify({
       connectionId: config.id,
       database: config.database || "",
@@ -378,6 +401,7 @@ export async function executeRedisCommand(config: ConnectionConfig, db: number, 
   await ensureConnected(config);
   const res = await apiFetch("/api/redis/execute-command", {
     method: "POST",
+    headers: options?.mcpRequest ? { "X-DBX-MCP-Request": "1" } : undefined,
     body: JSON.stringify({
       connectionId: config.id,
       db,
@@ -388,10 +412,15 @@ export async function executeRedisCommand(config: ConnectionConfig, db: number, 
   return (await res.json()) as RedisCommandResult;
 }
 
-async function executeMongoWrite(config: ConnectionConfig, command: MongoWriteCommand): Promise<{ affectedRows: number; indexName?: string; droppedNames?: string[] }> {
+async function executeMongoWrite(
+  config: ConnectionConfig,
+  command: MongoWriteCommand,
+  mcpHeaders?: Record<string, string>,
+): Promise<{ affectedRows: number; indexName?: string; droppedNames?: string[] }> {
   if (command.kind === "insert") {
     const res = await apiFetch("/api/mongo/insert-documents", {
       method: "POST",
+      headers: mcpHeaders,
       body: JSON.stringify({
         connectionId: config.id,
         database: config.database || "",
@@ -405,6 +434,7 @@ async function executeMongoWrite(config: ConnectionConfig, command: MongoWriteCo
   if (command.kind === "update") {
     const res = await apiFetch("/api/mongo/update-documents", {
       method: "POST",
+      headers: mcpHeaders,
       body: JSON.stringify({
         connectionId: config.id,
         database: config.database || "",
@@ -421,6 +451,7 @@ async function executeMongoWrite(config: ConnectionConfig, command: MongoWriteCo
   if (command.kind === "createIndex") {
     const res = await apiFetch("/api/mongo/create-index", {
       method: "POST",
+      headers: mcpHeaders,
       body: JSON.stringify({
         connectionId: config.id,
         database: config.database || "",
@@ -435,6 +466,7 @@ async function executeMongoWrite(config: ConnectionConfig, command: MongoWriteCo
   if (command.kind === "dropIndex" || command.kind === "dropIndexes") {
     const res = await apiFetch("/api/mongo/drop-indexes", {
       method: "POST",
+      headers: mcpHeaders,
       body: JSON.stringify({
         connectionId: config.id,
         database: config.database || "",
@@ -449,6 +481,7 @@ async function executeMongoWrite(config: ConnectionConfig, command: MongoWriteCo
   if (command.kind === "dropCollection") {
     await apiFetch("/api/mongo/drop-collection", {
       method: "POST",
+      headers: mcpHeaders,
       body: JSON.stringify({
         connectionId: config.id,
         database: config.database || "",
@@ -459,6 +492,7 @@ async function executeMongoWrite(config: ConnectionConfig, command: MongoWriteCo
   }
   const res = await apiFetch("/api/mongo/delete-documents", {
     method: "POST",
+    headers: mcpHeaders,
     body: JSON.stringify({
       connectionId: config.id,
       database: config.database || "",

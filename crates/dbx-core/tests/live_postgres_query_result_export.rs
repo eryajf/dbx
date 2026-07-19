@@ -62,7 +62,6 @@ fn live_postgres_config(
         jdbc_driver_paths: Vec::new(),
         one_time: false,
         read_only: false,
-        mcp_access: Default::default(),
         is_production: false,
         production_databases: vec![],
         database_info: None,

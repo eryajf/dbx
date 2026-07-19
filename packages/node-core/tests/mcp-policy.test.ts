@@ -1,13 +1,24 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import Database from "better-sqlite3";
+import { afterEach, test } from "vitest";
 import type { ConnectionConfig } from "../src/connections.js";
 import {
   effectiveMcpSqlSafety,
-  hasManagedMcpPolicy,
-  isMcpConnectionEnabled,
-  isMcpConnectionReadOnly,
-  mcpAccessMode,
+  isConnectionAllowedByMcpPolicy,
+  isMcpReadOnly,
+  loadMcpGlobalPolicy,
+  McpPolicyUnavailableError,
+  normalizeMcpGlobalPolicy,
 } from "../src/mcp-policy.js";
+
+const tempDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
 
 const connection = (overrides: Partial<ConnectionConfig> = {}): ConnectionConfig => ({
   id: "connection-1",
@@ -22,38 +33,75 @@ const connection = (overrides: Partial<ConnectionConfig> = {}): ConnectionConfig
   ...overrides,
 });
 
-test("legacy connections default to read-write MCP access", () => {
-  const config = connection();
+async function policyDatabase(settings: unknown): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "dbx-mcp-policy-"));
+  tempDirectories.push(directory);
+  const path = join(directory, "dbx.db");
+  const db = new Database(path);
+  db.exec("CREATE TABLE app_settings (id INTEGER PRIMARY KEY, settings_json TEXT NOT NULL)");
+  db.prepare("INSERT INTO app_settings (id, settings_json) VALUES (1, ?)").run(JSON.stringify(settings));
+  db.close();
+  return path;
+}
 
-  assert.equal(mcpAccessMode(config), "read_write");
-  assert.equal(isMcpConnectionEnabled(config), true);
-  assert.equal(isMcpConnectionReadOnly(config), false);
-  assert.equal(hasManagedMcpPolicy(config), false);
+test("missing database defaults to unconfigured read-write access for all connections", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dbx-mcp-policy-missing-"));
+  tempDirectories.push(directory);
+  const policy = await loadMcpGlobalPolicy({ path: join(directory, "missing.db") });
+
+  assert.deepEqual(policy, {
+    readOnly: false,
+    allowDangerousSql: false,
+    allowedConnectionIds: null,
+    configured: false,
+  });
 });
 
-test("connection MCP policy cannot be relaxed by environment variables", () => {
-  const config = connection({ mcp_access: "read_only" });
-  const safety = effectiveMcpSqlSafety(config, {
-    DBX_MCP_ALLOW_WRITES: "1",
-    DBX_MCP_ALLOW_DANGEROUS_SQL: "1",
+test("loads the atomic MCP policy from app_settings", async () => {
+  const path = await policyDatabase({
+    theme: "dark",
+    mcp_global_policy: { readOnly: true, allowedConnectionIds: ["connection-1", " connection-2 "] },
   });
 
-  assert.equal(safety.allowWrites, false);
-  assert.equal(safety.allowDangerous, false);
-  assert.equal(hasManagedMcpPolicy(config), true);
+  assert.deepEqual(await loadMcpGlobalPolicy({ path }), {
+    readOnly: true,
+    allowDangerousSql: false,
+    allowedConnectionIds: ["connection-1", "connection-2"],
+    configured: true,
+  });
 });
 
-test("general DBX read-only mode is also authoritative for MCP", () => {
-  const config = connection({ read_only: true, mcp_access: "read_write" });
-  const safety = effectiveMcpSqlSafety(config, { DBX_MCP_ALLOW_WRITES: "1" });
+test("malformed persisted policy fails closed with MCP_POLICY_UNAVAILABLE", async () => {
+  const path = await policyDatabase({ mcp_global_policy: { readOnly: "yes", allowedConnectionIds: null } });
 
-  assert.equal(isMcpConnectionReadOnly(config), true);
-  assert.equal(safety.allowWrites, false);
+  await assert.rejects(loadMcpGlobalPolicy({ path }), (error: unknown) => {
+    assert.ok(error instanceof McpPolicyUnavailableError);
+    assert.equal(error.code, "MCP_POLICY_UNAVAILABLE");
+    return true;
+  });
 });
 
-test("disabled connections are not MCP-enabled", () => {
-  const config = connection({ mcp_access: "disabled" });
+test("global and connection read-only policies cannot be relaxed", () => {
+  const globalReadOnly = normalizeMcpGlobalPolicy({ readOnly: true, allowedConnectionIds: null });
+  const connectionReadOnly = normalizeMcpGlobalPolicy({ readOnly: false, allowedConnectionIds: null });
 
-  assert.equal(isMcpConnectionEnabled(config), false);
-  assert.equal(hasManagedMcpPolicy(config), true);
+  assert.deepEqual(effectiveMcpSqlSafety(connection(), globalReadOnly), { allowWrites: false, allowDangerous: false });
+  assert.deepEqual(effectiveMcpSqlSafety(connection({ read_only: true }), connectionReadOnly), { allowWrites: false, allowDangerous: false });
+  assert.equal(isMcpReadOnly(connection(), globalReadOnly), true);
+});
+
+test("central policy is the only source of MCP write and dangerous permissions", () => {
+  const safePolicy = normalizeMcpGlobalPolicy({ readOnly: false, allowDangerousSql: false, allowedConnectionIds: null });
+  const dangerousPolicy = normalizeMcpGlobalPolicy({ readOnly: false, allowDangerousSql: true, allowedConnectionIds: null });
+
+  assert.deepEqual(effectiveMcpSqlSafety(connection(), safePolicy), { allowWrites: true, allowDangerous: false });
+  assert.deepEqual(effectiveMcpSqlSafety(connection(), dangerousPolicy), { allowWrites: true, allowDangerous: true });
+});
+
+test("allowlist distinguishes all, selected, and disabled-all policies", () => {
+  const config = connection();
+
+  assert.equal(isConnectionAllowedByMcpPolicy(config, { readOnly: false, allowDangerousSql: false, allowedConnectionIds: null }), true);
+  assert.equal(isConnectionAllowedByMcpPolicy(config, { readOnly: false, allowDangerousSql: false, allowedConnectionIds: [config.id] }), true);
+  assert.equal(isConnectionAllowedByMcpPolicy(config, { readOnly: false, allowDangerousSql: false, allowedConnectionIds: [] }), false);
 });

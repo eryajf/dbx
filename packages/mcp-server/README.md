@@ -7,10 +7,10 @@ MCP server for [DBX](https://github.com/t8y2/dbx) — lets AI agents (Claude Cod
 ## Features
 
 - **Zero config** — Automatically reads your DBX connections (including passwords from system keyring)
-- **9 tools** — List/add/remove connections, list tables, describe table, get schema context, execute SQL, execute Redis commands, open table in DBX UI
+- **Up to 10 tools** — List/add/remove connections, inspect schemas, execute SQL or Redis commands, and use desktop UI integration
 - **Connection pooling** — Reuses database connections across queries
 - **Direct execution** — PostgreSQL, MySQL, SQLite, and compatible databases (Doris, StarRocks, etc.) can run without opening DBX
-- **Writes enabled by default** — regular `INSERT` / `UPDATE` / `DELETE` statements work out of the box, while dangerous SQL stays blocked unless explicitly enabled
+- **Data read/write by default** — regular `INSERT` and effectively scoped `UPDATE`/`DELETE` statements work out of the box, while broad or destructive operations require Full access
 - **DBX UI integration** — Open tables directly in the DBX desktop app from your AI agent
 
 ## Quick Start
@@ -105,43 +105,34 @@ See the [DBX CLI README](../cli/README.md) for command details.
 | `dbx_execute_query`         | Execute a SQL query (max 100 rows)                   |
 | `dbx_execute_redis_command` | Execute a Redis command on a Redis connection        |
 | `dbx_open_table`            | Open a table in DBX desktop app UI                   |
+| `dbx_execute_and_show`      | Execute SQL and show the result in DBX desktop       |
 
 ## SQL Safety
 
-`dbx_execute_query` accepts multiple SQL statements and executes them one at a time after checking each statement. Regular write statements such as `INSERT`, `UPDATE`, and `DELETE ... WHERE ...` are allowed by default.
+`dbx_execute_query` accepts multiple SQL statements and executes them one at a time after checking each statement. Choose one of three permission modes in **Settings → MCP**:
 
-If you need to force a read-only MCP session, set:
+| Permission mode | Internal mode value | Allowed operations |
+| --- | --- | --- |
+| Read only | `read_only` | Allows only requests DBX classifies as reads; recognized writes and MCP connection changes are blocked |
+| Data read/write | `safe_write` | Regular `INSERT`, `UPDATE`/`DELETE` with an effective filter, MongoDB updates/deletes with a verifiably effective filter, and ordinary Redis writes or deletion of explicit keys |
+| Full access | `high_risk_write` | Also permits table-wide `UPDATE`/`DELETE`, DDL, `TRUNCATE`, MongoDB clearing/schema changes, Redis `FLUSH*`, and equivalent destructive operations |
 
-```bash
-DBX_MCP_ALLOW_WRITES=0
-```
+A syntactic `WHERE` is not sufficient by itself: missing or ineffective filters such as `WHERE TRUE` and `WHERE 1 = 1` remain high risk. SQL that cannot be classified safely is blocked unless the required high-risk permission is present. Redis connections use `dbx_execute_redis_command` instead of `dbx_execute_query`, but follow the same DBX-managed levels.
 
-Dangerous statements such as `DROP`, `TRUNCATE`, and `ALTER` remain blocked unless you also set:
+Classification fails closed for opaque operations. Complementary null predicates, predicates made only from constants/functions, opaque MongoDB filters such as `$where`/`$expr`/`$nor`, and unknown Redis commands cannot bypass the selected DBX permission level.
 
-```bash
-DBX_MCP_ALLOW_DANGEROUS_SQL=1
-```
+DBX MCP permission enforcement is an application-layer statement-shape guard, not a substitute for database authorization. This limitation also applies to read-only mode: static classification cannot identify every side effect hidden in a user-defined or volatile function such as `SELECT app_mutate_users()`. It also cannot prevent an agent from enumerating keys first and then issuing many individually scoped changes. Use a read-only or least-privileged database account as the final enforcement boundary. `dbx_execute_and_show` is available only for SQL connections.
 
-Redis connections use `dbx_execute_redis_command` instead of `dbx_execute_query`. Redis write commands honor `DBX_MCP_ALLOW_WRITES`; dangerous Redis commands such as `KEYS`, `FLUSHALL`, and `EVAL` require `DBX_MCP_ALLOW_DANGEROUS_SQL=1`.
+### DBX-managed MCP policy
 
-### Connection-level MCP policy and session scope
+DBX stores one authoritative MCP policy in **Settings → MCP**:
 
-Each DBX connection has an **MCP access** policy in its Advanced settings:
+- **Allowed connections** controls which stable connection IDs are visible and resolvable.
+- **Permission mode** selects **Read only**, **Data read/write**, or **Full access** for every MCP client.
 
-- `Disabled`: the connection is hidden from MCP and cannot be resolved by ID or name.
-- `Read only`: MCP can inspect metadata and run read queries, but cannot write.
-- `Read and write`: MCP follows the session SQL safety options. This is the default for existing connections.
+The DBX policy is reloaded for each MCP request and is authoritative. A connection's general **Read Only** option and DBX production protection remain upper bounds even when high-risk operations are enabled. Normal client configs do not need permission or connection-scope environment variables. DBX-generated configs contain only the runtime settings required to start the server and connect it to the current DBX instance; Web mode includes `DBX_WEB_URL` and a `DBX_WEB_PASSWORD` placeholder.
 
-DBX connection policy is authoritative. The connection's general **Read Only** option is stronger than MCP access, and client environment variables can only tighten these policies. For example, `DBX_MCP_ALLOW_WRITES=1` cannot make a DBX-managed read-only connection writable.
-
-To expose selected connections to a client session, use the stable IDs shown by `dbx_list_connections`:
-
-```bash
-DBX_MCP_SCOPE_CONNECTION_IDS=connection-id-1,connection-id-2
-DBX_MCP_SCOPE_CONNECTION_ID=__dbx_multi_scope_requires_updated_server__
-```
-
-For one connection, the legacy `DBX_MCP_SCOPE_CONNECTION_ID` is still supported and is what DBX generates for maximum compatibility. For multiple connections, DBX also emits the invalid singular ID shown above: updated servers prefer the plural list, while older servers fail closed instead of treating the session as unscoped. `DBX_MCP_SCOPE_CONNECTION_NAME` also remains available, but IDs are recommended. The plural ID list takes precedence over the singular ID, and any ID scope takes precedence over the name. When multiple connections are scoped, connection-taking tools require `connection_id` or `connection_name` instead of silently choosing one. Session scope is a convenience restriction, not a replacement for the persisted connection policy. When any connection has a managed disabled/read-only MCP policy, MCP connection add/remove tools refuse changes; manage connections in DBX instead.
+Updated servers ignore `DBX_MCP_ALLOW_WRITES` and `DBX_MCP_ALLOW_DANGEROUS_SQL`. The old `DBX_MCP_SCOPE_CONNECTION_ID`, `DBX_MCP_SCOPE_CONNECTION_IDS`, and `DBX_MCP_SCOPE_CONNECTION_NAME` variables are read only for backward compatibility and can only narrow the DBX allowlist. DBX no longer generates or recommends them, so they can be removed from client configs after upgrading. Operational settings such as `DBX_DATA_DIR`, `DBX_WEB_URL`, `DBX_WEB_PASSWORD`, and diagnostic flags remain available where their documented deployment mode requires them.
 
 ## SQL Diagnostics Privacy
 
@@ -207,10 +198,10 @@ Apache-2.0
 ### 特性
 
 - **零配置** — 自动读取 DBX 的连接配置
-- **9 个工具** — 列出/添加/删除连接、列出表、查看表结构、获取 Schema 上下文、执行 SQL、执行 Redis 命令、在 DBX 中打开表
+- **最多 10 个工具** — 列出/添加/删除连接、检查 Schema、执行 SQL 或 Redis 命令，以及使用桌面 UI 联动
 - **连接池** — 跨查询复用数据库连接
 - **直接执行** — PostgreSQL、MySQL、SQLite 及兼容数据库（Doris、StarRocks 等）无需打开 DBX 即可查询
-- **默认允许常规写入** — `INSERT` / `UPDATE` / `DELETE` 可直接执行，危险语句仍需显式开启
+- **默认允许数据读写** — 普通 `INSERT`、带有效过滤条件的 `UPDATE` / `DELETE` 可直接执行，大范围或破坏性操作需要完全访问权限
 - **DBX UI 联动** — 从 AI 助手直接在 DBX 桌面端打开表
 
 ### 快速开始
@@ -291,43 +282,34 @@ dbx query local "select 1" --json
 | `dbx_execute_query`         | 执行 SQL 查询（最多返回 100 行）      |
 | `dbx_execute_redis_command` | 在 Redis 连接上执行 Redis 命令        |
 | `dbx_open_table`            | 在 DBX 桌面端打开指定表               |
+| `dbx_execute_and_show`      | 执行 SQL 并在 DBX 桌面端展示结果      |
 
 ### SQL 安全
 
-`dbx_execute_query` 支持多条 SQL 语句，会逐条完成安全检查并依次执行。默认允许常规写操作，例如 `INSERT`、`UPDATE`、`DELETE ... WHERE ...`。
+`dbx_execute_query` 支持多条 SQL 语句，会逐条完成安全检查并依次执行。请在 **设置 → MCP** 中选择一个权限模式：
 
-如果你希望 MCP 会话强制退回只读，可设置：
+| 权限模式 | 内部模式值 | 允许的操作 |
+| --- | --- | --- |
+| 只读 | `read_only` | 仅允许 DBX 判定为读取的请求；禁止已识别的写入和 MCP 连接管理变更 |
+| 数据读写 | `safe_write` | 允许普通 `INSERT`、带有效过滤条件的 `UPDATE`/`DELETE`、MongoDB 带可验证有效过滤条件的更新/删除，以及 Redis 普通写入和明确键删除 |
+| 完全访问 | `high_risk_write` | 额外允许全表 `UPDATE`/`DELETE`、DDL、`TRUNCATE`、MongoDB 清空/结构变更、Redis `FLUSH*` 及等价破坏性操作 |
 
-```bash
-DBX_MCP_ALLOW_WRITES=0
-```
+仅仅出现 `WHERE` 并不等于安全；缺少有效过滤条件以及 `WHERE TRUE`、`WHERE 1 = 1` 等无效条件仍属于高风险。无法可靠分类的 SQL 会按所需高风险权限失败关闭。Redis 连接使用 `dbx_execute_redis_command`，不通过 `dbx_execute_query` 执行，但遵循相同的 DBX 中央权限等级。
 
-`DROP`、`TRUNCATE`、`ALTER` 等危险语句仍会被拦截，除非额外设置：
+不透明操作统一失败关闭：互补空值条件、仅由常量/函数构成的条件、MongoDB 的 `$where`/`$expr`/`$nor` 等不透明过滤器，以及未识别的 Redis 命令都不能绕过 DBX 所选权限等级。
 
-```bash
-DBX_MCP_ALLOW_DANGEROUS_SQL=1
-```
+DBX MCP 权限是应用层的语句形状保护，不能替代数据库授权；此限制同样适用于只读模式。静态分类无法识别 `SELECT app_mutate_users()` 等用户自定义函数或 volatile 函数中的所有副作用，也无法阻止 Agent 先枚举主键、再执行大量逐条变更。请使用数据库只读账号或最小权限账号作为最终硬边界。`dbx_execute_and_show` 仅支持 SQL 连接。
 
-Redis 连接使用 `dbx_execute_redis_command`，不通过 `dbx_execute_query` 执行。Redis 写命令遵循 `DBX_MCP_ALLOW_WRITES`；`KEYS`、`FLUSHALL`、`EVAL` 等危险 Redis 命令需要设置 `DBX_MCP_ALLOW_DANGEROUS_SQL=1`。
+#### DBX 管理的 MCP 策略
 
-#### 连接级 MCP 策略与会话范围
+DBX 在 **设置 → MCP** 中保存一份权威策略：
 
-每个 DBX 连接都可以在“高级”设置中配置 **MCP 访问权限**：
+- **允许访问的连接** 决定哪些稳定连接 ID 可以被列出和解析。
+- **权限模式** 为所有 MCP 客户端统一选择 **只读**、**数据读写** 或 **完全访问**。
 
-- `禁用`：MCP 不会列出该连接，也无法通过 ID 或名称访问。
-- `只读`：MCP 可以读取元数据和执行查询，但不能写入。
-- `读写`：MCP 按会话 SQL 安全选项执行；旧连接默认使用此模式。
+DBX 会在每次 MCP 请求时重新读取这份权威策略。即使允许高风险操作，连接自身的通用“只读模式”和 DBX 生产库保护仍然是权限上限。常规客户端配置不需要声明权限或连接范围环境变量。DBX 生成的配置只包含启动 Server 并连接当前 DBX 实例所需的运行参数；Web 模式会包含 `DBX_WEB_URL` 和 `DBX_WEB_PASSWORD` 占位值。
 
-DBX 中保存的连接策略是最终约束。连接自身的“只读模式”比 MCP 权限更强，客户端环境变量只能进一步收紧权限。例如，`DBX_MCP_ALLOW_WRITES=1` 无法把 DBX 管理的只读连接变成可写。
-
-如果一个客户端会话只应看到若干指定连接，请使用 `dbx_list_connections` 返回的稳定连接 ID：
-
-```bash
-DBX_MCP_SCOPE_CONNECTION_IDS=connection-id-1,connection-id-2
-DBX_MCP_SCOPE_CONNECTION_ID=__dbx_multi_scope_requires_updated_server__
-```
-
-只选择一个连接时，DBX 为最大化兼容性仍会生成 `DBX_MCP_SCOPE_CONNECTION_ID`。选择多个连接时，DBX 还会生成上方所示的无效单选 ID：新版服务端优先读取复数列表，旧版服务端则安全地匹配不到连接，而不会把会话当作未设置 scope。旧的 `DBX_MCP_SCOPE_CONNECTION_NAME` 也继续可用，但推荐使用 ID。复数 ID 列表优先于单数 ID，任何 ID scope 都优先于名称。scope 包含多个连接时，访问具体连接的工具必须传入 `connection_id` 或 `connection_name`，不会静默选择第一个连接。会话 scope 只是便捷的收窄手段，不能替代持久化连接策略。当任一连接配置了禁用或只读 MCP 策略时，MCP 的连接新增/删除工具会拒绝修改，请回到 DBX 管理连接。
+新版 Server 会忽略 `DBX_MCP_ALLOW_WRITES` 和 `DBX_MCP_ALLOW_DANGEROUS_SQL`。旧的 `DBX_MCP_SCOPE_CONNECTION_ID`、`DBX_MCP_SCOPE_CONNECTION_IDS` 和 `DBX_MCP_SCOPE_CONNECTION_NAME` 仅为兼容已有配置而继续读取，而且只能进一步收窄 DBX allowlist。DBX 不再生成或推荐这些变量，升级后可以从客户端配置中删除。`DBX_DATA_DIR`、`DBX_WEB_URL`、`DBX_WEB_PASSWORD` 和诊断开关等运行环境变量仍按对应部署方式使用。
 
 ### 工作原理
 

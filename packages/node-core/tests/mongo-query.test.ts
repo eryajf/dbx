@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
   executeQuery,
+  evaluateMongoWriteSafety,
   inferMongoColumns,
   mongoAggregateWriteStage,
   mongoCollectionStatsToQueryResult,
@@ -215,7 +216,7 @@ test("mongoAggregateWriteStage detects write stages", () => {
   assert.equal(mongoAggregateWriteStage('[{"$merge":{"into":"projects_dump"}}]'), "$merge");
 });
 
-test("mongodb executeQuery blocks aggregate write stages until dangerous SQL is enabled", async () => {
+test("mongodb executeQuery blocks aggregate write stages until high-risk writes are enabled", async () => {
   const oldAllowWrites = process.env.DBX_MCP_ALLOW_WRITES;
   const oldAllowDangerous = process.env.DBX_MCP_ALLOW_DANGEROUS_SQL;
   delete process.env.DBX_MCP_ALLOW_WRITES;
@@ -233,7 +234,7 @@ test("mongodb executeQuery blocks aggregate write stages until dangerous SQL is 
     ssl: false,
   } as const;
 
-  await assert.rejects(executeQuery(config, 'db.projects.aggregate([{"$merge":{"into":"projects_dump"}}])'), /DBX_MCP_ALLOW_DANGEROUS_SQL=1/);
+  await assert.rejects(executeQuery(config, 'db.projects.aggregate([{"$merge":{"into":"projects_dump"}}])'), /high-risk operations.*DBX MCP settings/i);
 
   if (oldAllowWrites === undefined) delete process.env.DBX_MCP_ALLOW_WRITES;
   else process.env.DBX_MCP_ALLOW_WRITES = oldAllowWrites;
@@ -293,6 +294,67 @@ test("parseMongoWriteCommand accepts supported write commands", () => {
     kind: "dropCollection",
     collection: "audit.logs",
   });
+});
+
+test("mongodb safe-write mode allows guarded updates and deletes", () => {
+  for (const source of [
+    'db.projects.updateOne({"_id":"1"},{"$set":{"name":"next"}})',
+    'db.projects.deleteOne({"_id":"1"})',
+    'db.projects.updateMany({"$and":[{}, {"tenant_id":1}]},{"$set":{"active":false}})',
+    'db.projects.updateMany({"created_at":{"$gte":"2026-01-01"}},{"$set":{"archived":true}})',
+    'db.projects.deleteMany({"$or":[{"tenant_id":1},{"tenant_id":2}]})',
+    'db.projects.deleteMany({"id":{"$ne":1}})',
+    'db.projects.deleteMany({"id":{"$in":[1,2]}})',
+    'db.projects.deleteMany({"id":{"$exists":true}})',
+    'db.projects.updateOne({_id:ObjectId("507f1f77bcf86cd799439011")},{"$set":{"active":true}})',
+    'db.projects.deleteMany({"sequence":NumberLong("9223372036854775807")})',
+    'db.projects.deleteMany({"created_at":ISODate("2026-01-01T00:00:00.000Z")})',
+    'db.projects.deleteMany({"tenant_id":1,"id":{"$nin":[]}})',
+  ]) {
+    const command = parseMongoWriteCommand(source);
+    assert.ok(command, source);
+    assert.equal(evaluateMongoWriteSafety(command, { allowWrites: true, allowDangerous: false }).allowed, true, source);
+  }
+});
+
+test("mongodb safety requires high-risk permission for unbounded writes and schema changes", () => {
+  for (const source of [
+    'db.projects.updateMany({},{"$set":{"name":"next"}})',
+    'db.projects.deleteMany({"$expr":true})',
+    'db.projects.deleteMany({"$or":[{}, {"tenant_id":1}]})',
+    'db.projects.deleteMany({"$nor":[{"$expr":false}]})',
+    'db.projects.deleteMany({"$or":[{"id":{"$exists":true}},{"id":{"$exists":false}}]})',
+    'db.projects.deleteMany({"$or":[{"id":{"$exists":true}},{"id":{"$not":{"$exists":true}}}]})',
+    'db.projects.deleteMany({"$or":[{"id":{"$eq":1}},{"id":{"$ne":1}}]})',
+    'db.projects.deleteMany({"$or":[{"$and":[{"id":{"$eq":1}}]},{"id":{"$ne":1}}]})',
+    'db.projects.deleteMany({"$or":[{"$and":[{"id":{"$eq":1}},{}]},{"id":{"$ne":1}}]})',
+    'db.projects.deleteMany({"$or":[{"$and":[{"id":{"$eq":1}},{"x":{"$exists":true}}]},{"id":{"$ne":1}},{"x":{"$exists":false}}]})',
+    'db.projects.deleteMany({"$or":[{"id":1},{"id":{"$ne":1}}]})',
+    'db.projects.deleteMany({"$or":[{"id":{"$gt":1}},{"id":{"$lte":1}}]})',
+    'db.projects.deleteMany({"$or":[{"id":{"$gte":1}},{"id":{"$lt":1}}]})',
+    'db.projects.deleteMany({"$or":[{"id":{"$in":[1,2]}},{"id":{"$nin":[2,1]}}]})',
+    'db.projects.deleteMany({"_id":{"$exists":true}})',
+    'db.projects.deleteMany({"id":{"$nin":[]}})',
+    'db.projects.deleteMany({"_id":{"$oid":"not-an-object-id"}})',
+    'db.projects.deleteMany({"sequence":{"$numberLong":"9223372036854775808"}})',
+    'db.projects.deleteMany({"created_at":{"$date":"2026-02-30T00:00:00Z"}})',
+    'db.projects.deleteMany({"name":{"$regex":".*"}})',
+    'db.projects.deleteMany({"$or":[{"_id":{"$oid":"507f1f77bcf86cd799439011"}},{"_id":{"$ne":{"$oid":"507f1f77bcf86cd799439011"}}}]})',
+    'db.projects.deleteMany({"$and":[{"tenant_id":1},{"$nor":[{"archived":true}]}]})',
+    'db.projects.deleteMany({"$or":[]})',
+    'db.projects.deleteMany({"$opaque":[{"id":1}]})',
+    'db.projects.createIndex({"email":1})',
+    'db.projects.dropIndex("projects_email_unique")',
+  ]) {
+    const command = parseMongoWriteCommand(source);
+    assert.ok(command, source);
+    assert.equal(evaluateMongoWriteSafety(command, { allowWrites: true, allowDangerous: false }).allowed, false, source);
+    assert.equal(evaluateMongoWriteSafety(command, { allowWrites: true, allowDangerous: true }).allowed, true, source);
+  }
+
+  const insert = parseMongoWriteCommand('db.projects.insertOne({"name":"demo"})');
+  assert.ok(insert);
+  assert.equal(evaluateMongoWriteSafety(insert, { allowWrites: true, allowDangerous: false }).allowed, true);
 });
 
 test("parseMongoWriteCommand rejects invalid dropIndex and dropIndexes commands", () => {
@@ -378,7 +440,7 @@ test("mongodb executeQuery treats dropIndex as a write when writes are explicitl
   else process.env.DBX_MCP_ALLOW_WRITES = oldAllowWrites;
 });
 
-test("mongodb executeQuery blocks dangerous dropIndexes shapes until dangerous SQL is enabled", async () => {
+test("mongodb executeQuery blocks dropIndexes shapes until high-risk writes are enabled", async () => {
   const oldAllowWrites = process.env.DBX_MCP_ALLOW_WRITES;
   const oldAllowDangerous = process.env.DBX_MCP_ALLOW_DANGEROUS_SQL;
   process.env.DBX_MCP_ALLOW_WRITES = "1";
@@ -397,10 +459,10 @@ test("mongodb executeQuery blocks dangerous dropIndexes shapes until dangerous S
     ssl: false,
   } as const;
 
-  await assert.rejects(executeQuery(config, "db.projects.dropIndexes()"), /DBX_MCP_ALLOW_DANGEROUS_SQL=1/);
-  await assert.rejects(executeQuery(config, 'db.projects.dropIndexes("*")'), /DBX_MCP_ALLOW_DANGEROUS_SQL=1/);
-  await assert.rejects(executeQuery(config, 'db.projects.dropIndexes(["a_1","b_1"])'), /DBX_MCP_ALLOW_DANGEROUS_SQL=1/);
-  await assert.rejects(executeQuery(config, "db.projects.drop()"), /DBX_MCP_ALLOW_DANGEROUS_SQL=1/);
+  await assert.rejects(executeQuery(config, "db.projects.dropIndexes()"), /high-risk operations.*DBX MCP settings/i);
+  await assert.rejects(executeQuery(config, 'db.projects.dropIndexes("*")'), /high-risk operations.*DBX MCP settings/i);
+  await assert.rejects(executeQuery(config, 'db.projects.dropIndexes(["a_1","b_1"])'), /high-risk operations.*DBX MCP settings/i);
+  await assert.rejects(executeQuery(config, "db.projects.drop()"), /high-risk operations.*DBX MCP settings/i);
 
   if (oldAllowWrites === undefined) delete process.env.DBX_MCP_ALLOW_WRITES;
   else process.env.DBX_MCP_ALLOW_WRITES = oldAllowWrites;

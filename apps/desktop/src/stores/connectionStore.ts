@@ -917,7 +917,6 @@ export const useConnectionStore = defineStore("connection", () => {
       query_timeout_secs: config.query_timeout_secs ?? 30,
       idle_timeout_secs: config.idle_timeout_secs ?? 60,
       keepalive_interval_secs: config.keepalive_interval_secs ?? DEFAULT_KEEPALIVE_INTERVAL_SECS,
-      mcp_access: config.mcp_access || "read_write",
       database_info: normalizeDatabaseConnectionInfo(config.database_info),
     };
   }

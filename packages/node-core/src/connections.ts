@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import Database from "better-sqlite3";
+import { normalizeMcpGlobalPolicy } from "./mcp-policy.js";
 import { dbPath as defaultDbPath } from "./paths.js";
 
 export interface ConnectionConfig {
@@ -31,7 +32,6 @@ export interface ConnectionConfig {
   redis_cluster_nodes?: string;
   redis_key_separator?: string;
   read_only?: boolean;
-  mcp_access?: "disabled" | "read_only" | "read_write";
   is_production?: boolean;
   production_databases?: string[];
 }
@@ -67,6 +67,10 @@ export interface ProxyTunnelConfig {
 
 export interface ConnectionStoreOptions {
   path?: string;
+}
+
+export interface ConnectionMutationOptions extends ConnectionStoreOptions {
+  mcpRequest?: boolean;
 }
 
 export interface ConnectionStoreDiagnostics {
@@ -277,6 +281,47 @@ function tableExists(db: Database.Database, name: string): boolean {
   return !!row;
 }
 
+function assertMcpConnectionManagementAllowed(
+  db: Database.Database,
+  options: ConnectionMutationOptions,
+  targetConnectionId?: string,
+): void {
+  if (!options.mcpRequest || !tableExists(db, "app_settings")) return;
+
+  try {
+    const row = db.prepare("SELECT settings_json FROM app_settings WHERE id = 1").get() as { settings_json: string } | undefined;
+    if (!row) return;
+    const settings = JSON.parse(row.settings_json) as unknown;
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+      throw new Error("app_settings.settings_json must be an object");
+    }
+    const policyValue = (settings as Record<string, unknown>).mcp_global_policy;
+    if (policyValue === undefined) return;
+    const policy = normalizeMcpGlobalPolicy(policyValue);
+    if (policy.readOnly) {
+      throw new Error("MCP_READ_ONLY: DBX global MCP read-only mode is enabled. Connection changes are blocked.");
+    }
+    if (
+      targetConnectionId !== undefined &&
+      policy.allowedConnectionIds !== null &&
+      !policy.allowedConnectionIds.includes(targetConnectionId)
+    ) {
+      throw new Error(
+        `CONNECTION_OUT_OF_SCOPE: Connection "${targetConnectionId}" is not allowed by the current DBX MCP policy.`,
+      );
+    }
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.startsWith("MCP_READ_ONLY:") || error.message.startsWith("CONNECTION_OUT_OF_SCOPE:"))
+    ) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`MCP_POLICY_UNAVAILABLE: ${message}`);
+  }
+}
+
 export async function findConnection(name: string): Promise<ConnectionConfig | undefined> {
   const connections = await loadConnections();
   return connections.find((c) => c.name.toLowerCase() === name.toLowerCase());
@@ -287,9 +332,9 @@ export async function findConnectionById(id: string): Promise<ConnectionConfig |
   return connections.find((c) => c.id === id);
 }
 
-export async function addConnection(config: Omit<ConnectionConfig, "id">): Promise<ConnectionConfig> {
+export async function addConnection(config: Omit<ConnectionConfig, "id">, options: ConnectionMutationOptions = {}): Promise<ConnectionConfig> {
   const id = randomUUID();
-  const db = openDb();
+  const db = openDb(false, options.path ?? defaultDbPath());
   const normalized = canonicalizeConnection({ ...config, id } as ConnectionConfig);
 
   const full = {
@@ -323,6 +368,7 @@ export async function addConnection(config: Omit<ConnectionConfig, "id">): Promi
   const configJson = JSON.stringify(full);
 
   const insert = db.transaction(() => {
+    assertMcpConnectionManagementAllowed(db, options);
     db.prepare("INSERT INTO connections (id, config_json) VALUES (?, ?)").run(id, configJson);
     if (normalized.password) {
       db.prepare("INSERT INTO connection_secrets (connection_id, key, secret) VALUES (?, ?, ?)").run(id, "password", normalized.password);
@@ -343,35 +389,43 @@ export async function addConnection(config: Omit<ConnectionConfig, "id">): Promi
       db.prepare("INSERT INTO connection_secrets (connection_id, key, secret) VALUES (?, ?, ?)").run(id, "redis_sentinel_password", normalized.redis_sentinel_password);
     }
   });
-  insert();
-  db.close();
-
-  return normalized;
+  try {
+    insert();
+    return normalized;
+  } finally {
+    db.close();
+  }
 }
 
-export async function removeConnection(name: string): Promise<boolean> {
-  const connection = await findConnection(name);
+export async function removeConnection(name: string, options: ConnectionMutationOptions = {}): Promise<boolean> {
+  const connection = (await loadConnections({ path: options.path })).find((config) => config.name.toLowerCase() === name.toLowerCase());
   if (!connection) return false;
 
-  const db = openDb();
+  const db = openDb(false, options.path ?? defaultDbPath());
   const remove = db.transaction(() => {
+    assertMcpConnectionManagementAllowed(db, options, connection.id);
     db.prepare("DELETE FROM connections WHERE id = ?").run(connection.id);
     db.prepare("DELETE FROM connection_secrets WHERE connection_id = ?").run(connection.id);
   });
-  remove();
-  db.close();
-
-  return true;
+  try {
+    remove();
+    return true;
+  } finally {
+    db.close();
+  }
 }
 
-export async function removeConnectionById(id: string): Promise<boolean> {
-  const db = openDb();
+export async function removeConnectionById(id: string, options: ConnectionMutationOptions = {}): Promise<boolean> {
+  const db = openDb(false, options.path ?? defaultDbPath());
   const remove = db.transaction(() => {
+    assertMcpConnectionManagementAllowed(db, options, id);
     const result = db.prepare("DELETE FROM connections WHERE id = ?").run(id);
     db.prepare("DELETE FROM connection_secrets WHERE connection_id = ?").run(id);
     return result.changes > 0;
   });
-  const deleted = remove();
-  db.close();
-  return deleted;
+  try {
+    return remove();
+  } finally {
+    db.close();
+  }
 }

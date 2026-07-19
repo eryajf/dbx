@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::Json;
 use serde::Deserialize;
 
@@ -257,8 +258,10 @@ pub struct MongoDeleteRequest {
 
 pub async fn list_databases(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoConnectionRequest>,
 ) -> Result<Json<Vec<String>>, AppError> {
+    super::mcp_policy::ensure_scope(&state, &headers, &req.connection_id).await?;
     let result =
         dbx_core::mongo_ops::mongo_list_databases_core(&state.app, &req.connection_id).await.map_err(AppError)?;
     Ok(Json(result))
@@ -266,8 +269,10 @@ pub async fn list_databases(
 
 pub async fn list_collections(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoCollectionRequest>,
 ) -> Result<Json<Vec<dbx_core::document_ops::CollectionInfo>>, AppError> {
+    super::mcp_policy::ensure_scope(&state, &headers, &req.connection_id).await?;
     let result = dbx_core::mongo_ops::mongo_list_collections_core(&state.app, &req.connection_id, &req.database)
         .await
         .map_err(AppError)?;
@@ -321,8 +326,11 @@ pub async fn drop_database(
 
 pub async fn drop_collection(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoCollectionNameRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::mcp_policy::ensure_dangerous_write(&state, &headers, &req.connection_id, &req.database, "Drop collection")
+        .await?;
     ensure_writable(&state.app, &req.connection_id, "Drop collection").await?;
     dbx_core::mongo_ops::mongo_drop_collection_core(&state.app, &req.connection_id, &req.database, &req.collection)
         .await
@@ -332,8 +340,10 @@ pub async fn drop_collection(
 
 pub async fn find_documents(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoFindRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::mcp_policy::ensure_scope(&state, &headers, &req.connection_id).await?;
     let result = run_cancellable(
         &state,
         req.execution_id.clone(),
@@ -376,8 +386,10 @@ pub async fn find_one(
 
 pub async fn count_documents(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoCountRequest>,
 ) -> Result<Json<u64>, AppError> {
+    super::mcp_policy::ensure_scope(&state, &headers, &req.connection_id).await?;
     let result = run_cancellable(
         &state,
         req.execution_id,
@@ -396,8 +408,10 @@ pub async fn count_documents(
 
 pub async fn server_version(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoServerVersionRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::mcp_policy::ensure_scope(&state, &headers, &req.connection_id).await?;
     let result = run_cancellable(
         &state,
         req.execution_id.clone(),
@@ -409,8 +423,10 @@ pub async fn server_version(
 
 pub async fn collection_stats(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoCollectionStatsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::mcp_policy::ensure_scope(&state, &headers, &req.connection_id).await?;
     let result = run_cancellable(
         &state,
         req.execution_id.clone(),
@@ -428,8 +444,28 @@ pub async fn collection_stats(
 
 pub async fn aggregate_documents(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoAggregateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::mcp_policy::ensure_scope(&state, &headers, &req.connection_id).await?;
+    if super::mcp_policy::mongo_pipeline_has_write_stage(&req.pipeline_json) {
+        super::mcp_policy::ensure_dangerous_write(
+            &state,
+            &headers,
+            &req.connection_id,
+            &req.database,
+            "MongoDB aggregate write",
+        )
+        .await?;
+        super::mcp_policy::ensure_mongo_pipeline_target(
+            &state,
+            &headers,
+            &req.connection_id,
+            &req.database,
+            &req.pipeline_json,
+        )
+        .await?;
+    }
     let result = run_cancellable(
         &state,
         req.execution_id.clone(),
@@ -449,8 +485,10 @@ pub async fn aggregate_documents(
 
 pub async fn distinct(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoDistinctRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::mcp_policy::ensure_scope(&state, &headers, &req.connection_id).await?;
     let result = run_cancellable(
         &state,
         req.execution_id.clone(),
@@ -469,8 +507,11 @@ pub async fn distinct(
 
 pub async fn create_index(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoCreateIndexRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::mcp_policy::ensure_dangerous_write(&state, &headers, &req.connection_id, &req.database, "Create index")
+        .await?;
     ensure_writable(&state.app, &req.connection_id, "Create index").await?;
     let name = dbx_core::mongo_ops::mongo_create_index_core(
         &state.app,
@@ -487,8 +528,11 @@ pub async fn create_index(
 
 pub async fn drop_indexes(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoDropIndexesRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::mcp_policy::ensure_dangerous_write(&state, &headers, &req.connection_id, &req.database, "Drop indexes")
+        .await?;
     ensure_writable(&state.app, &req.connection_id, "Drop indexes").await?;
     let result = dbx_core::mongo_ops::mongo_drop_indexes_core(
         &state.app,
@@ -523,8 +567,10 @@ pub async fn insert_document(
 
 pub async fn insert_documents(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoInsertDocumentsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::mcp_policy::ensure_write(&state, &headers, &req.connection_id, &req.database, "Insert").await?;
     ensure_writable(&state.app, &req.connection_id, "Insert").await?;
     let result = dbx_core::mongo_ops::mongo_insert_documents_core(
         &state.app,
@@ -559,8 +605,15 @@ pub async fn update_document(
 
 pub async fn update_documents(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoUpdateDocumentsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if super::mcp_policy::mongo_filter_is_effectively_unbounded(&req.filter_json) {
+        super::mcp_policy::ensure_dangerous_write(&state, &headers, &req.connection_id, &req.database, "Update")
+            .await?;
+    } else {
+        super::mcp_policy::ensure_write(&state, &headers, &req.connection_id, &req.database, "Update").await?;
+    }
     ensure_writable(&state.app, &req.connection_id, "Update").await?;
     let result = dbx_core::mongo_ops::mongo_update_documents_core(
         &state.app,
@@ -653,8 +706,15 @@ pub async fn delete_document(
 
 pub async fn delete_documents(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoDeleteDocumentsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if super::mcp_policy::mongo_filter_is_effectively_unbounded(&req.filter_json) {
+        super::mcp_policy::ensure_dangerous_write(&state, &headers, &req.connection_id, &req.database, "Delete")
+            .await?;
+    } else {
+        super::mcp_policy::ensure_write(&state, &headers, &req.connection_id, &req.database, "Delete").await?;
+    }
     ensure_writable(&state.app, &req.connection_id, "Delete").await?;
     let result = dbx_core::mongo_ops::mongo_delete_documents_core(
         &state.app,

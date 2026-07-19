@@ -12,6 +12,23 @@ export function isDirectQueryType(dbType: string): dbType is DirectQueryType {
   return DIRECT_QUERY_TYPE_SET.has(dbType);
 }
 
+const NON_SQL_QUERY_TYPES = new Set([
+  "redis",
+  "mongodb",
+  "elasticsearch",
+  "qdrant",
+  "milvus",
+  "weaviate",
+  "chromadb",
+  "influxdb",
+  "neo4j",
+  "etcd",
+]);
+
+export function supportsSqlQuery(dbType: string): boolean {
+  return !NON_SQL_QUERY_TYPES.has(dbType);
+}
+
 export const BRIDGE_REQUIRED_TYPES = [
   "cloudflare-d1",
   "redis",

@@ -52,6 +52,7 @@ import type {
   UpgradeAllAgentDriversResult,
   AgentUpdateBlocker,
   DesktopSettings,
+  McpGlobalPolicy,
   SavedSqlSyncRequest,
   DriverInstallProgress,
   JavaRuntimeConfig,
@@ -1159,6 +1160,19 @@ export async function loadDesktopSettings(): Promise<DesktopSettings> {
 
 export async function saveDesktopSettings(settings: DesktopSettings): Promise<void> {
   safeLocalStorageSet(DESKTOP_SETTINGS_STORAGE_KEY, JSON.stringify({ ...DEFAULT_DESKTOP_SETTINGS, ...settings }));
+}
+
+export async function loadMcpGlobalPolicy(): Promise<McpGlobalPolicy> {
+  return get("/api/app-settings/mcp-policy");
+}
+
+export async function saveMcpGlobalPolicy(policy: Omit<McpGlobalPolicy, "configured">): Promise<void> {
+  const res = await fetch(apiUrl("/api/app-settings/mcp-policy"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(policy),
+  });
+  if (!res.ok) throw new Error(await res.text());
 }
 
 export interface OpenTabsStatePayload {

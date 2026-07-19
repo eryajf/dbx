@@ -68,19 +68,6 @@ pub fn database_info_from_protocol_value(value: &Value) -> Option<DatabaseConnec
     serde_json::from_value::<DatabaseInfoEnvelope>(value.clone()).ok()?.database_info
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum McpAccessMode {
-    Disabled,
-    ReadOnly,
-    #[default]
-    ReadWrite,
-}
-
-fn is_default_mcp_access(value: &McpAccessMode) -> bool {
-    *value == McpAccessMode::ReadWrite
-}
-
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ConnectionConfig {
     pub id: String,
@@ -172,8 +159,6 @@ pub struct ConnectionConfig {
     pub one_time: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub read_only: bool,
-    #[serde(default, skip_serializing_if = "is_default_mcp_access")]
-    pub mcp_access: McpAccessMode,
     /// Explicitly marks every database reachable through this connection as production.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_production: bool,
@@ -626,8 +611,6 @@ struct ConnectionConfigData {
     #[serde(default)]
     pub read_only: bool,
     #[serde(default)]
-    pub mcp_access: McpAccessMode,
-    #[serde(default)]
     pub is_production: bool,
     #[serde(default)]
     pub production_databases: Vec<String>,
@@ -684,7 +667,6 @@ impl From<ConnectionConfigData> for ConnectionConfig {
             jdbc_driver_paths: data.jdbc_driver_paths,
             one_time: data.one_time,
             read_only: data.read_only,
-            mcp_access: data.mcp_access,
             is_production: data.is_production,
             production_databases: data.production_databases,
             database_info: data.database_info,
@@ -2096,7 +2078,6 @@ mod tests {
             jdbc_driver_paths: Vec::new(),
             one_time: false,
             read_only: false,
-            mcp_access: Default::default(),
             is_production: false,
             production_databases: vec![],
             database_info: None,
@@ -2104,7 +2085,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_access_defaults_to_read_write_and_serializes_managed_modes() {
+    fn legacy_mcp_access_is_ignored_and_not_serialized() {
         let legacy: ConnectionConfig = serde_json::from_value(serde_json::json!({
             "id": "legacy",
             "name": "Legacy",
@@ -2113,15 +2094,12 @@ mod tests {
             "port": 3306,
             "username": "root",
             "password": "",
-            "database": null
+            "database": null,
+            "mcp_access": "read_only"
         }))
         .unwrap();
-        assert_eq!(legacy.mcp_access, McpAccessMode::ReadWrite);
         assert!(serde_json::to_value(&legacy).unwrap().get("mcp_access").is_none());
-
-        let mut managed = legacy;
-        managed.mcp_access = McpAccessMode::ReadOnly;
-        assert_eq!(serde_json::to_value(&managed).unwrap()["mcp_access"], "read_only");
+        assert!(!legacy.read_only);
     }
 
     #[test]
