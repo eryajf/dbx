@@ -181,7 +181,7 @@ impl Default for McpGlobalPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpGlobalPolicyState {
     pub configured: bool,

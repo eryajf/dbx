@@ -5,8 +5,8 @@
 - 日期：2026-07-18
 - 分支：`issue_3696`
 - 关联 Issue：[#3696](https://github.com/t8y2/dbx/issues/3696)、[#3800](https://github.com/t8y2/dbx/issues/3800)
-- 状态：中央策略已实现，自动化检查通过；仍需使用真实数据库完成发布前人工验证。
-- 评审：软件 QA 与数据库专项复核均通过，`IS_PASS: YES`。
+- 状态：中央策略已迁移到 Rust MCP 运行时，冲突迁移后的自动化检查通过；仍需使用真实数据库完成发布前人工验证。
+- 评审：软件 QA、数据库专项复核与 Rust 迁移复查均已完成。
 
 ## 最终产品决策
 
@@ -72,12 +72,13 @@ effective_write_allowed =
 - Web 增加经现有认证中间件保护的 `GET/PUT /api/app-settings/mcp-policy`。
 - 通用 app settings 保存会保留并发写入的最新 MCP 策略，避免旧设置快照覆盖安全策略。
 
-### MCP Server 与 Node backend
+### Rust MCP Server 与 backend
 
-- `Backend` 增加 `loadMcpGlobalPolicy()`，桌面模式直接读取 SQLite，Web 模式调用策略 API。
+- `DbxBackend` 增加 `load_mcp_global_policy()`，本地模式直接读取 SQLite，Web 模式调用策略 API。
 - 列表和连接解析始终应用中央 allowlist；旧配置中的客户端 scope 仅作为额外收窄条件兼容读取。
+- 旧连接 ID、名称和数据库 scope 都是硬上限；请求参数不能覆盖数据库 scope。
 - 按 ID 或名称访问范围外连接返回 `CONNECTION_OUT_OF_SCOPE`。
-- SQL 多语句在每条语句执行前重新读取策略；同一 MCP 进程无需重启即可响应设置切换。
+- Rust MCP 在每个工具请求中重新读取策略；Desktop bridge 和 Web 最终执行边界会再次读取最新策略。
 - SQL、MongoDB、Redis、`dbx_execute_and_show`、连接新增和删除均使用中央只读与高风险操作策略。
 - 删除连接前重新解析目标，不能按隐藏 ID 或名称删除 allowlist 外连接。
 - Web MCP 的 SQL、MongoDB、Redis 和连接保存请求携带 `X-DBX-MCP-Request: 1`，普通 Web UI 请求不携带，因此不受 MCP 全局只读影响。
@@ -85,10 +86,11 @@ effective_write_allowed =
 
 ### Desktop bridge 与 Web 最终执行边界
 
-- Desktop bridge 自身重新读取中央策略，不信任 Node 传入的 `allow_writes`、`allow_dangerous` 或 Redis `skip_safety_check`。
+- Desktop bridge 自身重新读取中央策略，不信任 MCP 请求传入的 `allow_writes`、`allow_dangerous` 或 Redis `skip_safety_check`。
 - bridge 的连接解析、SQL、MongoDB 聚合/索引/文档写入、Redis 命令均检查 allowlist、全局只读、通用连接只读和生产库保护。
 - Web query、MongoDB 和 Redis 路由在检测到 MCP 来源标记时执行同样的末端校验。
 - MongoDB `$out`、`$merge` 只按顶层聚合阶段识别，避免普通字段值误报。
+- 本地 Rust MCP、Desktop bridge 和 Web 都会检查 `$out`、`$merge` 的跨库目标，完全访问模式也不能写入生产库。
 - SQL 数据读写允许普通 `INSERT` 和带有效过滤条件的 `UPDATE`/`DELETE`；全表修改、DDL、`TRUNCATE` 以及无法可靠分类的写操作需要完全访问权限。
 - MongoDB 数据读写允许带可验证有效过滤条件的更新/删除；空过滤、`$where`/`$expr`/`$nor` 等不透明过滤器、`$out`/`$merge` 和结构变更需要完全访问权限。
 - Redis 数据读写允许已明确分类的普通键值写入和明确键删除；`FLUSHDB`、`FLUSHALL` 等全局破坏性命令需要完全访问权限，未知命令需要完全访问权限。
@@ -111,77 +113,39 @@ effective_write_allowed =
 - 连接编辑页、store、i18n、文档和 MCP 运行时不再包含连接级 MCP 三态。
 - 旧 JSON 中的 `mcp_access` 会被忽略，且后续序列化不再输出该字段；不会迁移为通用连接只读。
 
-### npm 发布链
+### 原生 MCP 发布链
 
-- `@dbx-app/mongo-shell` 已移除 `private` 标记。
-- package dry-run 会打包 `mongo-shell`。
-- `mcp-release.yml` 会先发布固定版本的 `mongo-shell`，再发布依赖它的 `node-core` 与 MCP Server。
-- 本轮只修复发布配置，没有实际向 npm 发布。
+- `@dbx-app/mcp-server` 是轻量 Node 启动器，运行时选择对应平台的 Rust `dbx-mcp` 二进制。
+- `mcp-release.yml` 为 macOS、Linux 和 Windows 构建并发布平台包，再发布 MCP Server 启动器和原生 GitHub Release 归档。
+- 旧 `packages/node-core` 和 TypeScript MCP 运行时已删除，不再参与构建、测试或发布。
+- 本轮只修复发布配置和迁移冲突，没有实际向 npm 发布。
 
 ## 自动化验证结果
 
 ```text
-pnpm typecheck
+cargo test -p dbx-core mongo_shell --lib
   PASS
 
-frontend MCP/settings focused tests
-  4 files, 117 tests passed
-
-@dbx-app/node-core
-  SQL/MongoDB/Redis/MCP policy focused: 6 files, 92 tests passed
-  final full-suite attempt: 147 passed, 7 blocked by sandbox localhost EPERM
-
-root Vitest full suite
-  3785 passed, 7 blocked by sandbox localhost EPERM
-
-@dbx-app/mcp-server
-  build passed, 3 files, 72 tests passed
-
-cargo check -p dbx-core -p dbx-web
+cargo test -p dbx-mcp --no-default-features --lib --test protocol
   PASS
-
-cargo check -p dbx
-  PASS
-
-cargo test -p dbx-core mcp_
-  12 relevant tests passed
-
-cargo test -p dbx-core sql_risk --lib
-  14 SQL risk tests passed
-
-cargo test -p dbx-core storage::tests --lib
-  44 storage tests passed
-
-cargo test -p dbx-core classifies_safe_confirmed_and_blocked_commands --lib
-  1 Redis risk test passed
-
-cargo test -p dbx mcp_
-  16 relevant tests passed
 
 cargo test -p dbx-web mcp_
-  5 matching tests passed
-
-cargo fmt --check
   PASS
 
-pnpm publish:dry-run
-  mongo-shell, node-core, CLI and MCP Server built and packed successfully
+pnpm --filter @dbx-app/mcp-server test
+  PASS
+
+cargo check -p dbx-core -p dbx-web -p dbx-mcp
+  PASS
+
+cargo fmt --all -- --check
+  PASS
 
 git diff --check
   PASS
-
-pnpm lint
-  PASS
-
-pnpm build
-  PASS
 ```
 
-Node 全量测试中的 7 项需要绑定临时 localhost 端口，在受限 sandbox 中会以 `listen EPERM` 超时；node-core 其余 147 项及根目录其余 3785 项通过。本轮申请本地监听权限时审批服务返回 503，因此未能在沙箱外重跑这 7 项。受影响的是本地 HTTP/Redis/bridge 测试，与 MCP 风险判断无关；第二轮 Node 安全聚焦测试 92 项、前端/MongoDB/MCP 配置聚焦测试 117 项均全部通过。
-
-真实 MCP stdio 探针使用最新构建的绝对路径、`mysql-localhost` 和临时策略数据库副本，在同一 MCP 进程内完成动态策略验证：只读模式返回 `MCP_READ_ONLY`，且客户端写入/高风险环境变量即使为 `1` 也无法提权；数据读写模式下带有效条件的 `UPDATE` 通过策略层，无条件 `UPDATE`、`TRUNCATE` 和 `USE` 返回 `SQL_BLOCKED`；完全访问模式下无条件更新通过策略层；allowlist 切换为空集后连接列表立即隐藏并返回 `CONNECTION_OUT_OF_SCOPE`。所有写入探针均指向不存在的 `__dbx_mcp_probe_missing__` 表；沙箱禁止连接 `127.0.0.1:3306`，所以通过策略层的探针在驱动连接阶段返回 `EPERM`，未修改数据库数据。
-
-Tauri 测试仍会报告一个与本改造无关的既有 warning：`src-tauri/src/commands/sql_file.rs` 存在重复 `#[test]` 属性。
+Rust MCP 回归测试覆盖中央 allowlist、只读模式、旧 scope 交集、数据库 scope 硬约束、稳定策略错误码和 MongoDB 跨库生产目标。MCP npm 启动器测试使用隔离的临时 `DBX_DATA_DIR` 启动真实 Rust 二进制，不读取或修改用户的 DBX 数据库。
 
 ## 发布前人工验证
 

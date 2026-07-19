@@ -131,7 +131,8 @@ import { dataGridHeaderContentWidth, scrollbarGutterWidth } from "@/lib/dataGrid
 import { canGoNextDataGridPage } from "@/lib/dataGrid/dataGridPagination";
 import { dataGridCountQueryOptions } from "@/lib/dataGrid/dataGridQueryOptions";
 import { dataGridBottomScrollTop, dataGridScrollPosition, isDataGridAtScrollBottom, isDataGridNearScrollBottom, shouldCheckInfiniteScrollAfterScroll, type DataGridScrollPosition } from "@/lib/dataGrid/dataGridInfiniteScroll";
-import { CANVAS_DATA_GRID_ROW_HEIGHT, drawCanvasDataGrid } from "@/lib/dataGrid/canvasDataGridRenderer";
+import { CANVAS_DATA_GRID_ROW_HEIGHT, dataGridSearchMatchKey, drawCanvasDataGrid } from "@/lib/dataGrid/canvasDataGridRenderer";
+import { createRowLowerTextCache } from "@/lib/dataGrid/dataGridRowLowerText";
 import { dataGridPreviewLabelKey, dataGridSaveActionMode, dataGridSaveToolbarState } from "@/lib/dataGrid/dataGridSaveUi";
 import type { QueryEditabilityReason } from "@/lib/sql/sqlAnalysis";
 import { EDITOR_FONT_FAMILY_CSS_VAR } from "@/lib/editor/editorThemes";
@@ -174,6 +175,7 @@ import { useDataGridExport } from "@/composables/useDataGridExport";
 import { eventTargetAllowsNativeClipboard, isPlainClipboardShortcut, readTextFromClipboard } from "@/lib/common/clipboard";
 import { claimDataGridPaste, planDataGridPaste } from "@/lib/dataGrid/dataGridClipboard";
 import { DATA_GRID_ROW_NUM_WIDTH, useDataGridColumnResize } from "@/composables/useDataGridColumnResize";
+import { createDataGridColumnStructureSignature } from "@/lib/dataGrid/dataGridColumnWidthState";
 import { useDataGridColumnLayout, useDataGridColumnLayoutState } from "@/composables/useDataGridColumnLayout";
 import { useDataGridCanvasRuntime, type DataGridCanvasRuntime } from "@/composables/useDataGridCanvasRuntime";
 import { useDataGridScrollbars, type DataGridScrollbarsRuntime } from "@/composables/useDataGridScrollbars";
@@ -557,7 +559,7 @@ const dataGridSearch = useDataGridSearch({
   columns: () => props.result.columns,
   suggestionColumns: () => props.tableMeta?.columns.map((column) => column.name) ?? props.result.columns,
   rows: () => displayItems.value,
-  getCellText: (row, columnIndex) => (row.data[columnIndex] === null ? "" : formatCellCached(row.data[columnIndex], columnIndex)),
+  getCellSearchText: (row, columnIndex) => (row.data[columnIndex] === null ? "" : rowLowerTextCache.get(row.data, columnIndex)),
   onNavigate: () => nextTick(scrollToCurrentMatch),
 });
 const { searchText, deferredSearchText: deferredClientSearchText, overlayVisible: searchOverlayVisible, currentMatchIndex, suggestions: searchSuggestions, suggestionIndex, matches: searchMatches, matchSet: searchMatchSet, currentMatch: currentSearchMatch } = dataGridSearch;
@@ -1774,6 +1776,9 @@ function scrollToColumnIndex(columnIndex: number) {
 
 // --- Column resize composable ---
 const columnWidthDensity = computed(() => settingsStore.editorSettings.columnWidthDensity);
+const columnWidthCacheKey = computed(() => props.cacheKey?.trim() || undefined);
+const columnStructureSignature = computed(() => createDataGridColumnStructureSignature(props.result.columns, props.result.column_types));
+const columnHeaderMeasurementKey = computed(() => [tableFontSize.value, settingsStore.editorSettings.fontFamily]);
 let columnHeaderMeasureContext: CanvasRenderingContext2D | null | undefined;
 
 function measureColumnHeaderText(text: string): number | undefined {
@@ -1792,8 +1797,10 @@ const { initColumnWidths, onResizeStart, autoFitColumn, renderedColumnWidths, to
   columnIndexes: visibleColumnIndexes,
   density: columnWidthDensity,
   compactColumnHeaderActions,
+  cacheKey: columnWidthCacheKey,
+  columnStructureSignature,
   measureHeaderText: measureColumnHeaderText,
-  headerMeasurementKey: tableFontSize,
+  headerMeasurementKey: columnHeaderMeasurementKey,
 });
 const gridStyle = computed(() => ({
   ...columnVars.value,
@@ -3055,7 +3062,7 @@ const sortedRows = computed(() => {
     const rows = props.result.rows;
     indices = indices.filter((sourceIndex) => {
       const data = rows[sourceIndex];
-      return data.some((cell, columnIndex) => cell !== null && formatCellCached(cell, columnIndex).toLowerCase().includes(q));
+      return data.some((cell, columnIndex) => cell !== null && rowLowerTextCache.get(data, columnIndex).includes(q));
     });
   }
   return indices;
@@ -3197,7 +3204,7 @@ watch(
 
 function cellIsSearchMatch(displayRow: number, col: number): boolean {
   if (isScrolling.value) return false;
-  return searchMatchSet.value.has(`cell:${displayRow}:${col}`);
+  return searchMatchSet.value.has(dataGridSearchMatchKey(displayRow, col));
 }
 
 function cellIsCurrentMatch(displayRow: number, col: number): boolean {
@@ -3211,7 +3218,7 @@ function cellIsCurrentMatch(displayRow: number, col: number): boolean {
 // maps to the field row header at the field's column index.
 function transposeHeaderIsSearchMatch(fieldIndex: number): boolean {
   if (isScrolling.value) return false;
-  return searchMatchSet.value.has(`column:-1:${fieldIndex}`);
+  return searchMatchSet.value.has(dataGridSearchMatchKey(-1, fieldIndex));
 }
 
 function transposeHeaderIsCurrentMatch(fieldIndex: number): boolean {
@@ -4142,6 +4149,9 @@ const resolvedColumnFormatters = computed(() => props.result.columns.map((_, col
 const columnFormatterSignatures = computed(() => resolvedColumnFormatters.value.map(formatterSignature));
 const primitiveCellFormatCache = new Map<string, string>();
 let objectCellFormatCache = new WeakMap<object, Map<number, string>>();
+// 搜索用小写文本缓存：按行数组身份挂 WeakMap（工作集=当前结果行，GC 回收），
+// 不用固定容量 LRU——搜索是全量顺序扫描，超限修剪会导致第二遍零命中抖动
+const rowLowerTextCache = createRowLowerTextCache(formatCellCached);
 
 function formatterSignature(formatter: ColumnFormatterConfig | undefined): string {
   return formatter ? JSON.stringify(formatter) : "";
@@ -4150,6 +4160,7 @@ function formatterSignature(formatter: ColumnFormatterConfig | undefined): strin
 function clearCellFormatCache() {
   primitiveCellFormatCache.clear();
   objectCellFormatCache = new WeakMap<object, Map<number, string>>();
+  rowLowerTextCache.clear();
 }
 
 function rememberPrimitiveCellFormat(key: string, display: string): string {
