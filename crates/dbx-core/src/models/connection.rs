@@ -1699,8 +1699,9 @@ fn normalize_postgres_url_params(value: &str, force_tls: bool) -> String {
     }
 
     if connection_options.is_empty() {
-        if force_tls && !parts.iter().any(|part| url_param_key_is(part, "sslmode")) {
-            parts.insert(0, "sslmode=require".to_string());
+        if !parts.iter().any(|part| url_param_key_is(part, "sslmode")) {
+            // TLS is opt-in in the connection form; avoid tokio-postgres' implicit prefer mode.
+            parts.insert(0, if force_tls { "sslmode=require" } else { "sslmode=disable" }.to_string());
         }
         return parts.join("&");
     }
@@ -1727,8 +1728,8 @@ fn normalize_postgres_url_params(value: &str, force_tls: bool) -> String {
         parts.push(format!("options={}", encode_url_part(&combined)));
     }
 
-    if force_tls && !parts.iter().any(|part| url_param_key_is(part, "sslmode")) {
-        parts.insert(0, "sslmode=require".to_string());
+    if !parts.iter().any(|part| url_param_key_is(part, "sslmode")) {
+        parts.insert(0, if force_tls { "sslmode=require" } else { "sslmode=disable" }.to_string());
     }
 
     parts.join("&")
@@ -2102,7 +2103,7 @@ mod tests {
 
         config.db_type = DatabaseType::Postgres;
         assert_eq!(config.effective_database(), Some(" analytics "));
-        assert_eq!(config.connection_url(), "postgres://root:secret@10.1.2.3:2883/%20analytics%20");
+        assert_eq!(config.connection_url(), "postgres://root:secret@10.1.2.3:2883/%20analytics%20?sslmode=disable");
     }
 
     #[test]
@@ -2663,6 +2664,14 @@ mod tests {
     }
 
     #[test]
+    fn postgres_url_disables_tls_by_default() {
+        let mut config = mysql_config("postgres", "secret", Some("test"));
+        config.db_type = DatabaseType::Postgres;
+
+        assert_eq!(config.connection_url(), "postgres://postgres:secret@10.1.2.3:2883/test?sslmode=disable");
+    }
+
+    #[test]
     fn postgres_tls_switch_adds_require_sslmode() {
         let mut config = mysql_config("postgres", "secret", Some("test"));
         config.db_type = DatabaseType::Postgres;
@@ -2693,7 +2702,7 @@ mod tests {
 
         assert_eq!(
             config.connection_url(),
-            "postgres://postgres:secret@10.1.2.3:2883/test?options=%2Dc%20search%5Fpath%3Dpublic"
+            "postgres://postgres:secret@10.1.2.3:2883/test?sslmode=disable&options=%2Dc%20search%5Fpath%3Dpublic"
         );
         let pg_config = tokio_postgres::Config::from_str(&config.connection_url()).unwrap();
         assert_eq!(pg_config.get_options(), Some("-c search_path=public"));
@@ -2707,7 +2716,7 @@ mod tests {
 
         assert_eq!(
             config.connection_url(),
-            "postgres://postgres:secret@10.1.2.3:2883/test?options=%2Dc%20search%5Fpath%3Dapp"
+            "postgres://postgres:secret@10.1.2.3:2883/test?sslmode=disable&options=%2Dc%20search%5Fpath%3Dapp"
         );
         let pg_config = tokio_postgres::Config::from_str(&config.connection_url()).unwrap();
         assert_eq!(pg_config.get_options(), Some("-c search_path=app"));
@@ -2741,7 +2750,7 @@ mod tests {
 
         assert_eq!(
             config.connection_url(),
-            "postgres://postgres:secret@10.1.2.3:2883/test?options=%2Dc%20statement%5Ftimeout%3D5000%20%2Dc%20TimeZone%3DUTC"
+            "postgres://postgres:secret@10.1.2.3:2883/test?sslmode=disable&options=%2Dc%20statement%5Ftimeout%3D5000%20%2Dc%20TimeZone%3DUTC"
         );
     }
 
@@ -2753,7 +2762,7 @@ mod tests {
 
         assert_eq!(
             config.connection_url(),
-            "postgres://postgres:secret@10.1.2.3:2883/test?options=-c%20TimeZone%3DUTC"
+            "postgres://postgres:secret@10.1.2.3:2883/test?sslmode=disable&options=-c%20TimeZone%3DUTC"
         );
     }
 
@@ -2762,7 +2771,7 @@ mod tests {
         let mut config = mysql_config("root", "secret", None);
         config.db_type = DatabaseType::Postgres;
 
-        assert_eq!(config.connection_url(), "postgres://root:secret@10.1.2.3:2883/postgres");
+        assert_eq!(config.connection_url(), "postgres://root:secret@10.1.2.3:2883/postgres?sslmode=disable");
     }
 
     #[test]
@@ -2770,7 +2779,7 @@ mod tests {
         let mut config = mysql_config("root", "secret", Some(""));
         config.db_type = DatabaseType::Postgres;
 
-        assert_eq!(config.connection_url(), "postgres://root:secret@10.1.2.3:2883/postgres");
+        assert_eq!(config.connection_url(), "postgres://root:secret@10.1.2.3:2883/postgres?sslmode=disable");
     }
 
     #[test]
@@ -2778,7 +2787,7 @@ mod tests {
         let mut config = mysql_config("awsuser", "secret", Some(""));
         config.db_type = DatabaseType::Redshift;
 
-        assert_eq!(config.connection_url(), "postgres://awsuser:secret@10.1.2.3:2883/dev");
+        assert_eq!(config.connection_url(), "postgres://awsuser:secret@10.1.2.3:2883/dev?sslmode=disable");
     }
 
     #[test]
@@ -2787,7 +2796,7 @@ mod tests {
         config.db_type = DatabaseType::Postgres;
         config.driver_profile = Some("cockroachdb".to_string());
 
-        assert_eq!(config.connection_url(), "postgres://root:secret@10.1.2.3:2883/defaultdb");
+        assert_eq!(config.connection_url(), "postgres://root:secret@10.1.2.3:2883/defaultdb?sslmode=disable");
     }
 
     #[test]
