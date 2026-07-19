@@ -42,6 +42,30 @@ impl From<&ConnectionConfig> for ConnectionSummary {
     }
 }
 
+fn legacy_mcp_allow_writes() -> Option<bool> {
+    match std::env::var("DBX_MCP_ALLOW_WRITES").ok()?.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn effective_mcp_policy(state: McpGlobalPolicyState) -> McpGlobalPolicy {
+    effective_mcp_policy_with_legacy_allow_writes(state, legacy_mcp_allow_writes())
+}
+
+fn effective_mcp_policy_with_legacy_allow_writes(
+    state: McpGlobalPolicyState,
+    legacy_allow_writes: Option<bool>,
+) -> McpGlobalPolicy {
+    let configured = state.configured;
+    let mut policy = state.policy();
+    if !configured && legacy_allow_writes == Some(false) {
+        policy.read_only = true;
+    }
+    policy
+}
+
 #[async_trait]
 pub trait DbxBackend: Send + Sync {
     async fn load_mcp_global_policy(&self) -> Result<McpGlobalPolicy, String>;
@@ -257,7 +281,7 @@ impl LocalBackend {
 #[async_trait]
 impl DbxBackend for LocalBackend {
     async fn load_mcp_global_policy(&self) -> Result<McpGlobalPolicy, String> {
-        self.state.storage.load_mcp_global_policy().await.map(|state| state.policy())
+        self.state.storage.load_mcp_global_policy().await.map(effective_mcp_policy)
     }
 
     async fn load_connections(&self) -> Result<Vec<ConnectionConfig>, String> {
@@ -593,7 +617,7 @@ impl DbxBackend for WebBackend {
             .await?
             .json::<McpGlobalPolicyState>()
             .await
-            .map(|state| state.policy())
+            .map(effective_mcp_policy)
             .map_err(|error| format!("Invalid MCP policy response: {error}"))
     }
 
@@ -1365,6 +1389,18 @@ pub fn new_connection_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn policy_state(configured: bool, read_only: bool) -> McpGlobalPolicyState {
+        McpGlobalPolicyState { configured, read_only, allow_dangerous_sql: false, allowed_connection_ids: None }
+    }
+
+    #[test]
+    fn legacy_read_only_only_restricts_an_unconfigured_policy() {
+        assert!(effective_mcp_policy_with_legacy_allow_writes(policy_state(false, false), Some(false)).read_only);
+        assert!(!effective_mcp_policy_with_legacy_allow_writes(policy_state(false, false), Some(true)).read_only);
+        assert!(!effective_mcp_policy_with_legacy_allow_writes(policy_state(true, false), Some(false)).read_only);
+        assert!(effective_mcp_policy_with_legacy_allow_writes(policy_state(true, true), Some(true)).read_only);
+    }
 
     #[test]
     fn parses_database_type_using_dbx_protocol_names() {
