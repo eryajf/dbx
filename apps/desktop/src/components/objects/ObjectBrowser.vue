@@ -643,17 +643,21 @@ function resetObjectColumnWidth(key: ObjectBrowserColumnKey, width: number, even
   };
 }
 
-function rowMatchesObjectFilter(row: ObjectBrowserRow) {
-  if (objectFilter.value === "tables") return row.type === "TABLE";
-  if (objectFilter.value === "views") return row.type === "VIEW";
-  if (objectFilter.value === "materializedViews") return row.type === "MATERIALIZED_VIEW";
-  if (objectFilter.value === "procedures") return row.type === "PROCEDURE";
-  if (objectFilter.value === "functions") return row.type === "FUNCTION";
-  if (objectFilter.value === "triggers") return row.type === "TRIGGER";
-  if (objectFilter.value === "sequences") return row.type === "SEQUENCE";
-  if (objectFilter.value === "packages") return row.type === "PACKAGE" || row.type === "PACKAGE_BODY";
-  if (objectFilter.value === "types") return row.type === "TYPE" || row.type === "TYPE_BODY";
+function rowMatchesFilter(row: ObjectBrowserRow, filter: ObjectFilter) {
+  if (filter === "tables") return row.type === "TABLE";
+  if (filter === "views") return row.type === "VIEW";
+  if (filter === "materializedViews") return row.type === "MATERIALIZED_VIEW";
+  if (filter === "procedures") return row.type === "PROCEDURE";
+  if (filter === "functions") return row.type === "FUNCTION";
+  if (filter === "triggers") return row.type === "TRIGGER";
+  if (filter === "sequences") return row.type === "SEQUENCE";
+  if (filter === "packages") return row.type === "PACKAGE" || row.type === "PACKAGE_BODY";
+  if (filter === "types") return row.type === "TYPE" || row.type === "TYPE_BODY";
   return true;
+}
+
+function rowMatchesObjectFilter(row: ObjectBrowserRow) {
+  return rowMatchesFilter(row, objectFilter.value);
 }
 
 function groupedFilteredRows() {
@@ -2151,16 +2155,9 @@ function onSchemaChange(value: any) {
 }
 
 function filterCount(filter: ObjectFilter) {
-  if (filter === "tables") return tableCount.value;
-  if (filter === "views") return viewCount.value;
-  if (filter === "materializedViews") return materializedViewCount.value;
-  if (filter === "procedures") return procedureCount.value;
-  if (filter === "functions") return functionCount.value;
-  if (filter === "triggers") return triggerCount.value;
-  if (filter === "sequences") return sequenceCount.value;
-  if (filter === "packages") return packageCount.value;
-  if (filter === "types") return typeCount.value;
-  return rows.value.length;
+  if (filter === "all") return rows.value.length;
+  const candidateRows = rows.value.filter((row) => rowMatchesFilter(row, filter));
+  return filterObjectBrowserRows(candidateRows, search.value).length;
 }
 
 function filterLabel(filter: ObjectFilter) {
