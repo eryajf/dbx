@@ -364,7 +364,7 @@ impl DbxMcpServer {
             Err(error) => return error,
         };
         // Production protection is stricter than the opt-in write flags by design.
-        if safety != RedisCommandSafety::Allowed && is_production_database(&connection, &database.to_string()) {
+        if safety != RedisCommandSafety::Allowed && is_production_database(connection, &database.to_string()) {
             return tool_error(
                 "PRODUCTION_WRITE_BLOCKED",
                 "MCP cannot execute write or dangerous Redis commands against a production database.",
@@ -373,7 +373,7 @@ impl DbxMcpServer {
         match self
             .backend
             .execute_redis_command(
-                &connection,
+                connection,
                 database,
                 &request.command,
                 safety == RedisCommandSafety::Blocked && permissions.allow_dangerous,
@@ -398,7 +398,7 @@ impl DbxMcpServer {
         };
         let schema = request.schema.unwrap_or_default();
         let max_tables = request.max_tables.unwrap_or(8).clamp(1, 20);
-        let available = match self.backend.list_tables(&connection, &database, &schema).await {
+        let available = match self.backend.list_tables(connection, &database, &schema).await {
             Ok(tables) => tables,
             Err(error) => return tool_error("SCHEMA_CONTEXT_ERROR", error),
         };
@@ -616,6 +616,8 @@ impl DbxMcpServer {
         self.backend.load_mcp_global_policy().await.map_err(|error| backend_tool_error("MCP_POLICY_UNAVAILABLE", error))
     }
 
+    // CallToolResult is the rmcp wire response type; keeping it unboxed avoids conversions at every tool boundary.
+    #[allow(clippy::result_large_err)]
     fn resolve_database(
         &self,
         requested: Option<String>,
@@ -636,6 +638,8 @@ impl DbxMcpServer {
         Ok(requested.or_else(|| connection.database.clone()).unwrap_or_default())
     }
 
+    // CallToolResult is the rmcp wire response type; keeping it unboxed avoids conversions at every tool boundary.
+    #[allow(clippy::result_large_err)]
     fn resolve_redis_database(
         &self,
         requested: Option<u32>,
