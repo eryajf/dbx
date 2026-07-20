@@ -166,19 +166,13 @@ pub struct DesktopSettings {
     pub sidebar_table_page_size: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct McpGlobalPolicy {
     pub read_only: bool,
     #[serde(default)]
     pub allow_dangerous_sql: bool,
     pub allowed_connection_ids: Option<Vec<String>>,
-}
-
-impl Default for McpGlobalPolicy {
-    fn default() -> Self {
-        Self { read_only: false, allow_dangerous_sql: false, allowed_connection_ids: None }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
