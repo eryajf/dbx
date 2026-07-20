@@ -114,13 +114,9 @@ export async function readTextFromClipboard(env: ClipboardEnvironment = globalTh
 
 export async function copyToClipboard(text: string, env: ClipboardEnvironment = globalThis as unknown as ClipboardEnvironment): Promise<void> {
   if (isTauriRuntime(env as unknown as Record<string, unknown>)) {
-    try {
-      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-      await writeText(text);
-      return;
-    } catch {
-      // Fall through to Web Clipboard / legacy copy when the native plugin is unavailable.
-    }
+    const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+    await writeText(text);
+    return;
   }
 
   try {
