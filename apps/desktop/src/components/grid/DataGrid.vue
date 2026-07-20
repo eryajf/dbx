@@ -106,7 +106,7 @@ import {
   visibleTransposeRecordWindow,
 } from "@/lib/dataGrid/dataGridTranspose";
 import { canApplyGridSelectionValue, canDeleteGridRowItem, canEditGridCellDetail, matchesRowStatusFilter, shouldShowQuickEntryDraftRow, type RowStatus, type RowStatusFilter } from "@/lib/dataGrid/gridRowStatus";
-import { displayCellValue, firstLineCellDisplayValue, type CellValue } from "@/lib/dataGrid/cellValue";
+import { displayCellValue, firstLineCellDisplayValue, limitDataGridCellDisplay, SQLSERVER_DATA_GRID_CELL_DISPLAY_MAX_LENGTH, type CellValue } from "@/lib/dataGrid/cellValue";
 import { getApplicablePreviewActions } from "@/lib/dataGrid/resultPreviewRegistry";
 import "@/lib/dataGrid/geometryMapPreview";
 import {
@@ -2259,7 +2259,7 @@ watch(
 );
 
 // --- Pagination ---
-const pageSize = ref(normalizeResultPageSize(props.context === "table-data" ? (props.pageLimit ?? tableOpenPageLimit()) : settingsStore.editorSettings.pageSize));
+const pageSize = ref(normalizeResultPageSize(props.context === "table-data" ? (props.pageLimit ?? tableOpenPageLimit(settingsStore.editorSettings.tableOpenPageSize)) : settingsStore.editorSettings.pageSize));
 const currentPage = ref(1);
 const pageSizeOptions = computed(() => resultPageSizeMenuOptions(pageSize.value));
 const customPageSizeInput = ref(String(pageSize.value));
@@ -2522,7 +2522,7 @@ function checkInfiniteScroll(scroller: HTMLElement) {
 function changePageSize(size: number) {
   const normalizedSize = normalizeResultPageSize(size);
   pageSize.value = normalizedSize;
-  settingsStore.updateEditorSettings({ pageSize: normalizedSize });
+  settingsStore.updateEditorSettings(props.context === "table-data" ? { tableOpenPageSize: normalizedSize } : { pageSize: normalizedSize });
   currentPage.value = 1;
   lastInfiniteScrollPage = 0;
   infiniteScrollAllLoaded = false;
@@ -3345,6 +3345,7 @@ const {
   isSelectingAll,
   selectedRange,
   selectedCells,
+  selectedCellMatrix,
   selectedCellCount,
   hasCellSelection,
   clearCellSelection,
@@ -4141,7 +4142,6 @@ async function applyWhereFilter() {
   }
 }
 
-const CELL_DISPLAY_MAX_LENGTH = 256;
 const CELL_FORMAT_CACHE_LIMIT = 20_000;
 const CELL_FORMAT_CACHE_PRUNE_COUNT = 5_000;
 
@@ -4190,7 +4190,7 @@ function formatCell(value: CellValue, columnIndex?: number): string {
   const binaryDisplay = formatter ? null : binaryCellDisplayText(value, columnInfo?.data_type ?? (columnName ? columnTypeMap.value.get(columnName) : undefined));
   if (binaryDisplay) return binaryDisplay;
   const s = applyColumnFormatter(value, formatter);
-  return s.length > CELL_DISPLAY_MAX_LENGTH ? s.slice(0, CELL_DISPLAY_MAX_LENGTH) : s;
+  return limitDataGridCellDisplay(s, resolvedDatabaseType.value === "sqlserver" ? SQLSERVER_DATA_GRID_CELL_DISPLAY_MAX_LENGTH : undefined);
 }
 
 function formatCellCached(value: CellValue, columnIndex?: number): string {
@@ -4980,6 +4980,11 @@ const {
   copySelectionCsv,
   copySelectionJson,
   copySelectionSqlInList,
+  copySelectionAsInsert,
+  prefetchSelectionAsInsertStatement,
+  canCopyPreparedSelectionInsert,
+  canCopySelectionAsInsert,
+  selectionInsertRowCount,
   copySelectedRowsTsv,
   copySelectedRowsTsvWithHeaders,
   copyColumnNames,
@@ -5019,6 +5024,7 @@ const {
   exportBatchSize: computed(() => settingsStore.editorSettings.exportBatchSize),
   hasCellSelection,
   selectedCells,
+  selectedCellMatrix,
   selectedRange,
   contextCell: exportContextCell,
   getRowItem: (rowId: number) => visibleDisplayItems.value.find((item) => item.id === rowId),
@@ -6357,6 +6363,7 @@ function onHeaderContext(col: string, columnIndex: number) {
   }
   contextHeaderColumn.value = col;
   contextHeaderColumnIndex.value = columnIndex;
+  void prefetchCopyStatements();
 }
 async function copyHeaderColumn() {
   if (!contextHeaderColumn.value) return;
@@ -6569,6 +6576,12 @@ function onRowContext(rowId: number, rowIndex: number) {
 }
 
 async function prefetchCopyStatements() {
+  if (canCopySelectionAsInsert.value) {
+    await prefetchSelectionAsInsertStatement();
+    if (selectionInsertRowCount.value > 1 && canCopyPreparedSelectionInsert()) {
+      await prefetchSelectionAsInsertStatement("row-by-row");
+    }
+  }
   await prefetchRowAsInsertStatement(false);
   if (isMultiRow.value) {
     await prefetchRowAsInsertStatement(false, "row-by-row");
@@ -7263,6 +7276,13 @@ function copySubmenu(): ContextMenuItem {
 }
 
 function selectionSubmenu(): ContextMenuItem {
+  const insertItems: ContextMenuItem[] =
+    selectedCells.value.rows.length > 1
+      ? [
+          { label: t("grid.copySelectionInsertMerged"), action: () => copySelectionAsInsert("merged"), disabled: () => !canCopySelectionAsInsert.value || !canCopyPreparedSelectionInsert("merged") },
+          { label: t("grid.copySelectionInsertRowByRow"), action: () => copySelectionAsInsert("row-by-row"), disabled: () => !canCopySelectionAsInsert.value || !canCopyPreparedSelectionInsert("row-by-row") },
+        ]
+      : [{ label: t("grid.copySelectionInsert"), action: () => copySelectionAsInsert(), disabled: () => !canCopySelectionAsInsert.value || !canCopyPreparedSelectionInsert() }];
   return {
     label: t("grid.selection"),
     icon: SquareDashed,
@@ -7272,6 +7292,7 @@ function selectionSubmenu(): ContextMenuItem {
       { label: t("grid.copySelectionCsv"), action: copySelectionCsv },
       { label: t("grid.copySelectionJson"), action: copySelectionJson },
       { label: t("grid.copySelectionSql"), action: copySelectionSqlInList },
+      ...insertItems,
       { label: "", separator: true },
       { label: t("grid.clearSelection"), action: clearCellSelection },
     ],

@@ -136,6 +136,7 @@ fn classify_statement(stmt: &Statement, detect_select_into: bool) -> SqlRisk {
 
 fn statement_is_dangerous(stmt: &Statement, detect_select_into: bool) -> bool {
     match stmt {
+        Statement::Query(query) => query_is_dangerous(query, detect_select_into),
         Statement::Insert(insert) => {
             insert.replace_into
                 || insert.overwrite
@@ -576,10 +577,6 @@ fn value_is_falsy(value: &Value) -> bool {
     }
 }
 
-fn query_contains_select_into(query: &Query) -> bool {
-    set_expr_contains_select_into(&query.body)
-}
-
 const SIDE_EFFECT_SELECT_FUNCTIONS: &[&str] = &[
     "lo_create",
     "lo_import",
@@ -598,9 +595,50 @@ const SIDE_EFFECT_SELECT_FUNCTIONS: &[&str] = &[
 ];
 
 fn query_is_write_capable(query: &Query, detect_select_into: bool) -> bool {
-    (detect_select_into && query_contains_select_into(query))
+    query
+        .with
+        .as_ref()
+        .is_some_and(|with| with.cte_tables.iter().any(|cte| query_is_write_capable(&cte.query, detect_select_into)))
+        || set_expr_is_write_capable(&query.body, detect_select_into)
         || !query.locks.is_empty()
         || query_calls_known_side_effect_function(query)
+}
+
+fn set_expr_is_write_capable(expr: &SetExpr, detect_select_into: bool) -> bool {
+    match expr {
+        SetExpr::Select(select) => detect_select_into && select.into.is_some(),
+        SetExpr::Query(query) => query_is_write_capable(query, detect_select_into),
+        SetExpr::SetOperation { left, right, .. } => {
+            set_expr_is_write_capable(left, detect_select_into) || set_expr_is_write_capable(right, detect_select_into)
+        }
+        SetExpr::Insert(_) | SetExpr::Update(_) | SetExpr::Delete(_) | SetExpr::Merge(_) => true,
+        SetExpr::Values(_) | SetExpr::Table(_) => false,
+    }
+}
+
+fn query_is_dangerous(query: &Query, detect_select_into: bool) -> bool {
+    query
+        .with
+        .as_ref()
+        .is_some_and(|with| with.cte_tables.iter().any(|cte| query_is_dangerous(&cte.query, detect_select_into)))
+        || set_expr_is_dangerous(&query.body, detect_select_into)
+        || !query.locks.is_empty()
+        || query_calls_known_side_effect_function(query)
+}
+
+fn set_expr_is_dangerous(expr: &SetExpr, detect_select_into: bool) -> bool {
+    match expr {
+        SetExpr::Select(select) => detect_select_into && select.into.is_some(),
+        SetExpr::Query(query) => query_is_dangerous(query, detect_select_into),
+        SetExpr::SetOperation { left, right, .. } => {
+            set_expr_is_dangerous(left, detect_select_into) || set_expr_is_dangerous(right, detect_select_into)
+        }
+        SetExpr::Insert(statement)
+        | SetExpr::Update(statement)
+        | SetExpr::Delete(statement)
+        | SetExpr::Merge(statement) => statement_is_dangerous(statement, detect_select_into),
+        SetExpr::Values(_) | SetExpr::Table(_) => false,
+    }
 }
 
 fn query_calls_known_side_effect_function(query: &Query) -> bool {
@@ -619,17 +657,6 @@ fn query_calls_known_side_effect_function(query: &Query) -> bool {
         }
     })
     .is_break()
-}
-
-fn set_expr_contains_select_into(expr: &SetExpr) -> bool {
-    match expr {
-        SetExpr::Select(select) => select.into.is_some(),
-        SetExpr::Query(query) => query_contains_select_into(query),
-        SetExpr::SetOperation { left, right, .. } => {
-            set_expr_contains_select_into(left) || set_expr_contains_select_into(right)
-        }
-        _ => false,
-    }
 }
 
 /// Classify SQL risk using sqlparser AST analysis.
@@ -836,6 +863,42 @@ mod tests {
             classify_sql_risk("WITH cte AS (SELECT 1) SELECT * FROM cte", "postgres").unwrap(),
             SqlRisk::ReadOnly
         );
+    }
+
+    #[test]
+    fn classify_writable_ctes_recursively() {
+        for sql in [
+            "WITH inserted AS (INSERT INTO users (id) VALUES (1) RETURNING id) SELECT * FROM inserted",
+            "WITH updated AS (UPDATE users SET active = true WHERE id = 1 RETURNING id) SELECT * FROM updated",
+            "WITH deleted AS (DELETE FROM users WHERE id = 1 RETURNING id) SELECT * FROM deleted",
+            "WITH merged AS (MERGE INTO users USING staged_users ON users.id = staged_users.id WHEN MATCHED THEN UPDATE SET active = true RETURNING users.id) SELECT * FROM merged",
+            "WITH outer_cte AS (WITH deleted AS (DELETE FROM users WHERE id = 1 RETURNING id) SELECT * FROM deleted) SELECT * FROM outer_cte",
+        ] {
+            assert_eq!(classify_sql_risk(sql, "postgres").unwrap(), SqlRisk::Write, "expected writable CTE: {sql}");
+            assert!(
+                crate::query_execution_sql::is_write_sql_for_database(sql, DatabaseType::Postgres),
+                "expected writable CTE to trip read-only enforcement: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn writable_cte_danger_tracks_the_nested_mutation() {
+        for sql in [
+            "WITH updated AS (UPDATE users SET active = true WHERE id = 1 RETURNING id) SELECT * FROM updated",
+            "WITH deleted AS (DELETE FROM users WHERE id = 1 RETURNING id) SELECT * FROM deleted",
+            "WITH outer_cte AS (WITH deleted AS (DELETE FROM users WHERE id = 1 RETURNING id) SELECT * FROM deleted) SELECT * FROM outer_cte",
+        ] {
+            assert!(!is_dangerous_sql_for_database(sql, DatabaseType::Postgres), "expected guarded write: {sql}");
+        }
+
+        for sql in [
+            "WITH updated AS (UPDATE users SET active = true RETURNING id) SELECT * FROM updated",
+            "WITH deleted AS (DELETE FROM users RETURNING id) SELECT * FROM deleted",
+            "WITH outer_cte AS (WITH deleted AS (DELETE FROM users RETURNING id) SELECT * FROM deleted) SELECT * FROM outer_cte",
+        ] {
+            assert!(is_dangerous_sql_for_database(sql, DatabaseType::Postgres), "expected dangerous write: {sql}");
+        }
     }
 
     #[test]

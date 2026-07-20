@@ -644,8 +644,11 @@ pub async fn update_documents(
 
 pub async fn find_one_and_update(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoFindOneAndUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    ensure_find_one_write_policy(&state, &headers, &req.connection_id, &req.database, &req.filter_json, "Update")
+        .await?;
     ensure_writable(&state.app, &req.connection_id, "Update").await?;
     let result = dbx_core::mongo_ops::mongo_find_one_and_update_core(
         &state.app,
@@ -663,8 +666,11 @@ pub async fn find_one_and_update(
 
 pub async fn find_one_and_replace(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoFindOneAndReplaceRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    ensure_find_one_write_policy(&state, &headers, &req.connection_id, &req.database, &req.filter_json, "Replace")
+        .await?;
     ensure_writable(&state.app, &req.connection_id, "Update").await?;
     let result = dbx_core::mongo_ops::mongo_find_one_and_replace_core(
         &state.app,
@@ -682,8 +688,11 @@ pub async fn find_one_and_replace(
 
 pub async fn find_one_and_delete(
     State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
     Json(req): Json<MongoFindOneAndDeleteRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    ensure_find_one_write_policy(&state, &headers, &req.connection_id, &req.database, &req.filter_json, "Delete")
+        .await?;
     ensure_writable(&state.app, &req.connection_id, "Delete").await?;
     let result = dbx_core::mongo_ops::mongo_find_one_and_delete_core(
         &state.app,
@@ -739,4 +748,141 @@ pub async fn delete_documents(
     .await
     .map_err(AppError)?;
     Ok(Json(serde_json::json!({ "affected_rows": result })))
+}
+
+async fn ensure_find_one_write_policy(
+    state: &Arc<WebState>,
+    headers: &HeaderMap,
+    connection_id: &str,
+    database: &str,
+    filter_json: &str,
+    action: &str,
+) -> Result<(), AppError> {
+    if super::mcp_policy::mongo_filter_is_effectively_unbounded(filter_json) {
+        super::mcp_policy::ensure_dangerous_write(state, headers, connection_id, database, action).await
+    } else {
+        super::mcp_policy::ensure_write(state, headers, connection_id, database, action).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_find_one_write_policy;
+    use crate::state::{LoginRateLimit, WebState};
+    use axum::http::{HeaderMap, HeaderValue};
+    use dbx_core::connection::AppState;
+    use dbx_core::models::connection::ConnectionConfig;
+    use dbx_core::storage::{McpGlobalPolicy, Storage};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+    use tokio::sync::{Mutex, RwLock};
+
+    fn mongo_config(is_production: bool) -> ConnectionConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": "mongo-policy-test",
+            "name": "Mongo policy test",
+            "db_type": "mongodb",
+            "host": "localhost",
+            "port": 27017,
+            "username": "tester",
+            "password": "",
+            "database": "app",
+            "is_production": is_production
+        }))
+        .unwrap()
+    }
+
+    async fn test_web_state() -> (Arc<WebState>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("dbx-web-mongo-policy-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage = Storage::open(&dir.join("storage.db")).await.unwrap();
+        let app = Arc::new(AppState::new_with_plugin_dir(storage, dir.join("plugins")));
+        let state = Arc::new(WebState {
+            app,
+            data_dir: dir.clone(),
+            public_base_path: "/".to_string(),
+            password_disabled: false,
+            password_hash: RwLock::new(None),
+            sessions: RwLock::new(HashSet::new()),
+            sse_channels: RwLock::new(HashMap::new()),
+            sql_file_executions: RwLock::new(HashMap::new()),
+            login_rate_limit: Mutex::new(LoginRateLimit { fail_count: 0, locked_until: None }),
+            export_files: RwLock::new(HashMap::new()),
+        });
+        (state, dir)
+    }
+
+    fn mcp_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-dbx-mcp-request", HeaderValue::from_static("1"));
+        headers
+    }
+
+    #[tokio::test]
+    async fn find_one_writes_recheck_policy_filter_production_and_allowlist() {
+        let (state, dir) = test_web_state().await;
+        let connection = mongo_config(false);
+        state.app.storage.save_connections(std::slice::from_ref(&connection)).await.unwrap();
+        let headers = mcp_headers();
+        let writable_policy = McpGlobalPolicy {
+            read_only: false,
+            allow_dangerous_sql: false,
+            allowed_connection_ids: Some(vec![connection.id.clone()]),
+        };
+        state.app.storage.save_mcp_global_policy(&writable_policy).await.unwrap();
+
+        assert!(ensure_find_one_write_policy(&state, &headers, &connection.id, "app", r#"{"_id":1}"#, "Update")
+            .await
+            .is_ok());
+
+        state
+            .app
+            .storage
+            .save_mcp_global_policy(&McpGlobalPolicy { read_only: true, ..writable_policy.clone() })
+            .await
+            .unwrap();
+        let revoked = ensure_find_one_write_policy(&state, &headers, &connection.id, "app", r#"{"_id":1}"#, "Update")
+            .await
+            .unwrap_err();
+        assert!(revoked.0.starts_with("MCP_READ_ONLY:"), "{}", revoked.0);
+
+        state.app.storage.save_mcp_global_policy(&writable_policy).await.unwrap();
+        let empty_filter =
+            ensure_find_one_write_policy(&state, &headers, &connection.id, "app", "{}", "Delete").await.unwrap_err();
+        assert!(empty_filter.0.starts_with("SQL_BLOCKED:"), "{}", empty_filter.0);
+
+        state
+            .app
+            .storage
+            .save_mcp_global_policy(&McpGlobalPolicy { allow_dangerous_sql: true, ..writable_policy.clone() })
+            .await
+            .unwrap();
+        assert!(ensure_find_one_write_policy(&state, &headers, &connection.id, "app", "{}", "Replace").await.is_ok());
+
+        state.app.storage.save_connections(&[mongo_config(true)]).await.unwrap();
+        let production =
+            ensure_find_one_write_policy(&state, &headers, &connection.id, "app", r#"{"_id":1}"#, "Update")
+                .await
+                .unwrap_err();
+        assert!(production.0.starts_with("PRODUCTION_DATABASE_READ_ONLY:"), "{}", production.0);
+
+        state.app.storage.save_connections(std::slice::from_ref(&connection)).await.unwrap();
+        state
+            .app
+            .storage
+            .save_mcp_global_policy(&McpGlobalPolicy {
+                read_only: false,
+                allow_dangerous_sql: true,
+                allowed_connection_ids: Some(vec!["different-connection".to_string()]),
+            })
+            .await
+            .unwrap();
+        let allowlist = ensure_find_one_write_policy(&state, &headers, &connection.id, "app", r#"{"_id":1}"#, "Delete")
+            .await
+            .unwrap_err();
+        assert!(allowlist.0.starts_with("CONNECTION_OUT_OF_SCOPE:"), "{}", allowlist.0);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

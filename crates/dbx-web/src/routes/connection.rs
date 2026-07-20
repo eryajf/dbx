@@ -126,6 +126,14 @@ pub async fn connect_db(
     Json(body): Json<ConnectRequest>,
 ) -> Result<Json<String>, AppError> {
     let config = body.config;
+    if config.db_type == dbx_core::models::connection::DatabaseType::Sqlite {
+        dbx_core::db::sqlite::validate_persistent_attachments(
+            &config.host,
+            &config.password,
+            !config.attached_databases.is_empty(),
+        )
+        .map_err(AppError)?;
+    }
     let app = &state.app;
     let connection_id = config.id.clone();
     let attempt = app.begin_connection_attempt_with_client_attempt(&connection_id, body.client_attempt).await;
@@ -165,6 +173,14 @@ pub async fn connection_final_proxy_port(
     let runtime_config = body.config.canonicalized();
     if !runtime_config.has_effective_transport_layers() {
         return Err(AppError("Connection has no configured transport layers".to_string()));
+    }
+    if runtime_config.db_type == dbx_core::models::connection::DatabaseType::Sqlite {
+        dbx_core::db::sqlite::validate_persistent_attachments(
+            &runtime_config.host,
+            &runtime_config.password,
+            !runtime_config.attached_databases.is_empty(),
+        )
+        .map_err(AppError)?;
     }
 
     let app = &state.app;
@@ -237,6 +253,16 @@ pub async fn save_connections(
     State(state): State<Arc<WebState>>,
     Json(body): Json<SaveConnectionsRequest>,
 ) -> Result<Json<()>, AppError> {
+    for config in &body.configs {
+        if config.db_type == dbx_core::models::connection::DatabaseType::Sqlite {
+            dbx_core::db::sqlite::validate_persistent_attachments(
+                &config.host,
+                &config.password,
+                !config.attached_databases.is_empty(),
+            )
+            .map_err(AppError)?;
+        }
+    }
     state.app.storage.save_connections(&body.configs).await.map_err(AppError)?;
     let sync = sync_connection_configs(&state, &body.configs).await;
     remove_connection_pools_for_connection_ids(&state, &sync.connection_pool_ids_to_drop).await;
@@ -359,18 +385,20 @@ async fn remove_connection_pools_for_connection_ids(state: &WebState, connection
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "mq-admin")]
-    use super::connect_db;
     use super::{
-        disconnect_db, load_connections, mcp_add_connection, mcp_remove_connection, save_connection_database_info,
-        save_connections, test_connection, test_connection_with_info, ConnectRequest, DisconnectRequest,
-        McpAddConnectionRequest, McpRemoveConnectionRequest, SaveConnectionDatabaseInfoRequest, SaveConnectionsRequest,
+        connect_db, connection_final_proxy_port, disconnect_db, load_connections, mcp_add_connection,
+        mcp_remove_connection, save_connection_database_info, save_connections, test_connection,
+        test_connection_with_info, ConnectRequest, DisconnectRequest, McpAddConnectionRequest,
+        McpRemoveConnectionRequest, SaveConnectionDatabaseInfoRequest, SaveConnectionsRequest,
     };
     use crate::state::{LoginRateLimit, WebState};
     use axum::extract::State;
     use axum::Json;
     use dbx_core::connection::{AppState, PoolKind};
-    use dbx_core::models::connection::{ConnectionConfig, DatabaseConnectionInfo, DatabaseType};
+    use dbx_core::models::connection::{
+        AttachedDatabaseConfig, ConnectionConfig, DatabaseConnectionInfo, DatabaseType, ProxyTunnelConfig, ProxyType,
+        TransportLayerConfig,
+    };
     use dbx_core::storage::{McpGlobalPolicy, Storage};
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
@@ -491,6 +519,60 @@ mod tests {
         assert!(state.app.configs.read().await.keys().all(|key| !key.starts_with("__test_")));
         assert!(state.app.connections.read().await.keys().all(|key| !key.starts_with("__test_")));
 
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn invalid_persistent_sqlite_attachments_do_not_replace_live_web_state() {
+        let (state, dir) = test_web_state().await;
+        let initial = sqlite_config("sqlite-memory", ":memory:");
+        let pool = dbx_core::db::sqlite::connect_path(":memory:").await.unwrap();
+        dbx_core::db::sqlite::execute_query(
+            &pool,
+            "CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES ('yes');",
+        )
+        .await
+        .unwrap();
+        state.app.configs.write().await.insert(initial.id.clone(), initial.clone());
+        state.app.connections.write().await.insert(initial.id.clone(), PoolKind::Sqlite(pool.clone()));
+
+        let mut invalid = initial.clone();
+        invalid.attached_databases.push(AttachedDatabaseConfig {
+            name: "analytics".to_string(),
+            path: dir.join("analytics.sqlite").to_string_lossy().to_string(),
+        });
+        let connect_error =
+            connect_db(State(state.clone()), Json(ConnectRequest { config: invalid.clone(), client_attempt: None }))
+                .await
+                .unwrap_err();
+        assert!(connect_error.0.contains("in-memory main database"), "{}", connect_error.0);
+
+        invalid.transport_layers.push(TransportLayerConfig::Proxy(ProxyTunnelConfig {
+            id: "proxy".to_string(),
+            name: "Proxy".to_string(),
+            enabled: true,
+            proxy_type: ProxyType::Socks5,
+            host: "127.0.0.1".to_string(),
+            port: 1080,
+            username: String::new(),
+            password: String::new(),
+            profile_id: String::new(),
+        }));
+        let proxy_error = connection_final_proxy_port(
+            State(state.clone()),
+            Json(ConnectRequest { config: invalid, client_attempt: None }),
+        )
+        .await
+        .unwrap_err();
+        assert!(proxy_error.0.contains("in-memory main database"), "{}", proxy_error.0);
+
+        assert!(state.app.connections.read().await.contains_key(&initial.id));
+        assert_eq!(state.app.configs.read().await.get(&initial.id), Some(&initial));
+        let retained = dbx_core::db::sqlite::execute_query(&pool, "SELECT value FROM retained;").await.unwrap();
+        assert_eq!(retained.rows[0][0], serde_json::json!("yes"));
+
+        drop(pool);
+        drop(state);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -720,7 +802,7 @@ mod tests {
         let (state, dir) = test_web_state().await;
         let initial = mq_config("mq-conn", "http://127.0.0.1:8080");
         let updated = mq_config("mq-conn", "http://127.0.0.1:8081");
-        state.app.storage.save_connections(&[updated.clone()]).await.unwrap();
+        state.app.storage.save_connections(std::slice::from_ref(&updated)).await.unwrap();
         state.app.configs.write().await.insert(initial.id.clone(), initial.clone());
         state.app.connections.write().await.insert(initial.id.clone(), PoolKind::MessageQueue);
 

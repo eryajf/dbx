@@ -792,6 +792,8 @@ fn mcp_permissions(
     }
 }
 
+// CallToolResult is the transport-native error payload; boxing it would complicate every MCP call site.
+#[allow(clippy::result_large_err)]
 fn validate_sql_policy(
     connection: &dbx_core::models::connection::ConnectionConfig,
     policy: &McpGlobalPolicy,
@@ -826,6 +828,8 @@ fn validate_sql_policy(
     Ok(mcp_permissions(connection, policy))
 }
 
+// CallToolResult is the transport-native error payload; boxing it would complicate every MCP call site.
+#[allow(clippy::result_large_err)]
 fn validate_mongo_command(
     connection: &dbx_core::models::connection::ConnectionConfig,
     policy: &McpGlobalPolicy,
