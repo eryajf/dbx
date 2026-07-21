@@ -96,6 +96,7 @@ fn postgres_test_config(id: &str, port: u16) -> ConnectionConfig {
         port,
         username: "postgres".to_string(),
         password: "postgres".to_string(),
+        remember_password: true,
         database: Some("postgres".to_string()),
         visible_databases: None,
         visible_schemas: None,
