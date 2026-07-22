@@ -92,7 +92,8 @@ import { hasCloudflareD1Credentials, isCloudflareD1Connection, normalizeCloudfla
 import { buildElasticsearchExternalConfig, elasticsearchConnectionModeFromConfig, elasticsearchKibanaBasePathFromConfig, type ElasticsearchConnectionMode } from "@/lib/connection/elasticsearchKibanaProxy";
 
 type DbOption = { value: string; label: string };
-type DbCategory = { key: string; title: string; options: DbOption[] };
+type DbCategoryKey = "sql" | "analytics" | "domestic" | "lightweight" | "document" | "graph_ai" | "timeseries" | "mq" | "registry_config";
+type DbCategory = { key: DbCategoryKey; title: string; options: DbOption[] };
 type DialogStep = "select" | "config";
 type DbPickerView = "icon" | "list";
 export type ConfigTab = "connection" | "advanced" | "tls" | "transport";
@@ -509,6 +510,7 @@ const hiveExtraJavaOptions = ref("");
 const dialogStep = ref<DialogStep>("select");
 const dbPickerView = ref<DbPickerView>("icon");
 const dbSearchQuery = ref("");
+const selectedDbCategory = ref<DbCategoryKey>("sql");
 const configTab = ref<ConfigTab>("connection");
 const MQ_KAFKA_SECURITY_PROTOCOL_AUTO = "__auto";
 const mqAdminUrl = ref("http://127.0.0.1:8080");
@@ -1909,6 +1911,8 @@ function defaultDatabaseForProfile() {
 }
 
 function onDbTypeChange(val: string) {
+  const category = dbCategoryForOption(val);
+  if (category) selectedDbCategory.value = category;
   customDriverName.value = "";
   applyProfile(val, !!editingId.value);
   resetTestState();
@@ -2096,7 +2100,65 @@ const dbOptions: DbOption[] = [
   { value: "dremio", label: "Dremio" },
 ];
 
-const dbCategories = computed<DbCategory[]>(() => [{ key: "all", title: "", options: dbOptions }]);
+const dbCategoryDefinitions: Array<{
+  key: DbCategoryKey;
+  titleKey: string;
+  optionValues: readonly string[];
+}> = [
+  {
+    key: "sql",
+    titleKey: "connection.databaseCategorySql",
+    optionValues: ["postgres", "mysql", "oracle", "sqlserver", "mariadb", "cockroachdb", "db2", "informix", "firebird", "iris", "jdbcx", "custom_mysql", "custom_postgres"],
+  },
+  {
+    key: "analytics",
+    titleKey: "connection.databaseCategoryAnalytics",
+    optionValues: ["clickhouse", "doris", "starrocks", "databend", "selectdb", "databricks", "saphana", "teradata", "vertica", "exasol", "redshift", "snowflake", "trino", "prestosql", "hive", "spark", "bigquery", "kylin", "dremio"],
+  },
+  {
+    key: "domestic",
+    titleKey: "connection.databaseCategoryDomestic",
+    optionValues: ["dm", "opengauss", "gaussdb", "kwdb", "tidb", "oceanbase", "goldendb", "tdsql", "polardb", "greatsql", "gbase", "kingbase", "highgo", "yashandb", "vastbase", "sundb", "oscar", "xugu"],
+  },
+  {
+    key: "lightweight",
+    titleKey: "connection.databaseCategoryLightweight",
+    optionValues: ["sqlite", "turso", "cloudflare-d1", "duckdb", "rqlite", "access", "h2"],
+  },
+  {
+    key: "document",
+    titleKey: "connection.databaseCategoryDocument",
+    optionValues: ["mongodb", "redis", "elasticsearch", "manticoresearch", "cassandra"],
+  },
+  {
+    key: "graph_ai",
+    titleKey: "connection.databaseCategoryGraphAi",
+    optionValues: ["neo4j", "qdrant", "milvus", "weaviate", "chromadb"],
+  },
+  {
+    key: "timeseries",
+    titleKey: "connection.databaseCategoryTimeseries",
+    optionValues: ["questdb", "tdengine", "iotdb", "influxdb"],
+  },
+  {
+    key: "mq",
+    titleKey: "connection.databaseCategoryMq",
+    optionValues: ["mq", "kafka", "rocketmq"],
+  },
+  {
+    key: "registry_config",
+    titleKey: "connection.databaseCategoryRegistryConfig",
+    optionValues: ["etcd", "zookeeper", "nacos"],
+  },
+];
+
+const dbCategories = computed<DbCategory[]>(() => {
+  return dbCategoryDefinitions.map((category) => ({
+    key: category.key,
+    title: t(category.titleKey),
+    options: dbOptions.filter((option) => category.optionValues.includes(option.value)),
+  }));
+});
 
 function matchesDbOption(option: DbOption, keyword: string, categoryTitle = "") {
   const profile = driverProfiles[option.value];
@@ -2119,7 +2181,22 @@ const filteredDbCategories = computed<DbCategory[]>(() => {
     .filter((category) => category.options.length > 0);
 });
 
-const hasDbPickerResults = computed(() => filteredDbCategories.value.some((category) => category.options.length > 0));
+const visibleDbCategories = computed<DbCategory[]>(() => {
+  if (dbSearchQuery.value.trim()) return filteredDbCategories.value;
+  return filteredDbCategories.value.filter((category) => category.key === selectedDbCategory.value);
+});
+const showDbCategoryHeadings = computed(() => !!dbSearchQuery.value.trim() && visibleDbCategories.value.length > 1);
+const hasDbPickerResults = computed(() => visibleDbCategories.value.some((category) => category.options.length > 0));
+
+function selectDbCategory(category: DbCategoryKey) {
+  selectedDbCategory.value = category;
+  dbSearchQuery.value = "";
+}
+
+function dbCategoryForOption(value: string): DbCategoryKey | undefined {
+  return dbCategories.value.find((category) => category.options.some((option) => option.value === value))?.key;
+}
+
 const selectedDbIcon = computed(() => iconTypeMap[selectedType.value] || selectedProfile().icon || selectedType.value);
 const jdbcBackedDatabaseTypes = new Set<DatabaseType>(["jdbc", "prestosql"]);
 const isJdbcConnection = computed(() => form.value.db_type === "jdbc");
@@ -2404,7 +2481,7 @@ const canCloseAgentInstallDialog = computed(() => !agentInstallRunning.value || 
 const sqlServerLegacyCompatibilityModeEnabled = computed(() => form.value.db_type === "sqlserver" && isSqlServerLegacyCompatibilityMode(form.value.url_params));
 const shouldUseWideConnectionDialog = computed(() => dialogStep.value === "config" && (canChooseVisibleDatabases.value || (canChooseVisibleSchemas.value && !visibleFilterUsesSchemas.value)));
 const connectionDialogContentClass = computed(() => {
-  if (dialogStep.value === "select") return "sm:max-w-[760px]";
+  if (dialogStep.value === "select") return "sm:h-[720px] sm:max-w-[880px]";
   return shouldUseWideConnectionDialog.value ? "sm:max-w-[660px]" : "sm:max-w-[560px]";
 });
 const connectionLabelClass = "justify-self-start text-left";
@@ -2467,6 +2544,8 @@ function goToConnectionStep(value = selectedType.value) {
 }
 
 function backToDatabasePicker() {
+  const category = dbCategoryForOption(selectedType.value);
+  if (category) selectedDbCategory.value = category;
   dialogStep.value = "select";
   resetTestState();
 }
@@ -3503,6 +3582,7 @@ function resetForm() {
   dialogStep.value = "select";
   dbPickerView.value = "icon";
   dbSearchQuery.value = "";
+  selectedDbCategory.value = "sql";
   configTab.value = "connection";
   resetVisibleDatabaseDraftState();
   resetProductionDatabaseDraftState();
@@ -4215,50 +4295,66 @@ function openExternalUrl(url: string) {
             </Button>
           </div>
 
-          <div class="min-h-0 flex-1 space-y-5 overflow-y-auto pr-2">
-            <section v-for="category in filteredDbCategories" :key="category.key" class="space-y-2">
-              <div class="flex items-center">
-                <h3 v-if="category.title" class="text-sm font-medium">{{ category.title }}</h3>
-              </div>
+          <div class="min-h-0 flex flex-1 flex-col gap-3 overflow-hidden sm:flex-row sm:gap-4">
+            <nav class="flex shrink-0 gap-1 overflow-x-auto border-b pb-2 sm:w-40 sm:flex-col sm:overflow-y-auto sm:border-b-0 sm:border-r sm:pb-0 sm:pr-3" :aria-label="t('connection.databaseCategories')">
+              <button
+                v-for="category in dbCategories"
+                :key="category.key"
+                type="button"
+                class="shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-full"
+                :class="selectedDbCategory === category.key ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground'"
+                :aria-current="selectedDbCategory === category.key ? 'page' : undefined"
+                @click="selectDbCategory(category.key)"
+              >
+                {{ category.title }}
+              </button>
+            </nav>
 
-              <div v-if="dbPickerView === 'icon'" class="connection-db-picker-grid grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5">
-                <button
-                  v-for="opt in category.options"
-                  :key="opt.value"
-                  type="button"
-                  class="connection-db-picker-option group flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl border bg-background/70 p-3 text-center transition hover:-translate-y-0.5 hover:border-primary/40 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :class="selectedType === opt.value ? 'connection-db-picker-option--selected shadow-sm' : 'border-border'"
-                  :aria-pressed="selectedType === opt.value"
-                  @click="onDbTypeChange(opt.value)"
-                  @dblclick="goToConnectionStep(opt.value)"
-                >
-                  <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-muted/60 transition group-hover:bg-background">
-                    <DatabaseIcon :db-type="iconTypeMap[opt.value]" class="h-6 w-6" />
-                  </span>
-                  <span class="max-w-full truncate text-sm font-medium">{{ opt.label }}</span>
-                </button>
-              </div>
+            <div class="min-w-0 flex-1 space-y-5 overflow-y-auto pr-2">
+              <section v-for="category in visibleDbCategories" :key="category.key" class="space-y-2">
+                <div class="flex items-center">
+                  <h3 v-if="showDbCategoryHeadings" class="text-sm font-medium">{{ category.title }}</h3>
+                </div>
 
-              <div v-else class="grid gap-2">
-                <button
-                  v-for="opt in category.options"
-                  :key="opt.value"
-                  type="button"
-                  class="connection-db-picker-option flex items-center gap-3 rounded-lg border bg-background px-3 py-2 text-left transition hover:border-primary/40 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :class="selectedType === opt.value ? 'connection-db-picker-option--selected' : 'border-border'"
-                  :aria-pressed="selectedType === opt.value"
-                  @click="onDbTypeChange(opt.value)"
-                  @dblclick="goToConnectionStep(opt.value)"
-                >
-                  <DatabaseIcon :db-type="iconTypeMap[opt.value]" class="h-5 w-5 shrink-0" />
-                  <span class="min-w-0 flex-1 truncate text-sm font-medium">{{ opt.label }}</span>
-                  <span class="text-xs text-muted-foreground">{{ category.title }}</span>
-                </button>
-              </div>
-            </section>
+                <div v-if="dbPickerView === 'icon'" class="connection-db-picker-grid grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5">
+                  <button
+                    v-for="opt in category.options"
+                    :key="opt.value"
+                    type="button"
+                    class="connection-db-picker-option group flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl border bg-background/70 p-3 text-center transition hover:-translate-y-0.5 hover:border-primary/40 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :class="selectedType === opt.value ? 'connection-db-picker-option--selected shadow-sm' : 'border-border'"
+                    :aria-pressed="selectedType === opt.value"
+                    @click="onDbTypeChange(opt.value)"
+                    @dblclick="goToConnectionStep(opt.value)"
+                  >
+                    <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-muted/60 transition group-hover:bg-background">
+                      <DatabaseIcon :db-type="iconTypeMap[opt.value]" class="h-6 w-6" />
+                    </span>
+                    <span class="max-w-full truncate text-sm font-medium">{{ opt.label }}</span>
+                  </button>
+                </div>
 
-            <div v-if="!hasDbPickerResults" class="rounded-xl border border-dashed py-12 text-center text-sm text-muted-foreground">
-              {{ t("connection.noDatabaseMatches") }}
+                <div v-else class="grid gap-2">
+                  <button
+                    v-for="opt in category.options"
+                    :key="opt.value"
+                    type="button"
+                    class="connection-db-picker-option flex items-center gap-3 rounded-lg border bg-background px-3 py-2 text-left transition hover:border-primary/40 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :class="selectedType === opt.value ? 'connection-db-picker-option--selected' : 'border-border'"
+                    :aria-pressed="selectedType === opt.value"
+                    @click="onDbTypeChange(opt.value)"
+                    @dblclick="goToConnectionStep(opt.value)"
+                  >
+                    <DatabaseIcon :db-type="iconTypeMap[opt.value]" class="h-5 w-5 shrink-0" />
+                    <span class="min-w-0 flex-1 truncate text-sm font-medium">{{ opt.label }}</span>
+                    <span v-if="showDbCategoryHeadings" class="text-xs text-muted-foreground">{{ category.title }}</span>
+                  </button>
+                </div>
+              </section>
+
+              <div v-if="!hasDbPickerResults" class="rounded-xl border border-dashed py-12 text-center text-sm text-muted-foreground">
+                {{ t("connection.noDatabaseMatches") }}
+              </div>
             </div>
           </div>
         </div>
