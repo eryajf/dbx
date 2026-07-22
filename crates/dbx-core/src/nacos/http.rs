@@ -218,20 +218,23 @@ impl NacosOpenApiAdmin {
                     .to_string(),
             );
         }
-        let path = normalize_api_path(path);
-        let endpoint = format!("{}{}", self.cfg.rnacos_console_addr, path);
-        reqwest::Url::parse(&endpoint)
-            .map(|url| url.to_string())
-            .map_err(|e| format!("r-nacos console API URL is invalid: {e}"))
+        let mut url = reqwest::Url::parse(&self.cfg.rnacos_console_addr)
+            .map_err(|e| format!("r-nacos console API URL is invalid: {e}"))?;
+        let base_path = url.path().trim_end_matches('/');
+        let mut path = normalize_api_path(path);
+        // A browser URL commonly ends in /rnacos. The API paths also start
+        // there, so consume one prefix before joining rather than producing
+        // /rnacos/rnacos/api/... . Proxy prefixes remain intact.
+        if base_path.ends_with("/rnacos") {
+            path = path.strip_prefix("/rnacos").unwrap_or(&path).to_string();
+        }
+        let joined = format!("{}{}", base_path, path);
+        url.set_path(&joined);
+        Ok(url.to_string())
     }
 
     async fn rnacos_console_token(&self) -> Result<String, String> {
-        let NacosAuthConfig::UsernamePassword { username, password: _ } = &self.cfg.auth else {
-            return Err("r-nacos config history requires username/password authentication".to_string());
-        };
-        if username.trim().is_empty() {
-            return Err("r-nacos config history requires a username".to_string());
-        }
+        self.cfg.effective_rnacos_console_credentials()?;
         {
             let guard = self.rnacos_console_token.lock().await;
             if let Some(token) = guard.as_ref() {
@@ -284,9 +287,7 @@ impl NacosOpenApiAdmin {
     }
 
     async fn login_rnacos_console_with_captcha(&self, captcha: Option<String>) -> Result<String, String> {
-        let NacosAuthConfig::UsernamePassword { username, password } = &self.cfg.auth else {
-            return Err("r-nacos config history requires username/password authentication".to_string());
-        };
+        let (username, password) = self.cfg.effective_rnacos_console_credentials()?;
         let captcha = captcha.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
         let captcha_token = {
             let guard = self.rnacos_console_captcha.lock().await;
@@ -320,7 +321,7 @@ impl NacosOpenApiAdmin {
             .get("data")
             .and_then(|data| data.get("token"))
             .and_then(Value::as_str)
-            .ok_or_else(|| format!("r-nacos console login response did not include a token: {value}"))?
+            .ok_or_else(|| "r-nacos console login response did not include a token".to_string())?
             .to_string();
         // r-nacos does not return the session TTL. Keep the token for its
         // documented default lifetime; get_rnacos_console_json invalidates it
@@ -624,8 +625,17 @@ impl NacosAdmin for NacosOpenApiAdmin {
         let _ = self.access_token().await?;
         let _ = self.list_namespaces().await?;
         let mut capabilities = NacosCapabilities::default();
-        if state.as_ref().is_some_and(|state| state.is_rnacos_compatible) && self.cfg.rnacos_console_addr.is_empty() {
-            capabilities.supports_config_history = false;
+        if state.as_ref().is_some_and(|state| state.is_rnacos_compatible) {
+            if !self.cfg.rnacos_history_enabled() {
+                capabilities.supports_config_history = false;
+                capabilities.history_unavailable_reason = Some("historyDisabled".to_string());
+            } else if self.cfg.rnacos_console_addr.is_empty() {
+                capabilities.supports_config_history = false;
+                capabilities.history_unavailable_reason = Some("consoleUrlMissing".to_string());
+            } else if !self.cfg.has_effective_rnacos_console_credentials() {
+                capabilities.supports_config_history = false;
+                capabilities.history_unavailable_reason = Some("consoleCredentialsMissing".to_string());
+            }
         }
         Ok(NacosConnectionInfo {
             server_addr: self.cfg.server_addr.clone(),
@@ -1310,7 +1320,7 @@ fn admin_endpoint_error(server_addr: &str, errors: &[String]) -> String {
         return classified_error(
             "endpointNotFound",
             &format!(
-                "Nacos admin endpoint was not found at {server_addr}. This looks like a Nacos client/server port, not the console/admin API address. Use the console URL, for example http://127.0.0.1:8085 in Nacos 3 Docker deployments, and leave Context Path empty unless the console is actually mounted under /nacos."
+                "Nacos admin endpoint was not found at {server_addr}. This looks like a Nacos client/server port, not a management endpoint. Check the selected Nacos profile and use the endpoint exposed by that deployment."
             ),
         );
     }
@@ -1575,7 +1585,10 @@ fn rnacos_history_item(value: &Value, history_id: &str, nid: Option<i64>) -> Opt
 }
 
 fn rnacos_console_error_detail(value: &Value) -> String {
-    optional_string_field(value, &["message", "msg", "code"]).unwrap_or_else(|| value.to_string())
+    // Console error bodies are not a trusted display surface: deployments may
+    // echo request fields or tokens. Keep the client-visible detail generic.
+    let _ = value;
+    "request rejected".to_string()
 }
 
 fn rnacos_console_session_expired(value: &Value) -> bool {
@@ -1907,16 +1920,31 @@ mod tests {
 
     fn test_admin_config(server_addr: String) -> NacosAdminConfig {
         NacosAdminConfig {
+            implementation: None,
+            version_mode: None,
             server_addr: server_addr.clone(),
             display_server_addr: server_addr,
             namespace: String::new(),
             context_path: String::new(),
             rnacos_console_addr: String::new(),
+            rnacos_history_enabled: None,
+            rnacos_console_auth: Default::default(),
             auth: NacosAuthConfig::None,
             tls_skip_verify: false,
             page_size: 100,
             connect_override: None,
         }
+    }
+
+    #[test]
+    fn rnacos_console_endpoint_joins_terminal_rnacos_once() {
+        let mut config = test_admin_config("http://127.0.0.1:8848".to_string());
+        config.rnacos_console_addr = "https://console.example/gateway/rnacos/".to_string();
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+        assert_eq!(
+            admin.rnacos_console_endpoint("/rnacos/api/console/v2/login/captcha").unwrap(),
+            "https://console.example/gateway/rnacos/api/console/v2/login/captcha"
+        );
     }
 
     #[tokio::test]

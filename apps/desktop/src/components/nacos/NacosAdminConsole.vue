@@ -125,7 +125,14 @@ const { gridTemplateColumns: configListGridTemplate, minWidth: configListMinWidt
 
 const namespace = computed(() => props.namespace ?? connectionInfo.value?.namespace ?? "");
 const supportsConfigHistory = computed(() => connectionInfo.value?.capabilities.supportsConfigHistory !== false);
-const configHistoryUnavailableTitle = computed(() => (supportsConfigHistory.value ? undefined : t("nacos.historyUnavailable")));
+const configHistoryUnavailableTitle = computed(() => {
+  if (supportsConfigHistory.value) return undefined;
+  const reason = connectionInfo.value?.capabilities.historyUnavailableReason;
+  if (reason === "historyDisabled") return "Configuration history is disabled for this connection.";
+  if (reason === "consoleUrlMissing") return "Configuration history needs an r-nacos console address.";
+  if (reason === "consoleCredentialsMissing") return "Configuration history needs r-nacos console credentials.";
+  return t("nacos.historyUnavailable");
+});
 const namespaceLabel = computed(() => props.namespaceName || namespace.value || "public");
 const namespaceIdLabel = computed(() => {
   if (!namespace.value || namespace.value === namespaceLabel.value) return "";

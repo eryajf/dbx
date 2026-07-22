@@ -16,7 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import type { ConnectionConfig, ConnectionTestResult, DatabaseConnectionInfo, DatabaseType, HttpTunnelConfig, IdentifierCase, JdbcDriverInfo, JdbcLocalBundleInfo, JdbcMavenBundleInfo, ProxyTunnelConfig, SshConfigHostEntry, SshTunnelConfig, TransportLayerConfig } from "@/types/database";
 import type { InfluxDbExternalConfig, InfluxDbVersion } from "@/types/influxdb";
 import type { MqAdminConfig, MqAuth, MqSystemKind } from "@/types/mq";
-import type { NacosAdminConfig, NacosAuthConfig } from "@/types/nacos";
+import type { NacosAdminConfig, NacosAuthConfig, NacosImplementation, NacosRNacosConsoleAuth, NacosVersionMode } from "@/types/nacos";
 import { CONNECTION_ATTEMPT_CANCELLED_MESSAGE, useConnectionStore } from "@/stores/connectionStore";
 import { useTunnelProfileStore } from "@/stores/tunnelProfileStore";
 import { detachTunnelProfileLayer, tunnelProfileReferenceLayer, tunnelProfileSummary } from "@/lib/connection/tunnelProfiles";
@@ -51,7 +51,7 @@ import { normalizeRocketmqNamesrvAddr } from "@/lib/connection/rocketmqNamesrv";
 import { detectMqUiAuthKind, isMqAuthKindAllowedForSystem, type MqUiAuthKind } from "@/lib/connection/mqAuth";
 import { driverInstallProgressPercent, type DriverInstallProgress } from "@/lib/connection/driverInstallProgressUi";
 import { isSqlServerLegacyCompatibilityMode, requiresSqlServerLegacyCompatibilityComponent, setSqlServerLegacyCompatibilityMode, SQLSERVER_LEGACY_COMPATIBILITY_DRIVER_KEY } from "@/lib/connection/sqlServerLegacyCompatibility";
-import { resolveRNacosOpenApiFallback } from "@/lib/nacos/nacosAdmin";
+import { normalizeNacosEndpoint } from "@/lib/nacos/nacosAdmin";
 import {
   ArrowLeft,
   ArrowDown,
@@ -112,9 +112,6 @@ const DREMIO_ARROW_FLIGHT_SQL_JDBC_URL = "jdbc:arrow-flight-sql://127.0.0.1:3201
 const DREMIO_ARROW_FLIGHT_SQL_JDBC_DRIVER_CLASS = "org.apache.arrow.driver.jdbc.ArrowFlightJdbcDriver";
 const DREMIO_LEGACY_JDBC_URL = "jdbc:dremio:direct=127.0.0.1:31010";
 const DREMIO_LEGACY_JDBC_DRIVER_CLASS = "com.dremio.jdbc.Driver";
-const NACOS_DEFAULT_CONSOLE_URL = "http://127.0.0.1:8085";
-const NACOS_LEGACY_SERVER_PORT = "8848";
-const NACOS_DOCKER_CONSOLE_PORT = "8085";
 const DEFAULT_SSH_USER = "root";
 
 type LegacyTransportFields = {
@@ -138,7 +135,6 @@ type LegacyTransportFields = {
 type LegacyConnectionConfig = ConnectionConfig & LegacyTransportFields;
 type ConnectionForm = Omit<ConnectionConfig, "id">;
 type ConnectionTestState = ConnectionTestResult & { ok: boolean };
-type SuccessfulConnectionTest = { result: ConnectionTestResult; config: ConnectionConfig };
 
 const { t } = useI18n();
 const { toast } = useToast();
@@ -573,15 +569,70 @@ const mqKafkaSaslMechanismOptions = [
   { value: "SCRAM-SHA-256", label: "SCRAM-SHA-256" },
   { value: "SCRAM-SHA-512", label: "SCRAM-SHA-512" },
 ];
-const nacosServerAddr = ref(NACOS_DEFAULT_CONSOLE_URL);
+const nacosImplementation = ref<NacosImplementation>("nacos");
+const nacosVersionMode = ref<NacosVersionMode>("auto");
+const nacosServerAddr = ref("");
 const nacosNamespace = ref("");
 const nacosContextPath = ref("");
+const nacosContextPathCustomized = ref(false);
 const nacosRNacosConsoleAddr = ref("");
+const nacosHistoryEnabled = ref(false);
+const nacosConsoleAuthKind = ref<NacosRNacosConsoleAuth["kind"]>("inherit");
+const nacosConsoleUsername = ref("");
+const nacosConsolePassword = ref("");
 const nacosAuthKind = ref<NacosAuthKind>("none");
 const nacosUsername = ref("nacos");
 const nacosPassword = ref("");
 const nacosTlsSkipVerify = ref(false);
 const nacosPageSize = ref(20);
+const nacosPrimaryAddressLabel = computed(() => {
+  if (nacosImplementation.value === "rnacos") return "Nacos-compatible API address";
+  if (nacosVersionMode.value === "v2") return "Service address (API and console shared)";
+  if (nacosVersionMode.value === "v3") return "Admin API / console address";
+  return "Nacos management address";
+});
+const nacosPrimaryAddressPlaceholder = computed(() => {
+  if (nacosImplementation.value === "rnacos" || nacosVersionMode.value === "v2") return "http://127.0.0.1:8848/nacos";
+  return "http://127.0.0.1:8080";
+});
+const nacosNormalizedPreview = computed(() => {
+  if (!nacosServerAddr.value.trim()) return "";
+  try {
+    const normalized = normalizeNacosEndpoint(nacosServerAddr.value, {
+      implementation: nacosImplementation.value,
+      versionMode: nacosVersionMode.value,
+      contextPath: nacosContextPathCustomized.value ? nacosContextPath.value : undefined,
+    });
+    return `${normalized.serverAddr}${normalized.contextPath || ""}`;
+  } catch {
+    return "";
+  }
+});
+const nacosEffectiveContextPath = computed(() => {
+  if (!nacosServerAddr.value.trim()) {
+    return nacosContextPathCustomized.value ? nacosContextPath.value.trim() || "/" : nacosImplementation.value === "rnacos" || nacosVersionMode.value === "v2" ? "/nacos" : "/";
+  }
+  try {
+    const normalized = normalizeNacosEndpoint(nacosServerAddr.value, {
+      implementation: nacosImplementation.value,
+      versionMode: nacosVersionMode.value,
+      contextPath: nacosContextPathCustomized.value ? nacosContextPath.value : undefined,
+    });
+    return normalized.contextPath || "/";
+  } catch {
+    return nacosContextPathCustomized.value ? nacosContextPath.value.trim() || "/" : "/";
+  }
+});
+
+function resetNacosContextPathCustomization() {
+  nacosContextPathCustomized.value = false;
+  nacosContextPath.value = "";
+}
+
+watch(nacosImplementation, (implementation) => {
+  if (implementation === "rnacos") nacosVersionMode.value = "auto";
+  if (implementation !== "rnacos") nacosHistoryEnabled.value = false;
+});
 
 const colorOptions = [
   { value: "", class: "bg-transparent border-dashed", labelKey: "connection.colorNone" },
@@ -969,10 +1020,18 @@ watch(mqAuthKind, (kind) => {
 });
 
 function resetNacosFields(config?: Partial<NacosAdminConfig>) {
-  nacosServerAddr.value = config?.serverAddr?.trim() || NACOS_DEFAULT_CONSOLE_URL;
+  nacosImplementation.value = config?.implementation || (config?.rnacosConsoleAddr ? "rnacos" : "nacos");
+  nacosVersionMode.value = config?.versionMode || "auto";
+  nacosServerAddr.value = config?.serverAddr?.trim() || "";
   nacosNamespace.value = config?.namespace || "";
   nacosContextPath.value = config?.contextPath || "";
+  nacosContextPathCustomized.value = !!config?.contextPath;
   nacosRNacosConsoleAddr.value = config?.rnacosConsoleAddr?.trim() || "";
+  nacosHistoryEnabled.value = config?.rnacosHistoryEnabled ?? !!config?.rnacosConsoleAddr;
+  const consoleAuth = config?.rnacosConsoleAuth || { kind: "inherit" };
+  nacosConsoleAuthKind.value = consoleAuth.kind;
+  nacosConsoleUsername.value = consoleAuth.kind === "usernamePassword" ? consoleAuth.username : "";
+  nacosConsolePassword.value = consoleAuth.kind === "usernamePassword" ? consoleAuth.password : "";
   nacosTlsSkipVerify.value = !!config?.tlsSkipVerify;
   nacosPageSize.value = Number(config?.pageSize) > 0 ? Number(config?.pageSize) : 20;
   const auth = (config?.auth || { kind: "none" }) as NacosAuthConfig;
@@ -1148,97 +1207,42 @@ function buildNacosAuth(): NacosAuthConfig {
 }
 
 function buildNacosAdminConfig(): NacosAdminConfig {
-  const serverAddr = requireMqField(nacosServerAddr.value, t("connection.nacosConsoleUrlRequired"));
-  // Apply the r-nacos console-to-OpenAPI mapping before both Test and Save.
-  // `saveConnection` does not use the test fallback, so keeping this at the
-  // shared submission boundary prevents a persisted `/rnacos` configuration.
-  const rnacosOpenApi = resolveRNacosOpenApiFallback(serverAddr, nacosContextPath.value);
+  const primaryAddress = requireMqField(nacosServerAddr.value, t("connection.nacosConsoleUrlRequired"));
+  const normalized = normalizeNacosEndpoint(primaryAddress, {
+    implementation: nacosImplementation.value,
+    versionMode: nacosVersionMode.value,
+    contextPath: nacosContextPathCustomized.value ? nacosContextPath.value : undefined,
+  });
+  if (nacosImplementation.value === "rnacos" && normalized.warnings.length) {
+    throw new Error("r-nacos primary address must use the compatible API, not the independent console URL");
+  }
+  let rnacosConsoleAuth: NacosRNacosConsoleAuth | undefined;
+  if (nacosImplementation.value === "rnacos" && nacosHistoryEnabled.value) {
+    if (!nacosRNacosConsoleAddr.value.trim()) throw new Error("r-nacos configuration history requires a console address");
+    if (nacosConsoleAuthKind.value === "inherit") {
+      if (nacosAuthKind.value !== "usernamePassword") throw new Error("r-nacos console needs separate credentials when primary authentication is None");
+      rnacosConsoleAuth = { kind: "inherit" };
+    } else {
+      rnacosConsoleAuth = {
+        kind: "usernamePassword",
+        username: requireMqField(nacosConsoleUsername.value, "r-nacos console username is required"),
+        password: nacosConsolePassword.value,
+      };
+    }
+  }
   return {
-    serverAddr: rnacosOpenApi?.serverAddr || serverAddr,
+    implementation: nacosImplementation.value,
+    versionMode: nacosImplementation.value === "nacos" ? nacosVersionMode.value : undefined,
+    serverAddr: normalized.serverAddr,
     namespace: nacosNamespace.value.trim() || undefined,
-    contextPath: rnacosOpenApi?.contextPath || nacosContextPath.value.trim(),
-    rnacosConsoleAddr: nacosRNacosConsoleAddr.value.trim() || undefined,
+    contextPath: normalized.contextPath || undefined,
+    rnacosConsoleAddr: nacosImplementation.value === "rnacos" && nacosHistoryEnabled.value ? nacosRNacosConsoleAddr.value.trim() || undefined : undefined,
+    rnacosHistoryEnabled: nacosImplementation.value === "rnacos" ? nacosHistoryEnabled.value : undefined,
+    rnacosConsoleAuth,
     auth: buildNacosAuth(),
     tlsSkipVerify: nacosTlsSkipVerify.value || undefined,
     pageSize: Number(nacosPageSize.value) > 0 ? Number(nacosPageSize.value) : 20,
   };
-}
-
-function dockerNacosConsoleFallbackUrl(serverAddr: string): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(serverAddr);
-  } catch {
-    return null;
-  }
-  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-  const host = parsed.hostname.toLowerCase();
-  if (port !== NACOS_LEGACY_SERVER_PORT || !["127.0.0.1", "localhost", "::1"].includes(host)) {
-    return null;
-  }
-  parsed.port = NACOS_DOCKER_CONSOLE_PORT;
-  return parsed.toString().replace(/\/$/, "");
-}
-
-function isNacosAdminEndpointNotFound(message: string): boolean {
-  return /Nacos admin endpoint was not found/i.test(message);
-}
-
-function isRNacosOpenApiFallbackError(message: string): boolean {
-  return /\b405\b|method not allowed|failed to parse nacos auth response|Nacos admin endpoint was not found/i.test(message);
-}
-
-async function tryRNacosOpenApiFallback(config: ConnectionConfig, originalError: string, runId: number): Promise<SuccessfulConnectionTest | null> {
-  if (config.db_type !== "nacos" || !isRNacosOpenApiFallbackError(originalError)) return null;
-  // A bare 10848 port is only a candidate here, after the original endpoint
-  // has failed. `buildNacosAdminConfig` intentionally requires the stronger
-  // `/rnacos` signal so a normal Nacos deployment mapped to 10848 is not
-  // silently rewritten during Save.
-  const fallback = resolveRNacosOpenApiFallback(nacosServerAddr.value, nacosContextPath.value, { allowConsolePortInference: true });
-  if (!fallback) return null;
-
-  const previousUrl = nacosServerAddr.value;
-  const previousContextPath = nacosContextPath.value;
-  nacosServerAddr.value = fallback.serverAddr;
-  nacosContextPath.value = fallback.contextPath;
-  try {
-    const fallbackConfig = connectionConfigForSubmit(config.id, config.name);
-    const result = await testConnectionWithTimeout(fallbackConfig, runId);
-    return {
-      config: fallbackConfig,
-      result: {
-        ...result,
-        message: `${result.message} ${t("connection.nacosRNacosOpenApiAutoAdjusted", { from: previousUrl.trim(), to: fallback.serverAddr })}`,
-      },
-    };
-  } catch {
-    nacosServerAddr.value = previousUrl;
-    nacosContextPath.value = previousContextPath;
-    return null;
-  }
-}
-
-async function tryNacosDockerConsoleFallback(config: ConnectionConfig, originalError: string, runId: number): Promise<SuccessfulConnectionTest | null> {
-  if (config.db_type !== "nacos" || !isNacosAdminEndpointNotFound(originalError)) return null;
-  const fallbackUrl = dockerNacosConsoleFallbackUrl(nacosServerAddr.value);
-  if (!fallbackUrl || fallbackUrl === nacosServerAddr.value.trim()) return null;
-
-  const previousUrl = nacosServerAddr.value;
-  nacosServerAddr.value = fallbackUrl;
-  try {
-    const fallbackConfig = connectionConfigForSubmit(config.id, config.name);
-    const result = await testConnectionWithTimeout(fallbackConfig, runId);
-    return {
-      config: fallbackConfig,
-      result: {
-        ...result,
-        message: `${result.message} ${t("connection.nacosConsoleUrlAutoAdjusted", { from: previousUrl.trim(), to: fallbackUrl })}`,
-      },
-    };
-  } catch {
-    nacosServerAddr.value = previousUrl;
-    return null;
-  }
 }
 
 function errorMessage(error: unknown): string {
@@ -2547,21 +2551,13 @@ async function testConnection() {
     if (runId !== testRunId) return;
     const rawMessage = mongodbAuthFailureHint(errorMessage(e));
     const message = config ? connectionErrorWithDriverUpdateHint(config, rawMessage) : rawMessage;
-    const fallback = config ? (await tryRNacosOpenApiFallback(config, message, runId)) || (await tryNacosDockerConsoleFallback(config, message, runId)) : null;
-    if (runId !== testRunId) return;
-    const shouldShowSqlServerLegacyMode = !fallback && config?.db_type === "sqlserver" && !isSqlServerLegacyCompatibilityMode(config.url_params) && isSqlServerTlsHandshakeFailure(message);
+    const shouldShowSqlServerLegacyMode = config?.db_type === "sqlserver" && !isSqlServerLegacyCompatibilityMode(config.url_params) && isSqlServerTlsHandshakeFailure(message);
     if (shouldShowSqlServerLegacyMode) {
       configTab.value = "advanced";
     }
-    if (fallback) {
-      applySuccessfulConnectionTest(fallback.result, fallback.config, submittedSourceName);
-      void persistSuccessfulConnectionTest(fallback.result, fallback.config, submittedSourceName, runId);
-      clearEditedConnectionErrorAfterSuccessfulTest();
-    } else {
-      clearTestedConnectionInfo();
-      testResult.value = { ok: false, message };
-      showConnectionError(message);
-    }
+    clearTestedConnectionInfo();
+    testResult.value = { ok: false, message };
+    showConnectionError(message);
   } finally {
     if (runId === testRunId) {
       isTesting.value = false;
@@ -4330,7 +4326,7 @@ function openExternalUrl(url: string) {
 
             <TabsContent value="connection" class="m-0 min-h-0 flex-1 overflow-hidden">
               <div class="connection-form-body grid h-full min-h-0 gap-4 overflow-y-auto pt-4 pr-2">
-                <div v-if="!isJdbcConnection" class="grid grid-cols-4 items-center gap-4">
+                <div v-if="!isJdbcConnection && form.db_type !== 'nacos'" class="grid grid-cols-4 items-center gap-4">
                   <Label :class="connectionLabelClass">{{ t("connection.connectionUrlOptional") }}</Label>
                   <div class="col-span-3 flex items-center gap-1">
                     <Input v-model="connectionUrlInput" class="flex-1" :placeholder="connectionUrlPlaceholder" @keydown.enter.prevent="applyConnectionUrl" />
@@ -4856,32 +4852,75 @@ function openExternalUrl(url: string) {
                   </div>
                 </template>
 
-                <!-- Nacos: server address, namespace and auth -->
+                <!-- Nacos: profile-aware endpoint, namespace and auth -->
                 <template v-else-if="form.db_type === 'nacos'">
                   <div class="grid grid-cols-4 items-center gap-4">
-                    <Label :class="connectionLabelClass">{{ t("connection.nacosConsoleUrl") }}</Label>
-                    <Input v-model="nacosServerAddr" class="col-span-3" placeholder="http://127.0.0.1:8085" />
+                    <Label :class="connectionLabelClass">Service implementation</Label>
+                    <div class="col-span-3 flex gap-2">
+                      <Button size="sm" :variant="nacosImplementation === 'nacos' ? 'default' : 'outline'" @click="nacosImplementation = 'nacos'">Nacos</Button>
+                      <Button size="sm" :variant="nacosImplementation === 'rnacos' ? 'default' : 'outline'" @click="nacosImplementation = 'rnacos'">r-nacos</Button>
+                    </div>
+                  </div>
+                  <div v-if="nacosImplementation === 'nacos'" class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">Nacos version</Label>
+                    <div class="col-span-3 flex flex-wrap gap-2">
+                      <Button size="sm" :variant="nacosVersionMode === 'auto' ? 'default' : 'outline'" @click="nacosVersionMode = 'auto'">Auto detect</Button>
+                      <Button size="sm" :variant="nacosVersionMode === 'v2' ? 'default' : 'outline'" @click="nacosVersionMode = 'v2'">2.x</Button>
+                      <Button size="sm" :variant="nacosVersionMode === 'v3' ? 'default' : 'outline'" @click="nacosVersionMode = 'v3'">3.x</Button>
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ nacosPrimaryAddressLabel }}</Label>
+                    <Input v-model="nacosServerAddr" class="col-span-3" :placeholder="nacosPrimaryAddressPlaceholder" />
                   </div>
                   <div class="grid grid-cols-4 items-start gap-4">
                     <span />
-                    <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">{{ t("connection.nacosConsoleUrlHint") }}</p>
+                    <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">Paste a full browser or API URL. Known Nacos 3 console routes are normalized; custom proxy prefixes are preserved.</p>
+                  </div>
+                  <div v-if="nacosNormalizedPreview" class="grid grid-cols-4 items-start gap-4">
+                    <span />
+                    <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">Requests will use {{ nacosNormalizedPreview }}/…</p>
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.nacosContextPath") }}</Label>
+                    <div class="col-span-3 flex min-w-0 items-center gap-2">
+                      <code class="min-w-0 flex-1 truncate rounded-md border bg-muted/30 px-3 py-2 text-sm">{{ nacosEffectiveContextPath }}</code>
+                      <Button v-if="!nacosContextPathCustomized" type="button" size="sm" variant="outline" @click="nacosContextPathCustomized = true">自定义</Button>
+                      <Button v-else type="button" size="sm" variant="ghost" @click="resetNacosContextPathCustomization">恢复自动</Button>
+                    </div>
+                  </div>
+                  <div v-if="nacosContextPathCustomized" class="grid grid-cols-4 items-center gap-4">
+                    <span />
+                    <Input v-model="nacosContextPath" class="col-span-3" :placeholder="t('connection.nacosContextPathPlaceholder')" />
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.nacosNamespace") }}</Label>
                     <Input v-model="nacosNamespace" class="col-span-3" placeholder="public" />
                   </div>
-                  <div class="grid grid-cols-4 items-center gap-4">
-                    <Label :class="connectionLabelClass">{{ t("connection.nacosContextPath") }}</Label>
-                    <Input v-model="nacosContextPath" class="col-span-3" :placeholder="t('connection.nacosContextPathPlaceholder')" />
-                  </div>
-                  <div class="grid grid-cols-4 items-center gap-4">
-                    <Label :class="connectionLabelClass">{{ t("connection.nacosRNacosConsoleUrl") }}</Label>
-                    <Input v-model="nacosRNacosConsoleAddr" class="col-span-3" :placeholder="t('connection.nacosRNacosConsoleUrlPlaceholder')" />
-                  </div>
-                  <div class="grid grid-cols-4 items-start gap-4">
-                    <span />
-                    <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">{{ t("connection.nacosRNacosConsoleUrlHint") }}</p>
-                  </div>
+                  <template v-if="nacosImplementation === 'rnacos'">
+                    <div class="grid grid-cols-4 items-center gap-4">
+                      <Label :class="connectionLabelClass">Configuration history</Label>
+                      <label class="col-span-3 inline-flex items-center gap-2"><Switch v-model="nacosHistoryEnabled" /><span class="text-xs text-muted-foreground">Enable configuration history</span></label>
+                    </div>
+                    <template v-if="nacosHistoryEnabled">
+                      <div class="grid grid-cols-4 items-center gap-4">
+                        <Label :class="connectionLabelClass">{{ t("connection.nacosRNacosConsoleUrl") }}</Label>
+                        <Input v-model="nacosRNacosConsoleAddr" class="col-span-3" :placeholder="t('connection.nacosRNacosConsoleUrlPlaceholder')" />
+                      </div>
+                      <div class="grid grid-cols-4 items-center gap-4">
+                        <Label :class="connectionLabelClass">Console authentication</Label>
+                        <div class="col-span-3 flex gap-2">
+                          <Button size="sm" :variant="nacosConsoleAuthKind === 'inherit' ? 'default' : 'outline'" :disabled="nacosAuthKind === 'none'" @click="nacosConsoleAuthKind = 'inherit'">Use primary credentials</Button>
+                          <Button size="sm" :variant="nacosConsoleAuthKind === 'usernamePassword' ? 'default' : 'outline'" @click="nacosConsoleAuthKind = 'usernamePassword'">Separate credentials</Button>
+                        </div>
+                      </div>
+                      <p v-if="nacosConsoleAuthKind === 'inherit' && nacosAuthKind === 'none'" class="col-span-3 col-start-2 m-0 text-xs text-destructive">Primary authentication is None; use separate console credentials.</p>
+                      <template v-if="nacosConsoleAuthKind === 'usernamePassword'">
+                        <div class="grid grid-cols-4 items-center gap-4"><Label :class="connectionLabelClass">Console user</Label><Input v-model="nacosConsoleUsername" class="col-span-3" /></div>
+                        <div class="grid grid-cols-4 items-center gap-4"><Label :class="connectionLabelClass">Console password</Label><PasswordInput v-model="nacosConsolePassword" class="col-span-3" /></div>
+                      </template>
+                    </template>
+                  </template>
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.nacosAuth") }}</Label>
                     <div class="col-span-3 flex flex-wrap gap-2">

@@ -301,7 +301,7 @@ export default withEnglishFallback({
     zookeeperCreateModePersistentSequential: "持久有序",
     zookeeperCreateModeEphemeralSequential: "臨時有序",
     nacosConsoleUrl: "OpenAPI / 管理 API URL",
-    nacosConsoleUrlHint: "填寫 Nacos OpenAPI/管理 API 位址。Nacos 3 Docker 通常是 8085；r-nacos 使用服務連接埠 8848 與 Context Path /nacos，請勿填寫新控制台的 10848 或 /rnacos。",
+    nacosConsoleUrlHint: "填寫與所選 Nacos 設定相符的位址，支援完整的瀏覽器或 API URL。",
     nacosConsoleUrlRequired: "Nacos OpenAPI / 管理 API URL 不能為空",
     nacosConsoleUrlAutoAdjusted: "已自動將 Nacos 控制台 URL 從 {from} 調整為 {to}。",
     nacosRNacosOpenApiAutoAdjusted: "已自動改用 r-nacos OpenAPI：{from} → {to}（Context Path: /nacos）。",

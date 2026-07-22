@@ -294,7 +294,7 @@ export default withEnglishFallback({
     etcdClientKeyBrowse: "クライアント秘密鍵を選択",
     etcdClientCertPairRequired: "クライアント証明書と秘密鍵の両方を指定する必要があります。",
     nacosConsoleUrl: "OpenAPI / 管理 API URL",
-    nacosConsoleUrlHint: "Nacos の OpenAPI/管理 API アドレスを指定します。Nacos 3 Docker では通常 8085 です。r-nacos はサービスポート 8848 と Context Path /nacos を使用します。新しいコンソールの 10848 や /rnacos は指定しないでください。",
+    nacosConsoleUrlHint: "選択した Nacos プロファイルに対応するアドレスを指定します。完全なブラウザー URL と API URL を使用できます。",
     nacosConsoleUrlRequired: "Nacos OpenAPI / 管理 API URL は必須です",
     nacosConsoleUrlAutoAdjusted: "NacosコンソールURLを{from}から{to}に自動調整しました。",
     nacosRNacosOpenApiAutoAdjusted: "r-nacos OpenAPI に自動切り替えました: {from} → {to}（Context Path: /nacos）。",

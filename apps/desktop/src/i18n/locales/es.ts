@@ -301,7 +301,7 @@ export default withEnglishFallback({
     zookeeperCreateModePersistentSequential: "Persistente secuencial",
     zookeeperCreateModeEphemeralSequential: "Efímero secuencial",
     nacosConsoleUrl: "URL de OpenAPI / API de administración",
-    nacosConsoleUrlHint: "Usa la dirección OpenAPI/API de administración de Nacos. Nacos 3 Docker normalmente usa 8085. r-nacos usa el puerto de servicio 8848 con Context Path /nacos; no uses la nueva consola en 10848 o /rnacos.",
+    nacosConsoleUrlHint: "Use la dirección correspondiente al perfil Nacos seleccionado. Se aceptan URL completas del navegador y de la API.",
     nacosConsoleUrlRequired: "La URL de OpenAPI / API de administración de Nacos es obligatoria",
     nacosConsoleUrlAutoAdjusted: "URL de consola de Nacos ajustada de {from} a {to}.",
     nacosRNacosOpenApiAutoAdjusted: "Se cambió automáticamente a la OpenAPI de r-nacos: {from} → {to} (Context Path: /nacos).",

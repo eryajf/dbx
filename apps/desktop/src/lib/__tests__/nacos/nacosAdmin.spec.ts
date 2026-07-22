@@ -10,6 +10,7 @@ import {
   nacosConfigFileExtension,
   parseNacosRawBody,
   parseNacosRawQuery,
+  normalizeNacosEndpoint,
   resolveRNacosOpenApiFallback,
   resolveNacosConfigCopyText,
   sanitizeNacosConfigFileNameSegment,
@@ -17,6 +18,23 @@ import {
 } from "@/lib/nacos/nacosAdmin";
 
 describe("nacosAdmin helpers", () => {
+  it("normalizes Nacos profile URLs without losing proxy prefixes", () => {
+    expect(normalizeNacosEndpoint("https://[2001:db8::1]:9443/gateway/nacos/", { implementation: "nacos", versionMode: "v2" })).toMatchObject({
+      serverAddr: "https://[2001:db8::1]:9443",
+      contextPath: "/gateway/nacos",
+      detectedVersion: "v2",
+    });
+    expect(normalizeNacosEndpoint("https://nacos.example/gateway/next/index.html", { implementation: "nacos", versionMode: "v3" })).toMatchObject({
+      serverAddr: "https://nacos.example",
+      contextPath: "/gateway",
+      detectedVersion: "v3",
+    });
+    expect(normalizeNacosEndpoint("http://rnacos.example:8848/nacos", { implementation: "rnacos" })).toMatchObject({
+      serverAddr: "http://rnacos.example:8848",
+      contextPath: "/nacos",
+    });
+    expect(() => normalizeNacosEndpoint("http://user:secret@nacos.example", { implementation: "nacos" })).toThrow(/embedded credentials/i);
+  });
   it("parses raw query and body text", () => {
     expect(parseNacosRawQuery("?dataId=a&group=DEFAULT_GROUP")).toEqual({ dataId: "a", group: "DEFAULT_GROUP" });
     expect(parseNacosRawQuery("")).toBeUndefined();
