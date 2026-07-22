@@ -10,6 +10,7 @@ import {
   nacosConfigFileExtension,
   parseNacosRawBody,
   parseNacosRawQuery,
+  resolveRNacosOpenApiFallback,
   resolveNacosConfigCopyText,
   sanitizeNacosConfigFileNameSegment,
   summarizeNacosConfigDiff,
@@ -28,6 +29,23 @@ describe("nacosAdmin helpers", () => {
     expect(req).toEqual({ method: "post", path: "/v1/cs/configs", query: { a: "1" }, body: { b: 2 } });
     expect(isNacosRawMutation("GET")).toBe(false);
     expect(isNacosRawMutation("DELETE")).toBe(true);
+  });
+
+  it("redirects r-nacos console settings to the compatible OpenAPI endpoint", () => {
+    expect(resolveRNacosOpenApiFallback("http://rnacos.example:10848", "/rnacos")).toEqual({
+      serverAddr: "http://rnacos.example:8848",
+      contextPath: "/nacos",
+    });
+    expect(resolveRNacosOpenApiFallback("https://rnacos.example/gateway", "rnacos/")).toEqual({
+      serverAddr: "https://rnacos.example/gateway",
+      contextPath: "/nacos",
+    });
+    expect(resolveRNacosOpenApiFallback("http://nacos.example:10848", "/nacos")).toBeNull();
+    expect(resolveRNacosOpenApiFallback("http://rnacos.example:10848", "", { allowConsolePortInference: true })).toEqual({
+      serverAddr: "http://rnacos.example:8848",
+      contextPath: "/nacos",
+    });
+    expect(resolveRNacosOpenApiFallback("http://rnacos.example:8848", "/nacos")).toBeNull();
   });
 
   it("summarizes config diffs", () => {

@@ -24,6 +24,11 @@ pub struct NacosAdminConfig {
     pub namespace: String,
     #[serde(default)]
     pub context_path: String,
+    /// Optional r-nacos authenticated-console address. This is separate from
+    /// the OpenAPI server address because r-nacos exposes console-only APIs
+    /// (including config history) on its console service, normally port 10848.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rnacos_console_addr: String,
     #[serde(default)]
     pub auth: NacosAuthConfig,
     #[serde(default)]
@@ -57,6 +62,7 @@ impl NacosAdminConfig {
                 display_server_addr: String::new(),
                 namespace: cfg.database.clone().unwrap_or_default(),
                 context_path: String::new(),
+                rnacos_console_addr: String::new(),
                 auth: if cfg.username.trim().is_empty() {
                     NacosAuthConfig::None
                 } else {
@@ -81,6 +87,11 @@ impl NacosAdminConfig {
             self.display_server_addr = self.display_server_addr.trim().trim_end_matches('/').to_string();
         }
         self.context_path = normalize_context_path(&self.context_path);
+        self.rnacos_console_addr = self.rnacos_console_addr.trim().trim_end_matches('/').to_string();
+        if !self.rnacos_console_addr.is_empty() {
+            reqwest::Url::parse(&self.rnacos_console_addr)
+                .map_err(|e| format!("r-nacos console address is invalid: {e}"))?;
+        }
         if self.page_size == 0 {
             self.page_size = default_page_size();
         }
@@ -100,6 +111,15 @@ impl NacosAdminConfig {
         url.set_port(Some(port)).map_err(|_| format!("Nacos server address port is invalid: {port}"))?;
         self.server_addr = url.to_string().trim_end_matches('/').to_string();
         self.connect_override = None;
+        Ok(self)
+    }
+
+    pub fn with_rnacos_console_endpoint(mut self, host: &str, port: u16) -> Result<Self, String> {
+        let mut url = reqwest::Url::parse(&self.rnacos_console_addr)
+            .map_err(|e| format!("r-nacos console address is invalid: {e}"))?;
+        url.set_host(Some(host)).map_err(|_| format!("r-nacos console address host is invalid: {host}"))?;
+        url.set_port(Some(port)).map_err(|_| format!("r-nacos console address port is invalid: {port}"))?;
+        self.rnacos_console_addr = url.to_string().trim_end_matches('/').to_string();
         Ok(self)
     }
 }
@@ -193,6 +213,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_rnacos_console_address() {
+        let cfg = connection_with_external(serde_json::json!({
+            "serverAddr": "http://127.0.0.1:8848",
+            "rnacosConsoleAddr": " http://127.0.0.1:10848/ ",
+        }));
+
+        let parsed = NacosAdminConfig::from_connection(&cfg).unwrap();
+        assert_eq!(parsed.rnacos_console_addr, "http://127.0.0.1:10848");
+    }
+
+    #[test]
     fn missing_external_context_path_defaults_to_root() {
         let cfg = connection_with_external(serde_json::json!({
             "serverAddr": "http://127.0.0.1:8848",
@@ -229,5 +260,19 @@ mod tests {
         assert_eq!(parsed.server_addr, "https://127.0.0.1:49152/nacos");
         assert_eq!(parsed.context_path, "/console");
         assert!(parsed.connect_override.is_none());
+    }
+
+    #[test]
+    fn with_rnacos_console_endpoint_rewrites_only_host_and_port() {
+        let cfg = connection_with_external(serde_json::json!({
+            "serverAddr": "https://192.168.2.51:8848",
+            "rnacosConsoleAddr": "https://192.168.2.51:10848/gateway",
+            "auth": { "kind": "none" }
+        }));
+
+        let parsed =
+            NacosAdminConfig::from_connection(&cfg).unwrap().with_rnacos_console_endpoint("127.0.0.1", 49153).unwrap();
+
+        assert_eq!(parsed.rnacos_console_addr, "https://127.0.0.1:49153/gateway");
     }
 }

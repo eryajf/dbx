@@ -51,6 +51,7 @@ import { normalizeRocketmqNamesrvAddr } from "@/lib/connection/rocketmqNamesrv";
 import { detectMqUiAuthKind, isMqAuthKindAllowedForSystem, type MqUiAuthKind } from "@/lib/connection/mqAuth";
 import { driverInstallProgressPercent, type DriverInstallProgress } from "@/lib/connection/driverInstallProgressUi";
 import { isSqlServerLegacyCompatibilityMode, requiresSqlServerLegacyCompatibilityComponent, setSqlServerLegacyCompatibilityMode, SQLSERVER_LEGACY_COMPATIBILITY_DRIVER_KEY } from "@/lib/connection/sqlServerLegacyCompatibility";
+import { resolveRNacosOpenApiFallback } from "@/lib/nacos/nacosAdmin";
 import {
   ArrowLeft,
   ArrowDown,
@@ -575,6 +576,7 @@ const mqKafkaSaslMechanismOptions = [
 const nacosServerAddr = ref(NACOS_DEFAULT_CONSOLE_URL);
 const nacosNamespace = ref("");
 const nacosContextPath = ref("");
+const nacosRNacosConsoleAddr = ref("");
 const nacosAuthKind = ref<NacosAuthKind>("none");
 const nacosUsername = ref("nacos");
 const nacosPassword = ref("");
@@ -970,6 +972,7 @@ function resetNacosFields(config?: Partial<NacosAdminConfig>) {
   nacosServerAddr.value = config?.serverAddr?.trim() || NACOS_DEFAULT_CONSOLE_URL;
   nacosNamespace.value = config?.namespace || "";
   nacosContextPath.value = config?.contextPath || "";
+  nacosRNacosConsoleAddr.value = config?.rnacosConsoleAddr?.trim() || "";
   nacosTlsSkipVerify.value = !!config?.tlsSkipVerify;
   nacosPageSize.value = Number(config?.pageSize) > 0 ? Number(config?.pageSize) : 20;
   const auth = (config?.auth || { kind: "none" }) as NacosAuthConfig;
@@ -1145,10 +1148,16 @@ function buildNacosAuth(): NacosAuthConfig {
 }
 
 function buildNacosAdminConfig(): NacosAdminConfig {
+  const serverAddr = requireMqField(nacosServerAddr.value, t("connection.nacosConsoleUrlRequired"));
+  // Apply the r-nacos console-to-OpenAPI mapping before both Test and Save.
+  // `saveConnection` does not use the test fallback, so keeping this at the
+  // shared submission boundary prevents a persisted `/rnacos` configuration.
+  const rnacosOpenApi = resolveRNacosOpenApiFallback(serverAddr, nacosContextPath.value);
   return {
-    serverAddr: requireMqField(nacosServerAddr.value, t("connection.nacosConsoleUrlRequired")),
+    serverAddr: rnacosOpenApi?.serverAddr || serverAddr,
     namespace: nacosNamespace.value.trim() || undefined,
-    contextPath: nacosContextPath.value.trim(),
+    contextPath: rnacosOpenApi?.contextPath || nacosContextPath.value.trim(),
+    rnacosConsoleAddr: nacosRNacosConsoleAddr.value.trim() || undefined,
     auth: buildNacosAuth(),
     tlsSkipVerify: nacosTlsSkipVerify.value || undefined,
     pageSize: Number(nacosPageSize.value) > 0 ? Number(nacosPageSize.value) : 20,
@@ -1173,6 +1182,40 @@ function dockerNacosConsoleFallbackUrl(serverAddr: string): string | null {
 
 function isNacosAdminEndpointNotFound(message: string): boolean {
   return /Nacos admin endpoint was not found/i.test(message);
+}
+
+function isRNacosOpenApiFallbackError(message: string): boolean {
+  return /\b405\b|method not allowed|failed to parse nacos auth response|Nacos admin endpoint was not found/i.test(message);
+}
+
+async function tryRNacosOpenApiFallback(config: ConnectionConfig, originalError: string, runId: number): Promise<SuccessfulConnectionTest | null> {
+  if (config.db_type !== "nacos" || !isRNacosOpenApiFallbackError(originalError)) return null;
+  // A bare 10848 port is only a candidate here, after the original endpoint
+  // has failed. `buildNacosAdminConfig` intentionally requires the stronger
+  // `/rnacos` signal so a normal Nacos deployment mapped to 10848 is not
+  // silently rewritten during Save.
+  const fallback = resolveRNacosOpenApiFallback(nacosServerAddr.value, nacosContextPath.value, { allowConsolePortInference: true });
+  if (!fallback) return null;
+
+  const previousUrl = nacosServerAddr.value;
+  const previousContextPath = nacosContextPath.value;
+  nacosServerAddr.value = fallback.serverAddr;
+  nacosContextPath.value = fallback.contextPath;
+  try {
+    const fallbackConfig = connectionConfigForSubmit(config.id, config.name);
+    const result = await testConnectionWithTimeout(fallbackConfig, runId);
+    return {
+      config: fallbackConfig,
+      result: {
+        ...result,
+        message: `${result.message} ${t("connection.nacosRNacosOpenApiAutoAdjusted", { from: previousUrl.trim(), to: fallback.serverAddr })}`,
+      },
+    };
+  } catch {
+    nacosServerAddr.value = previousUrl;
+    nacosContextPath.value = previousContextPath;
+    return null;
+  }
 }
 
 async function tryNacosDockerConsoleFallback(config: ConnectionConfig, originalError: string, runId: number): Promise<SuccessfulConnectionTest | null> {
@@ -2504,7 +2547,7 @@ async function testConnection() {
     if (runId !== testRunId) return;
     const rawMessage = mongodbAuthFailureHint(errorMessage(e));
     const message = config ? connectionErrorWithDriverUpdateHint(config, rawMessage) : rawMessage;
-    const fallback = config ? await tryNacosDockerConsoleFallback(config, message, runId) : null;
+    const fallback = config ? (await tryRNacosOpenApiFallback(config, message, runId)) || (await tryNacosDockerConsoleFallback(config, message, runId)) : null;
     if (runId !== testRunId) return;
     const shouldShowSqlServerLegacyMode = !fallback && config?.db_type === "sqlserver" && !isSqlServerLegacyCompatibilityMode(config.url_params) && isSqlServerTlsHandshakeFailure(message);
     if (shouldShowSqlServerLegacyMode) {
@@ -4830,6 +4873,14 @@ function openExternalUrl(url: string) {
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.nacosContextPath") }}</Label>
                     <Input v-model="nacosContextPath" class="col-span-3" :placeholder="t('connection.nacosContextPathPlaceholder')" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.nacosRNacosConsoleUrl") }}</Label>
+                    <Input v-model="nacosRNacosConsoleAddr" class="col-span-3" :placeholder="t('connection.nacosRNacosConsoleUrlPlaceholder')" />
+                  </div>
+                  <div class="grid grid-cols-4 items-start gap-4">
+                    <span />
+                    <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">{{ t("connection.nacosRNacosConsoleUrlHint") }}</p>
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.nacosAuth") }}</Label>

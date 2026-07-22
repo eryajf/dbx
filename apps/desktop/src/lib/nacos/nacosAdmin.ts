@@ -37,6 +37,43 @@ export const NACOS_RAW_TEMPLATES: NacosRawTemplate[] = [
   },
 ];
 
+export interface RNacosOpenApiFallback {
+  serverAddr: string;
+  contextPath: string;
+}
+
+export interface RNacosOpenApiFallbackOptions {
+  /** Treat the well-known r-nacos console port as a candidate after the original connection fails. */
+  allowConsolePortInference?: boolean;
+}
+
+/**
+ * r-nacos exposes its Nacos-compatible OpenAPI on the service port (8848) at
+ * `/nacos`; `/rnacos` on 10848 is the separate web console and rejects these
+ * OpenAPI POST requests. Port-only detection is deliberately opt-in: 10848
+ * may also be a legitimate user mapping for a normal Nacos OpenAPI, so callers
+ * must only use that weaker signal as a tested fallback candidate.
+ */
+export function resolveRNacosOpenApiFallback(serverAddr: string, contextPath: string, options: RNacosOpenApiFallbackOptions = {}): RNacosOpenApiFallback | null {
+  const normalizedContextPath = `/${contextPath.trim().replace(/^\/+|\/+$/g, "")}`.replace(/\/$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(serverAddr.trim());
+  } catch {
+    return null;
+  }
+
+  const explicitRNacosContext = normalizedContextPath === "/rnacos";
+  const inferredRNacosConsolePort = options.allowConsolePortInference === true && parsed.port === "10848";
+  if (!explicitRNacosContext && !inferredRNacosConsolePort) return null;
+  if (parsed.port === "10848") parsed.port = "8848";
+
+  return {
+    serverAddr: parsed.toString().replace(/\/$/, ""),
+    contextPath: "/nacos",
+  };
+}
+
 export function parseNacosRawQuery(text: string): Record<string, string> | undefined {
   const trimmed = text.trim().replace(/^\?/, "");
   if (!trimmed) return undefined;

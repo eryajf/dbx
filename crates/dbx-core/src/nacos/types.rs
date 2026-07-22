@@ -22,6 +22,17 @@ impl Default for NacosCapabilities {
     }
 }
 
+/// A short-lived challenge returned by the authenticated r-nacos console.
+/// The corresponding server-side CAPTCHA token stays in the adapter process;
+/// only the image is returned to the desktop client.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NacosRNacosConsoleCaptcha {
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NacosConnectionInfo {

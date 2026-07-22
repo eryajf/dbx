@@ -1875,6 +1875,7 @@ dependencies = [
 name = "dbx-core"
 version = "0.1.0"
 dependencies = [
+ "aes 0.8.4",
  "aes-gcm 0.10.3",
  "anyhow",
  "argon2",
@@ -1882,6 +1883,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "calamine",
+ "cbc 0.1.2",
  "chrono",
  "csv",
  "deadpool-postgres",

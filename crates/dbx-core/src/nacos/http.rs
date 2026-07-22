@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use cbc::Encryptor as Aes128CbcEncryptor;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -11,6 +14,10 @@ use crate::nacos::port::NacosAdmin;
 use crate::nacos::types::*;
 
 const REQUEST_TIMEOUT_SECS: u64 = 30;
+// Matches r-nacos' default RNACOS_CONSOLE_LOGIN_TIMEOUT. If an installation
+// uses a shorter timeout, the console's NO_LOGIN response invalidates this
+// optimistic cache and starts a fresh login flow.
+const RNACOS_CONSOLE_SESSION_CACHE_SECS: u64 = 86_400;
 const MAX_RAW_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 const NACOS_ERROR_PREFIX: &str = "NACOS_ERROR";
 
@@ -20,10 +27,30 @@ struct AccessToken {
     expires_at: Instant,
 }
 
+#[derive(Debug, Clone)]
+struct RNacosConsoleToken {
+    token: String,
+    expires_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct RNacosConsoleCaptchaToken {
+    token: String,
+    expires_at: Instant,
+}
+
+#[derive(Debug)]
+struct NacosServerStateProbe {
+    raw: Value,
+    is_rnacos_compatible: bool,
+}
+
 pub struct NacosOpenApiAdmin {
     cfg: NacosAdminConfig,
     http: reqwest::Client,
     token: Mutex<Option<AccessToken>>,
+    rnacos_console_token: Mutex<Option<RNacosConsoleToken>>,
+    rnacos_console_captcha: Mutex<Option<RNacosConsoleCaptchaToken>>,
 }
 
 impl NacosOpenApiAdmin {
@@ -33,7 +60,13 @@ impl NacosOpenApiAdmin {
             builder = builder.danger_accept_invalid_certs(true);
         }
         let http = builder.build().map_err(|e| format!("Failed to build Nacos HTTP client: {e}"))?;
-        Ok(Self { cfg, http, token: Mutex::new(None) })
+        Ok(Self {
+            cfg,
+            http,
+            token: Mutex::new(None),
+            rnacos_console_token: Mutex::new(None),
+            rnacos_console_captcha: Mutex::new(None),
+        })
     }
 
     fn endpoint_with_context(&self, path: &str, context_path: &str) -> Result<String, String> {
@@ -178,11 +211,187 @@ impl NacosOpenApiAdmin {
         response_json_or_text(resp).await
     }
 
-    async fn get_server_state(&self) -> Result<Value, String> {
+    fn rnacos_console_endpoint(&self, path: &str) -> Result<String, String> {
+        if self.cfg.rnacos_console_addr.is_empty() {
+            return Err(
+                "r-nacos config history requires an r-nacos console URL (the independent console service, normally port 10848)"
+                    .to_string(),
+            );
+        }
+        let path = normalize_api_path(path);
+        let endpoint = format!("{}{}", self.cfg.rnacos_console_addr, path);
+        reqwest::Url::parse(&endpoint)
+            .map(|url| url.to_string())
+            .map_err(|e| format!("r-nacos console API URL is invalid: {e}"))
+    }
+
+    async fn rnacos_console_token(&self) -> Result<String, String> {
+        let NacosAuthConfig::UsernamePassword { username, password: _ } = &self.cfg.auth else {
+            return Err("r-nacos config history requires username/password authentication".to_string());
+        };
+        if username.trim().is_empty() {
+            return Err("r-nacos config history requires a username".to_string());
+        }
+        {
+            let guard = self.rnacos_console_token.lock().await;
+            if let Some(token) = guard.as_ref() {
+                if token.expires_at > Instant::now() + Duration::from_secs(30) {
+                    return Ok(token.token.clone());
+                }
+            }
+        }
+
+        let captcha = self.fetch_rnacos_console_captcha().await?;
+        if captcha.required {
+            return Err(classified_error(
+                "rnacosConsoleCaptchaRequired",
+                "r-nacos console requires a CAPTCHA before configuration history can be accessed",
+            ));
+        }
+        self.login_rnacos_console_with_captcha(None).await
+    }
+
+    async fn fetch_rnacos_console_captcha(&self) -> Result<NacosRNacosConsoleCaptcha, String> {
+        let path = "/rnacos/api/console/v2/login/captcha";
+        let response = self
+            .http
+            .get(self.rnacos_console_endpoint(path)?)
+            .send()
+            .await
+            .map_err(|e| format!("r-nacos console captcha request failed: {e}"))?;
+        let headers = response.headers().clone();
+        let response = error_for_status(response, "r-nacos console captcha").await?;
+        let value: Value =
+            response.json().await.map_err(|e| format!("Failed to parse r-nacos console captcha response: {e}"))?;
+        if value.get("success").and_then(Value::as_bool) != Some(true) {
+            return Err(format!("r-nacos console captcha request failed: {}", rnacos_console_error_detail(&value)));
+        }
+        let image = value.get("data").and_then(Value::as_str).map(str::to_string);
+        if image.is_some() {
+            let token = headers
+                .get("captcha-token")
+                .and_then(|value| value.to_str().ok())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "r-nacos console CAPTCHA response did not include a captcha token".to_string())?;
+            *self.rnacos_console_captcha.lock().await = Some(RNacosConsoleCaptchaToken {
+                token: token.to_string(),
+                expires_at: Instant::now() + Duration::from_secs(300),
+            });
+        } else {
+            *self.rnacos_console_captcha.lock().await = None;
+        }
+        Ok(NacosRNacosConsoleCaptcha { required: image.is_some(), image })
+    }
+
+    async fn login_rnacos_console_with_captcha(&self, captcha: Option<String>) -> Result<String, String> {
+        let NacosAuthConfig::UsernamePassword { username, password } = &self.cfg.auth else {
+            return Err("r-nacos config history requires username/password authentication".to_string());
+        };
+        let captcha = captcha.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+        let captcha_token = {
+            let guard = self.rnacos_console_captcha.lock().await;
+            guard.as_ref().filter(|value| value.expires_at > Instant::now()).map(|value| value.token.clone())
+        };
+        if captcha.is_some() && captcha_token.is_none() {
+            return Err(classified_error(
+                "rnacosConsoleCaptchaExpired",
+                "r-nacos console CAPTCHA expired; request a new CAPTCHA and try again",
+            ));
+        }
+
+        let encoded_password = rnacos_console_password(password, captcha_token.as_deref())?;
+        let mut form = vec![("username", username.to_string()), ("password", encoded_password)];
+        if let Some(captcha) = captcha {
+            form.push(("captcha", captcha));
+        }
+        let path = "/rnacos/api/console/v2/login/login";
+        let mut request = self.http.post(self.rnacos_console_endpoint(path)?).form(&form);
+        if let Some(captcha_token) = captcha_token {
+            request = request.header("Cookie", format!("captcha_token={captcha_token}"));
+        }
+        let response = request.send().await.map_err(|e| format!("r-nacos console login request failed: {e}"))?;
+        let response = error_for_status(response, "r-nacos console login").await?;
+        let value: Value =
+            response.json().await.map_err(|e| format!("Failed to parse r-nacos console login response: {e}"))?;
+        if value.get("success").and_then(Value::as_bool) != Some(true) {
+            return Err(format!("r-nacos console login failed: {}", rnacos_console_error_detail(&value)));
+        }
+        let token = value
+            .get("data")
+            .and_then(|data| data.get("token"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("r-nacos console login response did not include a token: {value}"))?
+            .to_string();
+        // r-nacos does not return the session TTL. Keep the token for its
+        // documented default lifetime; get_rnacos_console_json invalidates it
+        // immediately when a deployment with a shorter timeout returns NO_LOGIN.
+        *self.rnacos_console_token.lock().await = Some(RNacosConsoleToken {
+            token: token.clone(),
+            expires_at: Instant::now() + Duration::from_secs(RNACOS_CONSOLE_SESSION_CACHE_SECS),
+        });
+        *self.rnacos_console_captcha.lock().await = None;
+        Ok(token)
+    }
+
+    async fn get_rnacos_console_json(&self, path: &str, query: Vec<(String, String)>) -> Result<Value, String> {
+        let mut retried_after_expired_session = false;
+        loop {
+            let token = self.rnacos_console_token().await?;
+            let response = self
+                .http
+                .get(self.rnacos_console_endpoint(path)?)
+                .header("Token", token)
+                .query(&query)
+                .send()
+                .await
+                .map_err(|e| format!("r-nacos console request to {path} failed: {e}"))?;
+            let response = error_for_status(response, path).await?;
+            let value = response_json_or_text(response).await?;
+            if value.get("success").and_then(Value::as_bool) != Some(false) {
+                return Ok(value);
+            }
+            if !retried_after_expired_session && rnacos_console_session_expired(&value) {
+                *self.rnacos_console_token.lock().await = None;
+                retried_after_expired_session = true;
+                continue;
+            }
+            return Err(format!("r-nacos console {path} failed: {}", rnacos_console_error_detail(&value)));
+        }
+    }
+
+    async fn list_rnacos_config_history(
+        &self,
+        namespace: &str,
+        data_id: &str,
+        group: &str,
+        page_no: u32,
+        page_size: u32,
+    ) -> Result<Value, String> {
+        self.get_rnacos_console_json(
+            "/rnacos/api/console/v2/config/history",
+            vec![
+                ("tenant".to_string(), namespace.to_string()),
+                ("dataId".to_string(), data_id.to_string()),
+                ("group".to_string(), group.to_string()),
+                ("pageNo".to_string(), page_no.to_string()),
+                ("pageSize".to_string(), page_size.to_string()),
+            ],
+        )
+        .await
+    }
+
+    async fn get_server_state(&self) -> Result<NacosServerStateProbe, String> {
         let mut errors = Vec::new();
-        for path in ["/v3/console/server/state", "/v1/ns/operator/servers", "/v1/console/server/state"] {
+        // r-nacos implements the Nacos client OpenAPI but not the console state endpoints.
+        // Its documented health endpoint is mounted below the same `/nacos` context path,
+        // so keep it last to preserve the richer official-Nacos state response when available.
+        for path in ["/v3/console/server/state", "/v1/ns/operator/servers", "/v1/console/server/state", "/health"] {
             match self.get_json_without_auth(path, Vec::new()).await {
-                Ok(value) => return Ok(value),
+                Ok(raw) => {
+                    let is_rnacos_compatible = path == "/health"
+                        && raw.as_str().is_some_and(|value| value.trim().eq_ignore_ascii_case("success"));
+                    return Ok(NacosServerStateProbe { raw, is_rnacos_compatible });
+                }
                 Err(err) => errors.push(err),
             }
         }
@@ -407,21 +616,37 @@ fn qualified_nacos_service_name(service_name: &str, group_name: Option<&str>) ->
 #[async_trait]
 impl NacosAdmin for NacosOpenApiAdmin {
     async fn test_connection(&self) -> Result<NacosConnectionInfo, String> {
-        let raw = self.get_server_state().await?;
+        // Server-state endpoints are console APIs and r-nacos deliberately only
+        // guarantees the client OpenAPI. Treat state/health as best-effort;
+        // successful authentication and namespace access below prove that this
+        // connection can perform the DBX operations it exposes.
+        let state = self.get_server_state().await.ok();
         let _ = self.access_token().await?;
         let _ = self.list_namespaces().await?;
+        let mut capabilities = NacosCapabilities::default();
+        if state.as_ref().is_some_and(|state| state.is_rnacos_compatible) && self.cfg.rnacos_console_addr.is_empty() {
+            capabilities.supports_config_history = false;
+        }
         Ok(NacosConnectionInfo {
             server_addr: self.cfg.server_addr.clone(),
             display_server_addr: self.cfg.display_server_addr.clone(),
             namespace: self.cfg.namespace.clone(),
-            server_version: extract_server_version(&raw),
+            server_version: state.as_ref().and_then(|state| extract_server_version(&state.raw)),
             auth: match self.cfg.auth {
                 NacosAuthConfig::None => "none".to_string(),
                 NacosAuthConfig::UsernamePassword { .. } => "usernamePassword".to_string(),
             },
-            capabilities: NacosCapabilities::default(),
-            raw: Some(raw),
+            capabilities,
+            raw: state.map(|state| state.raw),
         })
+    }
+
+    async fn get_rnacos_console_captcha(&self) -> Result<NacosRNacosConsoleCaptcha, String> {
+        self.fetch_rnacos_console_captcha().await
+    }
+
+    async fn login_rnacos_console(&self, captcha: Option<String>) -> Result<(), String> {
+        self.login_rnacos_console_with_captcha(captcha).await.map(|_| ())
     }
 
     async fn list_namespaces(&self) -> Result<Vec<NacosNamespaceInfo>, String> {
@@ -682,7 +907,7 @@ impl NacosAdmin for NacosOpenApiAdmin {
             ("pageNo".to_string(), page_no.to_string()),
             ("pageSize".to_string(), page_size.to_string()),
         ];
-        let value = self
+        let value = match self
             .get_json_from_candidates(
                 "list Nacos config history",
                 vec![
@@ -694,7 +919,24 @@ impl NacosAdmin for NacosOpenApiAdmin {
                 ],
             )
             .await
-            .map_err(|err| classified_error("unsupportedConfigHistory", &err))?;
+        {
+            Ok(value) => value,
+            Err(nacos_error) => match self
+                .list_rnacos_config_history(&namespace, &query.data_id, &query.group, page_no, page_size)
+                .await
+            {
+                Ok(value) => value,
+                Err(rnacos_error) if rnacos_error.contains("[rnacosConsoleCaptchaRequired]") => {
+                    return Err(rnacos_error)
+                }
+                Err(rnacos_error) => {
+                    return Err(classified_error(
+                        "unsupportedConfigHistory",
+                        &format!("{nacos_error}; r-nacos console history fallback failed: {rnacos_error}"),
+                    ));
+                }
+            },
+        };
         Ok(parse_config_history_list(value, namespace, page_no, page_size, &query.data_id, &query.group))
     }
 
@@ -720,7 +962,7 @@ impl NacosAdmin for NacosOpenApiAdmin {
         } else {
             v1_params.push(("id".to_string(), key.history_id.clone()));
         }
-        let value = self
+        let value = match self
             .get_json_from_candidates(
                 "get Nacos config history",
                 vec![
@@ -731,7 +973,34 @@ impl NacosAdmin for NacosOpenApiAdmin {
                 ],
             )
             .await
-            .map_err(|err| classified_error("unsupportedConfigHistory", &err))?;
+        {
+            Ok(value) => value,
+            Err(nacos_error) => {
+                // r-nacos returns the historical content in its list response and
+                // has no separate history-detail endpoint. It keeps at most 100
+                // revisions, so a single maximum-size page can locate the item.
+                let history = self
+                    .list_rnacos_config_history(&namespace, &key.data_id, &key.group, 1, 500)
+                    .await
+                    .map_err(|rnacos_error| {
+                        if rnacos_error.contains("[rnacosConsoleCaptchaRequired]") {
+                            rnacos_error
+                        } else {
+                            classified_error(
+                                "unsupportedConfigHistory",
+                                &format!("{nacos_error}; r-nacos console history fallback failed: {rnacos_error}"),
+                            )
+                        }
+                    })?;
+                let item = rnacos_history_item(&history, &key.history_id, nid).ok_or_else(|| {
+                    classified_error(
+                        "unsupportedConfigHistory",
+                        &format!("r-nacos console history version {} was not found", key.history_id),
+                    )
+                })?;
+                return Ok(parse_config_history_detail(item, key.data_id, key.group, namespace));
+            }
+        };
         Ok(parse_config_history_detail(value, key.data_id, key.group, namespace))
     }
 
@@ -1266,7 +1535,7 @@ fn parse_config_history_item(
         namespace: string_field(&item, &["tenant", "namespaceId"]).if_empty(namespace),
         app_name: optional_string_field(&item, &["appName", "app_name"]),
         operation: optional_string_field(&item, &["opType", "operation", "operateType", "type"]),
-        operator: optional_string_field(&item, &["operator", "srcUser", "createUser", "modifyUser", "user"]),
+        operator: optional_string_field(&item, &["operator", "opUser", "srcUser", "createUser", "modifyUser", "user"]),
         last_modified_time: optional_string_field(
             &item,
             &["lastModifiedTime", "lastModifiedTs", "gmtModified", "modifiedTime", "opTime", "createdTime"],
@@ -1286,6 +1555,57 @@ fn parse_config_history_item(
 
 fn parse_config_history_detail(value: Value, data_id: String, group: String, namespace: String) -> NacosConfigItem {
     parse_config_detail(value, data_id, group, namespace)
+}
+
+fn rnacos_history_item(value: &Value, history_id: &str, nid: Option<i64>) -> Option<Value> {
+    let data = value.get("data").unwrap_or(value);
+    data.get("list")
+        .or_else(|| data.get("items"))
+        .or_else(|| value.get("list"))
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                let item_id = optional_string_field(item, &["id", "historyId", "nid"])
+                    .or_else(|| optional_i64_field(item, &["id", "historyId", "nid"]).map(|value| value.to_string()));
+                item_id.as_deref() == Some(history_id)
+                    || nid.is_some_and(|nid| optional_i64_field(item, &["id", "historyId", "nid"]) == Some(nid))
+            })
+        })
+        .cloned()
+}
+
+fn rnacos_console_error_detail(value: &Value) -> String {
+    optional_string_field(value, &["message", "msg", "code"]).unwrap_or_else(|| value.to_string())
+}
+
+fn rnacos_console_session_expired(value: &Value) -> bool {
+    ["code", "message", "msg"]
+        .into_iter()
+        .filter_map(|key| value.get(key).and_then(Value::as_str))
+        .any(|value| value.eq_ignore_ascii_case("NO_LOGIN"))
+}
+
+/// r-nacos uses a plain Base64 password when no CAPTCHA is active. When a
+/// CAPTCHA token is present, its first 16 bytes are the AES-128-CBC key and
+/// the following 16 bytes are the IV; the resulting ciphertext is Base64
+/// encoded before it is submitted as a form field.
+fn rnacos_console_password(password: &str, captcha_token: Option<&str>) -> Result<String, String> {
+    let Some(captcha_token) = captcha_token else {
+        return Ok(BASE64.encode(password.as_bytes()));
+    };
+    let key = captcha_token
+        .get(..16)
+        .ok_or_else(|| "r-nacos console CAPTCHA token is shorter than the encryption key".to_string())?;
+    let iv = captcha_token
+        .get(16..32)
+        .ok_or_else(|| "r-nacos console CAPTCHA token is shorter than the encryption IV".to_string())?;
+    let plaintext = password.as_bytes();
+    let buffer_len = plaintext.len().saturating_add(16);
+    let mut buffer = vec![0u8; buffer_len];
+    let encrypted = Aes128CbcEncryptor::<aes::Aes128>::new(key.as_bytes().into(), iv.as_bytes().into())
+        .encrypt_padded_b2b_mut::<Pkcs7>(plaintext, &mut buffer)
+        .map_err(|error| format!("Failed to encrypt r-nacos console password: {error}"))?;
+    Ok(BASE64.encode(encrypted))
 }
 
 fn parse_service_list(value: Value, page_no: u32, page_size: u32) -> NacosServiceList {
@@ -1521,7 +1841,7 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    async fn read_request_target(socket: &mut tokio::net::TcpStream) -> String {
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) -> String {
         let mut request = Vec::new();
         let mut buffer = [0u8; 1024];
         loop {
@@ -1530,11 +1850,22 @@ mod tests {
                 break;
             }
             request.extend_from_slice(&buffer[..read]);
-            if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                break;
+            if let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers.lines().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().ok()).flatten()
+                });
+                if content_length.is_none_or(|length| request.len() >= header_end + 4 + length) {
+                    break;
+                }
             }
         }
-        let request = String::from_utf8(request).unwrap();
+        String::from_utf8(request).unwrap()
+    }
+
+    async fn read_request_target(socket: &mut tokio::net::TcpStream) -> String {
+        let request = read_http_request(socket).await;
         request.split_whitespace().nth(1).unwrap().to_string()
     }
 
@@ -1547,17 +1878,342 @@ mod tests {
         socket.write_all(response.as_bytes()).await.unwrap();
     }
 
+    async fn write_json_response_with_captcha_token(socket: &mut tokio::net::TcpStream, body: &str) {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCaptcha-Token: 1234567890abcdeffedcba0987654321\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    }
+
+    async fn write_not_found_response(socket: &mut tokio::net::TcpStream) {
+        const BODY: &str = "not found";
+        let response = format!(
+            "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{BODY}",
+            BODY.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    }
+
+    async fn write_service_unavailable_response(socket: &mut tokio::net::TcpStream) {
+        const BODY: &str = "temporarily unavailable";
+        let response = format!(
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{BODY}",
+            BODY.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    }
+
     fn test_admin_config(server_addr: String) -> NacosAdminConfig {
         NacosAdminConfig {
             server_addr: server_addr.clone(),
             display_server_addr: server_addr,
             namespace: String::new(),
             context_path: String::new(),
+            rnacos_console_addr: String::new(),
             auth: NacosAuthConfig::None,
             tls_skip_verify: false,
             page_size: 100,
             connect_override: None,
         }
+    }
+
+    #[tokio::test]
+    async fn uses_health_endpoint_when_console_state_apis_are_unavailable() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for expected_path in
+                ["/nacos/v3/console/server/state", "/nacos/v1/ns/operator/servers", "/nacos/v1/console/server/state"]
+            {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                assert_eq!(read_request_target(&mut socket).await, expected_path);
+                write_not_found_response(&mut socket).await;
+            }
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/nacos/health");
+            write_json_response(&mut socket, "success").await;
+        });
+
+        let mut config = test_admin_config(format!("http://{address}"));
+        config.context_path = "/nacos".to_string();
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+
+        let state = admin.get_server_state().await.unwrap();
+        assert_eq!(state.raw, Value::String("success".to_string()));
+        assert!(state.is_rnacos_compatible);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reports_rnacos_history_unavailable_without_console_address() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for expected_path in
+                ["/nacos/v3/console/server/state", "/nacos/v1/ns/operator/servers", "/nacos/v1/console/server/state"]
+            {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                assert_eq!(read_request_target(&mut socket).await, expected_path);
+                write_not_found_response(&mut socket).await;
+            }
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/nacos/health");
+            write_json_response(&mut socket, "success").await;
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/nacos/v3/console/core/namespace/list");
+            write_not_found_response(&mut socket).await;
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/nacos/v1/console/namespaces");
+            write_json_response(&mut socket, r#"{"data":[]}"#).await;
+        });
+
+        let mut config = test_admin_config(format!("http://{address}"));
+        config.context_path = "/nacos".to_string();
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+
+        let info = admin.test_connection().await.unwrap();
+        assert!(!info.capabilities.supports_config_history);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_connection_accepts_client_openapi_when_console_state_and_health_are_unavailable() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for expected_path in
+                ["/nacos/v3/console/server/state", "/nacos/v1/ns/operator/servers", "/nacos/v1/console/server/state"]
+            {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                assert_eq!(read_request_target(&mut socket).await, expected_path);
+                write_not_found_response(&mut socket).await;
+            }
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/nacos/health");
+            write_service_unavailable_response(&mut socket).await;
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/nacos/v3/console/core/namespace/list");
+            write_not_found_response(&mut socket).await;
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/nacos/v1/console/namespaces");
+            write_json_response(&mut socket, r#"{"data":[]}"#).await;
+        });
+
+        let mut config = test_admin_config(format!("http://{address}"));
+        config.context_path = "/nacos".to_string();
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+
+        let info = admin.test_connection().await.unwrap();
+        assert!(info.raw.is_none());
+        assert_eq!(info.auth, "none");
+        assert!(info.capabilities.supports_config_history);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_rnacos_console_for_config_history() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for expected_path in [
+                "/nacos/v3/console/cs/history/list",
+                "/nacos/v3/console/cs/history",
+                "/nacos/v1/cs/history/list",
+                "/nacos/v1/cs/history",
+                "/nacos/v1/cs/history/configs",
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                assert!(read_request_target(&mut socket).await.starts_with(expected_path));
+                write_not_found_response(&mut socket).await;
+            }
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/rnacos/api/console/v2/login/captcha");
+            write_json_response(&mut socket, r#"{"success":true,"data":null}"#).await;
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/rnacos/api/console/v2/login/login");
+            write_json_response(&mut socket, r#"{"success":true,"data":{"token":"console-token"}}"#).await;
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let target = read_request_target(&mut socket).await;
+            assert!(target.starts_with("/rnacos/api/console/v2/config/history?"));
+            assert!(target.contains("tenant=public"));
+            assert!(target.contains("dataId=app.yaml"));
+            assert!(target.contains("group=DEFAULT_GROUP"));
+            write_json_response(
+                &mut socket,
+                r#"{"success":true,"data":{"totalCount":1,"list":[{"id":7,"tenant":"public","dataId":"app.yaml","group":"DEFAULT_GROUP","content":"value=1","modifiedTime":1710000000000,"opUser":"admin"}]}}"#,
+            )
+            .await;
+        });
+
+        let mut config = test_admin_config(format!("http://{address}"));
+        config.context_path = "/nacos".to_string();
+        config.rnacos_console_addr = format!("http://{address}");
+        config.auth =
+            NacosAuthConfig::UsernamePassword { username: "admin".to_string(), password: "admin".to_string() };
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+        *admin.token.lock().await = Some(AccessToken {
+            token: "openapi-token".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(300),
+        });
+
+        let result = admin
+            .list_config_history(NacosConfigHistoryQuery {
+                namespace: Some("public".to_string()),
+                data_id: "app.yaml".to_string(),
+                group: "DEFAULT_GROUP".to_string(),
+                page_no: Some(1),
+                page_size: Some(20),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.total_count, 1);
+        assert_eq!(result.items[0].history_id, "7");
+        assert_eq!(result.items[0].operator.as_deref(), Some("admin"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn loads_rnacos_history_content_for_rollback_fallback() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for expected_path in [
+                "/nacos/v3/console/cs/history/detail",
+                "/nacos/v3/console/cs/history",
+                "/nacos/v1/cs/history",
+                "/nacos/v1/cs/history/config",
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                assert!(read_request_target(&mut socket).await.starts_with(expected_path));
+                write_not_found_response(&mut socket).await;
+            }
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/rnacos/api/console/v2/login/captcha");
+            write_json_response(&mut socket, r#"{"success":true,"data":null}"#).await;
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/rnacos/api/console/v2/login/login");
+            write_json_response(&mut socket, r#"{"success":true,"data":{"token":"console-token"}}"#).await;
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert!(read_request_target(&mut socket).await.starts_with("/rnacos/api/console/v2/config/history?"));
+            write_json_response(
+                &mut socket,
+                r#"{"success":true,"data":{"totalCount":1,"list":[{"id":7,"tenant":"public","dataId":"app.yaml","group":"DEFAULT_GROUP","content":"value=1"}]}}"#,
+            )
+            .await;
+        });
+
+        let mut config = test_admin_config(format!("http://{address}"));
+        config.context_path = "/nacos".to_string();
+        config.rnacos_console_addr = format!("http://{address}");
+        config.auth =
+            NacosAuthConfig::UsernamePassword { username: "admin".to_string(), password: "admin".to_string() };
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+        *admin.token.lock().await = Some(AccessToken {
+            token: "openapi-token".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(300),
+        });
+
+        let result = admin
+            .get_config_history(NacosConfigHistoryKey {
+                namespace: Some("public".to_string()),
+                data_id: "app.yaml".to_string(),
+                group: "DEFAULT_GROUP".to_string(),
+                history_id: "7".to_string(),
+                nid: Some(7),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.content.as_deref(), Some("value=1"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reports_when_rnacos_console_captcha_is_enabled() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/rnacos/api/console/v2/login/captcha");
+            write_json_response_with_captcha_token(
+                &mut socket,
+                r#"{"success":true,"data":"data:image/png;base64,abc"}"#,
+            )
+            .await;
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut socket).await;
+            assert_eq!(request.split_whitespace().nth(1), Some("/rnacos/api/console/v2/login/login"));
+            assert!(request.to_ascii_lowercase().contains("cookie: captcha_token=1234567890abcdeffedcba0987654321"));
+            let body = request.split_once("\r\n\r\n").map(|(_, body)| body).unwrap_or_default();
+            assert!(body.contains("username=admin"));
+            assert!(body.contains("captcha=1234"));
+            assert!(body.contains("password="));
+            assert!(!body.contains("password=admin"));
+            write_json_response(&mut socket, r#"{"success":true,"data":{"token":"console-token"}}"#).await;
+        });
+        let mut config = test_admin_config(format!("http://{address}"));
+        config.rnacos_console_addr = format!("http://{address}");
+        config.auth =
+            NacosAuthConfig::UsernamePassword { username: "admin".to_string(), password: "admin".to_string() };
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+
+        let captcha = admin.fetch_rnacos_console_captcha().await.unwrap();
+        assert!(captcha.required);
+        assert_eq!(captcha.image.as_deref(), Some("data:image/png;base64,abc"));
+        admin.login_rnacos_console_with_captcha(Some("1234".to_string())).await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalidates_expired_rnacos_console_session_and_requests_a_new_captcha() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert!(read_request_target(&mut socket).await.starts_with("/rnacos/api/console/v2/config/history"));
+            write_json_response(&mut socket, r#"{"success":false,"code":"NO_LOGIN","data":null}"#).await;
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/rnacos/api/console/v2/login/captcha");
+            write_json_response_with_captcha_token(
+                &mut socket,
+                r#"{"success":true,"data":"data:image/png;base64,abc"}"#,
+            )
+            .await;
+        });
+        let mut config = test_admin_config(format!("http://{address}"));
+        config.rnacos_console_addr = format!("http://{address}");
+        config.auth =
+            NacosAuthConfig::UsernamePassword { username: "admin".to_string(), password: "admin".to_string() };
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+        *admin.rnacos_console_token.lock().await = Some(RNacosConsoleToken {
+            token: "expired-console-token".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(300),
+        });
+
+        let error = admin
+            .get_rnacos_console_json(
+                "/rnacos/api/console/v2/config/history",
+                vec![("dataId".to_string(), "app.yaml".to_string())],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("[rnacosConsoleCaptchaRequired]"));
+        assert!(admin.rnacos_console_token.lock().await.is_none());
+        assert!(admin.rnacos_console_captcha.lock().await.is_some());
+        server.await.unwrap();
     }
 
     #[test]
@@ -1757,6 +2413,25 @@ mod tests {
         assert_eq!(parsed.items[0].operator.as_deref(), Some("nacos"));
         assert_eq!(parsed.items[0].last_modified_time.as_deref(), Some("1710000000000"));
         assert_eq!(parsed.items[0].config_type.as_deref(), Some("yaml"));
+    }
+
+    #[test]
+    fn encrypts_rnacos_console_password_with_captcha_token() {
+        use aes::cipher::BlockDecryptMut;
+        use cbc::Decryptor as Aes128CbcDecryptor;
+
+        let captcha_token = "1234567890abcdeffedcba0987654321";
+        let encoded = rnacos_console_password("admin", Some(captcha_token)).unwrap();
+        assert_ne!(encoded, BASE64.encode("admin"));
+        let ciphertext = BASE64.decode(encoded).unwrap();
+        let mut buffer = vec![0u8; ciphertext.len()];
+        let plaintext = Aes128CbcDecryptor::<aes::Aes128>::new(
+            captcha_token[..16].as_bytes().into(),
+            captcha_token[16..32].as_bytes().into(),
+        )
+        .decrypt_padded_b2b_mut::<Pkcs7>(&ciphertext, &mut buffer)
+        .unwrap();
+        assert_eq!(plaintext, b"admin");
     }
 
     #[test]

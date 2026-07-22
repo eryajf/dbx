@@ -16,6 +16,11 @@ export interface NacosConnectionInfo {
   raw?: unknown;
 }
 
+export interface NacosRNacosConsoleCaptcha {
+  required: boolean;
+  image?: string;
+}
+
 export interface NacosNamespaceInfo {
   namespace: string;
   namespaceShowName: string;
@@ -47,6 +52,7 @@ export interface NacosAdminConfig {
   serverAddr: string;
   namespace?: string;
   contextPath?: string;
+  rnacosConsoleAddr?: string;
   auth?: NacosAuthConfig;
   tlsSkipVerify?: boolean;
   pageSize?: number;

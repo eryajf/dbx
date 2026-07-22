@@ -95,6 +95,23 @@ pub async fn nacos_rollback_config_core(
     admin.rollback_config(req).await
 }
 
+pub async fn nacos_get_rnacos_console_captcha_core(
+    state: &AppState,
+    conn_id: &str,
+) -> Result<NacosRNacosConsoleCaptcha, String> {
+    let admin = get_admin(state, conn_id).await?;
+    admin.get_rnacos_console_captcha().await
+}
+
+pub async fn nacos_login_rnacos_console_core(
+    state: &AppState,
+    conn_id: &str,
+    captcha: Option<String>,
+) -> Result<(), String> {
+    let admin = get_admin(state, conn_id).await?;
+    admin.login_rnacos_console(captcha).await
+}
+
 pub async fn nacos_list_services_core(
     state: &AppState,
     conn_id: &str,

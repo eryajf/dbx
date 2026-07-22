@@ -1268,6 +1268,8 @@ pub fn run() {
             commands::nacos_cmd::nacos_list_config_history,
             commands::nacos_cmd::nacos_get_config_history,
             commands::nacos_cmd::nacos_rollback_config,
+            commands::nacos_cmd::nacos_get_rnacos_console_captcha,
+            commands::nacos_cmd::nacos_login_rnacos_console,
             commands::nacos_cmd::nacos_list_services,
             commands::nacos_cmd::nacos_list_instances,
             commands::nacos_cmd::nacos_update_instance,
