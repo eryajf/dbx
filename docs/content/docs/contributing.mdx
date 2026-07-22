@@ -157,6 +157,10 @@ If your change does not involve DuckDB, skip the DuckDB source build:
 make dev-fast
 ```
 
+Development builds can run alongside an installed DBX instance. Both use the same local DBX data, so connections and history are available in each window. Open tabs are isolated between development and installed builds to protect unsaved SQL; avoid changing the same connection, saved SQL, or global setting in both windows at once.
+
+When testing the MCP bridge, the instance started last owns the shared `mcp-bridge-port` discovery file and receives MCP requests. The desktop Redis PubSub server uses a dynamic local port by default, so each running instance connects to its own server.
+
 ### Windows
 
 Run in PowerShell:

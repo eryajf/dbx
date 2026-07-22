@@ -313,6 +313,8 @@ make
 
 `make` installs root dependencies when needed and starts the local Tauri desktop development environment.
 
+Development builds can run alongside an installed DBX instance. They share local connections and history, while open tabs are isolated to prevent unsaved SQL from being overwritten. Avoid changing the same connection or global setting in both windows at once.
+
 > [!TIP]
 > DuckDB compilation takes a while. If you're not working on DuckDB features,
 > skip it to speed up local builds:

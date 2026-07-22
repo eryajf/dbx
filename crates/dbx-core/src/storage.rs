@@ -24,6 +24,7 @@ const TRANSPORT_LAYER_SECRET_PREFIX: &str = "transport_layers.";
 const STORAGE_DB_FILE_NAME: &str = "dbx.db";
 const APP_STATE_EDITOR_SETTINGS_KEY: &str = "editor_settings";
 const APP_STATE_OPEN_TABS_KEY: &str = "open_tabs";
+const APP_STATE_DEVELOPMENT_OPEN_TABS_KEY: &str = "open_tabs_development";
 const APP_STATE_SAVED_SQL_EDITOR_POSITIONS_KEY: &str = "saved_sql_editor_positions";
 const MCP_GLOBAL_POLICY_KEY: &str = "mcp_global_policy";
 const USER_DATA_TABLES: &[&str] = &[
@@ -35,6 +36,21 @@ const USER_DATA_TABLES: &[&str] = &[
     "saved_sql_folders",
     "saved_sql_files",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenTabsStateScope {
+    Release,
+    Development,
+}
+
+impl OpenTabsStateScope {
+    fn storage_key(self) -> &'static str {
+        match self {
+            Self::Release => APP_STATE_OPEN_TABS_KEY,
+            Self::Development => APP_STATE_DEVELOPMENT_OPEN_TABS_KEY,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataDbImportResult {
@@ -1401,12 +1417,16 @@ impl Storage {
         self.load_app_state_value(APP_STATE_EDITOR_SETTINGS_KEY).await
     }
 
-    pub async fn save_open_tabs_state(&self, state: &serde_json::Value) -> Result<(), String> {
-        self.save_app_state_value(APP_STATE_OPEN_TABS_KEY, state).await
+    pub async fn save_open_tabs_state(
+        &self,
+        scope: OpenTabsStateScope,
+        state: &serde_json::Value,
+    ) -> Result<(), String> {
+        self.save_app_state_value(scope.storage_key(), state).await
     }
 
-    pub async fn load_open_tabs_state(&self) -> Result<Option<serde_json::Value>, String> {
-        self.load_app_state_value(APP_STATE_OPEN_TABS_KEY).await
+    pub async fn load_open_tabs_state(&self, scope: OpenTabsStateScope) -> Result<Option<serde_json::Value>, String> {
+        self.load_app_state_value(scope.storage_key()).await
     }
 
     pub async fn save_saved_sql_editor_positions(&self, positions: &serde_json::Value) -> Result<(), String> {
@@ -4224,7 +4244,7 @@ mod tests {
 
         storage.save_editor_settings(&serde_json::json!({ "openTabsRestoreMode": "pinned" })).await.unwrap();
         storage
-            .save_open_tabs_state(&serde_json::json!({
+            .save_open_tabs_state(OpenTabsStateScope::Release, &serde_json::json!({
                 "tabs": [{ "id": "tab-1", "title": "Pinned", "connectionId": "pg", "database": "app", "sql": "select 1", "pinned": true }],
                 "activeTabId": "tab-1"
             }))
@@ -4240,7 +4260,11 @@ mod tests {
             Some(serde_json::json!({ "openTabsRestoreMode": "pinned" }))
         );
         assert_eq!(
-            storage.load_open_tabs_state().await.unwrap().and_then(|value| value.get("activeTabId").cloned()),
+            storage
+                .load_open_tabs_state(OpenTabsStateScope::Release)
+                .await
+                .unwrap()
+                .and_then(|value| value.get("activeTabId").cloned()),
             Some(serde_json::json!("tab-1"))
         );
         assert_eq!(
@@ -4253,6 +4277,33 @@ mod tests {
             DesktopSettings { icon_theme: DesktopIconTheme::Black, ..DesktopSettings::default() }
         );
         assert_eq!(storage.load_app_settings_json().await.unwrap().get("open_tabs"), None);
+    }
+
+    #[tokio::test]
+    async fn open_tabs_state_is_isolated_between_release_and_development_builds() {
+        let path = temp_db_path("open-tabs-state-scope");
+        let storage = Storage::open(&path).await.unwrap();
+
+        storage
+            .save_open_tabs_state(OpenTabsStateScope::Release, &serde_json::json!({ "activeTabId": "release-tab" }))
+            .await
+            .unwrap();
+        storage
+            .save_open_tabs_state(
+                OpenTabsStateScope::Development,
+                &serde_json::json!({ "activeTabId": "development-tab" }),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            storage.load_open_tabs_state(OpenTabsStateScope::Release).await.unwrap(),
+            Some(serde_json::json!({ "activeTabId": "release-tab" }))
+        );
+        assert_eq!(
+            storage.load_open_tabs_state(OpenTabsStateScope::Development).await.unwrap(),
+            Some(serde_json::json!({ "activeTabId": "development-tab" }))
+        );
     }
 
     #[tokio::test]

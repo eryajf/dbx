@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Query, State, WebSocketUpgrade};
@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use dbx_core::connection::AppState;
 
-const DEFAULT_PUBSUB_PORT: u16 = 4224;
+pub struct PubSubServerPort(pub u16);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,13 +22,27 @@ pub fn build_pubsub_router(state: Arc<AppState>) -> Router {
     Router::new().route("/api/redis/pubsub/ws", get(ws_handler)).with_state(state)
 }
 
-fn pubsub_server_port() -> u16 {
-    std::env::var("DBX_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PUBSUB_PORT)
+fn configured_pubsub_server_port() -> Option<u16> {
+    std::env::var("DBX_PORT").ok().and_then(|port| port.parse().ok())
 }
 
 #[tauri::command]
-pub fn redis_pubsub_server_port() -> u16 {
-    pubsub_server_port()
+pub fn redis_pubsub_server_port(port: tauri::State<'_, PubSubServerPort>) -> u16 {
+    port.0
+}
+
+async fn bind_pubsub_listener(preferred_port: Option<u16>) -> std::io::Result<tokio::net::TcpListener> {
+    if let Some(port) = preferred_port {
+        let address = SocketAddr::from(([0, 0, 0, 0], port));
+        match tokio::net::TcpListener::bind(address).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) => {
+                log::warn!("Failed to bind PubSub server on {address}: {error}; falling back to a dynamic port")
+            }
+        }
+    }
+
+    tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await
 }
 
 async fn ws_handler(
@@ -142,23 +156,38 @@ async fn handle_command(sink: &mut redis::aio::PubSubSink, text: &str) -> Result
     Ok(())
 }
 
-/// Start the embedded web server for PubSub WebSocket support.
-/// Runs on a background task using the shared AppState.
-pub fn start_pubsub_server(state: Arc<AppState>) {
+/// Start the embedded web server for PubSub WebSocket support and return its actual port.
+pub async fn start_pubsub_server(state: Arc<AppState>) -> std::io::Result<PubSubServerPort> {
+    let listener = bind_pubsub_listener(configured_pubsub_server_port()).await?;
+    let address = listener.local_addr()?;
+    let port = PubSubServerPort(address.port());
     let router = build_pubsub_router(state);
     tauri::async_runtime::spawn(async move {
-        let port = pubsub_server_port();
-        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-        let listener = match tokio::net::TcpListener::bind(addr).await {
-            Ok(listener) => listener,
-            Err(error) => {
-                log::warn!("Failed to bind PubSub server on {addr}: {error}");
-                return;
-            }
-        };
-        log::info!("PubSub WebSocket server listening on {addr}");
+        log::info!("PubSub WebSocket server listening on {address}");
         if let Err(error) = axum::serve(listener, router).await {
             log::warn!("PubSub server stopped with error: {error}");
         }
     });
+
+    Ok(port)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bind_pubsub_listener;
+
+    #[tokio::test]
+    async fn dynamic_port_binding_returns_a_listening_port() {
+        let listener = bind_pubsub_listener(None).await.unwrap();
+        assert_ne!(listener.local_addr().unwrap().port(), 0);
+    }
+
+    #[tokio::test]
+    async fn occupied_preferred_port_falls_back_to_a_dynamic_port() {
+        let occupied_listener = bind_pubsub_listener(None).await.unwrap();
+        let occupied_port = occupied_listener.local_addr().unwrap().port();
+
+        let fallback_listener = bind_pubsub_listener(Some(occupied_port)).await.unwrap();
+        assert_ne!(fallback_listener.local_addr().unwrap().port(), occupied_port);
+    }
 }
