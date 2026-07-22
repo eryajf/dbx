@@ -47,6 +47,7 @@ import { connectionAttemptOriginalErrorMessage, connectionAttemptTimeoutMessage,
 import { appendConnectionErrorHints, isJdbcMissingRuntimeDependencyError } from "@/lib/connection/connectionErrorHints";
 import { postgresTlsModeForForm } from "@/lib/connection/postgresTlsMode";
 import { normalizeKafkaBootstrapServers } from "@/lib/connection/kafkaBootstrapServers";
+import { assertCompleteDatabaseCategories, databaseSelectionForCategory } from "@/lib/connection/databaseCategoryOptions";
 import { normalizeRocketmqNamesrvAddr } from "@/lib/connection/rocketmqNamesrv";
 import { detectMqUiAuthKind, isMqAuthKindAllowedForSystem, type MqUiAuthKind } from "@/lib/connection/mqAuth";
 import { driverInstallProgressPercent, type DriverInstallProgress } from "@/lib/connection/driverInstallProgressUi";
@@ -2152,6 +2153,12 @@ const dbCategoryDefinitions: Array<{
   },
 ];
 
+// Keep the picker exhaustive as database drivers are added or reorganized.
+assertCompleteDatabaseCategories(
+  dbOptions.map((option) => option.value),
+  dbCategoryDefinitions.map((category) => category.optionValues),
+);
+
 const dbCategories = computed<DbCategory[]>(() => {
   return dbCategoryDefinitions.map((category) => ({
     key: category.key,
@@ -2188,10 +2195,14 @@ const visibleDbCategories = computed<DbCategory[]>(() => {
   return filteredDbCategories.value.filter((category) => category.key === selectedDbCategory.value);
 });
 const hasDbPickerResults = computed(() => visibleDbCategories.value.some((category) => category.options.length > 0));
+const selectedDbOptionIsVisible = computed(() => visibleDbCategories.value.some((category) => category.options.some((option) => option.value === selectedType.value)));
 
 function selectDbCategory(category: DbCategoryKey) {
   selectedDbCategory.value = category;
   dbSearchQuery.value = "";
+  const categoryOptions = dbCategoryDefinitions.find((definition) => definition.key === category)?.optionValues ?? [];
+  const nextSelection = databaseSelectionForCategory(selectedType.value, categoryOptions);
+  if (nextSelection && nextSelection !== selectedType.value) onDbTypeChange(nextSelection);
 }
 
 function dbCategoryForOption(value: string): DbCategoryKey | undefined {
@@ -4365,7 +4376,7 @@ function openExternalUrl(url: string) {
             <DatabaseIcon :db-type="selectedDbIcon" class="h-4 w-4 shrink-0" />
             <span class="truncate">{{ t("connection.selectedDatabase") }}: {{ selectedProfile().label }}</span>
           </div>
-          <Button :disabled="!hasDbPickerResults" @click="goToConnectionStep()">
+          <Button :disabled="!hasDbPickerResults || !selectedDbOptionIsVisible" @click="goToConnectionStep()">
             {{ t("connection.next") }}
             <ChevronRight class="h-4 w-4" />
           </Button>
