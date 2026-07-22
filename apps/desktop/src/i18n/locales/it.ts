@@ -315,6 +315,7 @@ export default withEnglishFallback({
     nacosTlsSkipVerify: "Salta verifica certificato",
     nacosPageSize: "Dimensione pagina",
     searchDatabasePlaceholder: "Cerca tipi di database",
+    searchResults: "Risultati della ricerca",
     databaseCategories: "Categorie",
     databaseCategorySql: "Relazionali",
     databaseCategoryAnalytics: "Analisi",

@@ -316,6 +316,7 @@ export default withEnglishFallback({
     nacosTlsSkipVerify: "跳過憑證驗證",
     nacosPageSize: "分頁大小",
     searchDatabasePlaceholder: "搜尋資料庫類型",
+    searchResults: "搜尋結果",
     databaseCategories: "分類",
     databaseCategorySql: "關聯式資料庫",
     databaseCategoryAnalytics: "數倉分析",

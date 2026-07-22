@@ -393,6 +393,7 @@ export default withEnglishFallback({
     mqTokenSigningKeyPlaceholderRs256: "-----BEGIN PRIVATE KEY-----",
     mqTokenSigningHint: "按 Broker 的 jwt.broker.token.mode 选择：SECRET 使用 HS256，PRIVATE 使用 RS256。密钥会走连接 secret 存储。",
     searchDatabasePlaceholder: "搜索数据库类型",
+    searchResults: "搜索结果",
     databaseCategories: "分类",
     databaseCategorySql: "关系型数据库",
     databaseCategoryAnalytics: "数仓分析",

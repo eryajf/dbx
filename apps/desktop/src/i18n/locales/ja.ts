@@ -309,6 +309,7 @@ export default withEnglishFallback({
     nacosTlsSkipVerify: "証明書検証をスキップ",
     nacosPageSize: "ページサイズ",
     searchDatabasePlaceholder: "データベースタイプを検索",
+    searchResults: "検索結果",
     databaseCategories: "カテゴリ",
     databaseCategorySql: "リレーショナル",
     databaseCategoryAnalytics: "分析",

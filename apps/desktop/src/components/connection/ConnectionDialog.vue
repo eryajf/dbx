@@ -2169,9 +2169,11 @@ function matchesDbOption(option: DbOption, keyword: string, categoryTitle = "") 
   );
 }
 
+const isDbSearchActive = computed(() => !!dbSearchQuery.value.trim());
+
 const filteredDbCategories = computed<DbCategory[]>(() => {
   const keyword = dbSearchQuery.value.trim().toLowerCase();
-  if (!keyword) return dbCategories.value;
+  if (!isDbSearchActive.value) return dbCategories.value;
 
   return dbCategories.value
     .map((category) => ({
@@ -2182,10 +2184,9 @@ const filteredDbCategories = computed<DbCategory[]>(() => {
 });
 
 const visibleDbCategories = computed<DbCategory[]>(() => {
-  if (dbSearchQuery.value.trim()) return filteredDbCategories.value;
+  if (isDbSearchActive.value) return filteredDbCategories.value;
   return filteredDbCategories.value.filter((category) => category.key === selectedDbCategory.value);
 });
-const showDbCategoryHeadings = computed(() => !!dbSearchQuery.value.trim() && visibleDbCategories.value.length > 1);
 const hasDbPickerResults = computed(() => visibleDbCategories.value.some((category) => category.options.length > 0));
 
 function selectDbCategory(category: DbCategoryKey) {
@@ -4302,8 +4303,8 @@ function openExternalUrl(url: string) {
                 :key="category.key"
                 type="button"
                 class="shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-full"
-                :class="selectedDbCategory === category.key ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground'"
-                :aria-current="selectedDbCategory === category.key ? 'page' : undefined"
+                :class="!isDbSearchActive && selectedDbCategory === category.key ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground'"
+                :aria-current="!isDbSearchActive && selectedDbCategory === category.key ? 'page' : undefined"
                 @click="selectDbCategory(category.key)"
               >
                 {{ category.title }}
@@ -4311,10 +4312,10 @@ function openExternalUrl(url: string) {
             </nav>
 
             <div class="min-w-0 flex-1 space-y-5 overflow-y-auto pr-2">
+              <div v-if="isDbSearchActive" class="text-sm font-medium">{{ t("connection.searchResults") }}</div>
+
               <section v-for="category in visibleDbCategories" :key="category.key" class="space-y-2">
-                <div class="flex items-center">
-                  <h3 v-if="showDbCategoryHeadings" class="text-sm font-medium">{{ category.title }}</h3>
-                </div>
+                <h3 v-if="isDbSearchActive" class="text-sm font-medium">{{ category.title }}</h3>
 
                 <div v-if="dbPickerView === 'icon'" class="connection-db-picker-grid grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5">
                   <button
@@ -4347,7 +4348,7 @@ function openExternalUrl(url: string) {
                   >
                     <DatabaseIcon :db-type="iconTypeMap[opt.value]" class="h-5 w-5 shrink-0" />
                     <span class="min-w-0 flex-1 truncate text-sm font-medium">{{ opt.label }}</span>
-                    <span v-if="showDbCategoryHeadings" class="text-xs text-muted-foreground">{{ category.title }}</span>
+                    <span v-if="isDbSearchActive" class="text-xs text-muted-foreground">{{ category.title }}</span>
                   </button>
                 </div>
               </section>

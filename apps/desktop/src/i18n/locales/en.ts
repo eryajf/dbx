@@ -391,6 +391,7 @@ export default {
     mqTokenSigningKeyPlaceholderRs256: "-----BEGIN PRIVATE KEY-----",
     mqTokenSigningHint: "Choose based on the broker jwt.broker.token.mode: SECRET uses HS256, PRIVATE uses RS256. The key is stored with connection secrets.",
     searchDatabasePlaceholder: "Search database types",
+    searchResults: "Search results",
     databaseCategories: "Categories",
     databaseCategorySql: "Relational",
     databaseCategoryAnalytics: "Analytics",

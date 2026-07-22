@@ -316,6 +316,7 @@ export default withEnglishFallback({
     nacosTlsSkipVerify: "Omitir verificación de certificado",
     nacosPageSize: "Tamaño de página",
     searchDatabasePlaceholder: "Buscar tipos de bases de datos",
+    searchResults: "Resultados de búsqueda",
     databaseCategories: "Categorías",
     databaseCategorySql: "Relacionales",
     databaseCategoryAnalytics: "Analítica",
