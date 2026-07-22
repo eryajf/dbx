@@ -8,7 +8,9 @@ pub async fn nacos_test_connection_core(state: &AppState, conn_id: &str) -> Resu
         return Err("Connection is not a Nacos admin connection".to_string());
     }
     let admin_config = state.nacos_admin_config_for_connection(conn_id, &cfg).await?;
-    let admin = state.nacos_registry.build_transient_config(admin_config).await?;
+    // Keep this probe on the connection's shared adapter so an r-nacos console
+    // session verified for configuration history can also expose its version.
+    let admin = state.nacos_registry.get_or_build_config(conn_id, admin_config).await?;
     admin.test_connection().await
 }
 

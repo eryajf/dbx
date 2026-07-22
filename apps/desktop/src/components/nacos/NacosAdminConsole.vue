@@ -128,9 +128,9 @@ const supportsConfigHistory = computed(() => connectionInfo.value?.capabilities.
 const configHistoryUnavailableTitle = computed(() => {
   if (supportsConfigHistory.value) return undefined;
   const reason = connectionInfo.value?.capabilities.historyUnavailableReason;
-  if (reason === "historyDisabled") return "Configuration history is disabled for this connection.";
-  if (reason === "consoleUrlMissing") return "Configuration history needs an r-nacos console address.";
-  if (reason === "consoleCredentialsMissing") return "Configuration history needs r-nacos console credentials.";
+  if (reason === "historyDisabled") return t("nacos.historyDisabled");
+  if (reason === "consoleUrlMissing") return t("nacos.historyConsoleUrlMissing");
+  if (reason === "consoleCredentialsMissing") return t("nacos.historyConsoleCredentialsMissing");
   return t("nacos.historyUnavailable");
 });
 const namespaceLabel = computed(() => props.namespaceName || namespace.value || "public");
@@ -609,6 +609,7 @@ async function requestRNacosConsoleAuthentication() {
     const challenge = await api.nacosGetRNacosConsoleCaptcha(props.connectionId);
     if (!challenge.required) {
       await api.nacosLoginRNacosConsole(props.connectionId);
+      void loadInfo();
       retryRNacosConsoleAction();
       return;
     }
@@ -632,6 +633,7 @@ async function submitRNacosConsoleAuthentication() {
   try {
     await api.nacosLoginRNacosConsole(props.connectionId, rnacosConsoleCaptcha.value);
     rnacosConsoleAuthOpen.value = false;
+    void loadInfo();
     retryRNacosConsoleAction();
   } catch (error) {
     rnacosConsoleAuthError.value = error instanceof Error ? error.message : String(error);

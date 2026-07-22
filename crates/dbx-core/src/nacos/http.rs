@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
@@ -9,7 +10,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::nacos::config::{NacosAdminConfig, NacosAuthConfig};
+use crate::nacos::config::{NacosAdminConfig, NacosAuthConfig, NacosImplementation};
 use crate::nacos::port::NacosAdmin;
 use crate::nacos::types::*;
 
@@ -17,7 +18,7 @@ const REQUEST_TIMEOUT_SECS: u64 = 30;
 // Matches r-nacos' default RNACOS_CONSOLE_LOGIN_TIMEOUT. If an installation
 // uses a shorter timeout, the console's NO_LOGIN response invalidates this
 // optimistic cache and starts a fresh login flow.
-const RNACOS_CONSOLE_SESSION_CACHE_SECS: u64 = 86_400;
+pub(crate) const RNACOS_CONSOLE_SESSION_CACHE_SECS: u64 = 86_400;
 const MAX_RAW_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 const NACOS_ERROR_PREFIX: &str = "NACOS_ERROR";
 
@@ -39,6 +40,21 @@ struct RNacosConsoleCaptchaToken {
     expires_at: Instant,
 }
 
+/// Short-lived r-nacos console state shared by clients for one DBX connection.
+/// It deliberately remains in memory so closing a console tab does not trigger
+/// a new CAPTCHA, while restarting DBX still requires authentication.
+#[derive(Debug, Default)]
+pub(crate) struct RNacosConsoleSession {
+    token: Option<RNacosConsoleToken>,
+    captcha: Option<RNacosConsoleCaptchaToken>,
+}
+
+pub(crate) type RNacosConsoleSessionHandle = Arc<Mutex<RNacosConsoleSession>>;
+
+pub(crate) fn new_rnacos_console_session() -> RNacosConsoleSessionHandle {
+    Arc::new(Mutex::new(RNacosConsoleSession::default()))
+}
+
 #[derive(Debug)]
 struct NacosServerStateProbe {
     raw: Value,
@@ -49,24 +65,24 @@ pub struct NacosOpenApiAdmin {
     cfg: NacosAdminConfig,
     http: reqwest::Client,
     token: Mutex<Option<AccessToken>>,
-    rnacos_console_token: Mutex<Option<RNacosConsoleToken>>,
-    rnacos_console_captcha: Mutex<Option<RNacosConsoleCaptchaToken>>,
+    rnacos_console_session: RNacosConsoleSessionHandle,
 }
 
 impl NacosOpenApiAdmin {
     pub fn new(cfg: NacosAdminConfig) -> Result<Self, String> {
+        Self::new_with_rnacos_console_session(cfg, new_rnacos_console_session())
+    }
+
+    pub(crate) fn new_with_rnacos_console_session(
+        cfg: NacosAdminConfig,
+        rnacos_console_session: RNacosConsoleSessionHandle,
+    ) -> Result<Self, String> {
         let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS));
         if cfg.tls_skip_verify {
             builder = builder.danger_accept_invalid_certs(true);
         }
         let http = builder.build().map_err(|e| format!("Failed to build Nacos HTTP client: {e}"))?;
-        Ok(Self {
-            cfg,
-            http,
-            token: Mutex::new(None),
-            rnacos_console_token: Mutex::new(None),
-            rnacos_console_captcha: Mutex::new(None),
-        })
+        Ok(Self { cfg, http, token: Mutex::new(None), rnacos_console_session })
     }
 
     fn endpoint_with_context(&self, path: &str, context_path: &str) -> Result<String, String> {
@@ -76,6 +92,12 @@ impl NacosOpenApiAdmin {
         let base = base.trim_end_matches('/');
         let full = if path.starts_with("/nacos/") && context_path == "/nacos" {
             format!("{}{}", self.cfg.server_addr, path)
+        } else if path.starts_with("/rnacos/") && context_path.ends_with("/nacos") {
+            // r-nacos documents this auth endpoint outside the Nacos-compatible
+            // `/nacos` context. Preserve an optional proxy prefix such as
+            // `/gateway/nacos` while replacing that final segment.
+            let proxy_prefix = context_path.strip_suffix("/nacos").unwrap_or(&context_path);
+            format!("{}{}{}", self.cfg.server_addr, proxy_prefix, path)
         } else {
             format!("{base}{path}")
         };
@@ -146,7 +168,7 @@ impl NacosOpenApiAdmin {
         let form = vec![("username".to_string(), username.to_string()), ("password".to_string(), password.to_string())];
         let mut last_err = None;
         let mut resp = None;
-        for path in ["/v1/auth/login", "/v3/auth/user/login"] {
+        for path in ["/v1/auth/login", "/v3/auth/user/login", "/rnacos/v1/auth/user/login"] {
             match self.send_with_context_fallback(reqwest::Method::POST, path, &[], Some(&form), None).await {
                 Ok(value) if value.status().is_success() => {
                     resp = Some(value);
@@ -236,8 +258,8 @@ impl NacosOpenApiAdmin {
     async fn rnacos_console_token(&self) -> Result<String, String> {
         self.cfg.effective_rnacos_console_credentials()?;
         {
-            let guard = self.rnacos_console_token.lock().await;
-            if let Some(token) = guard.as_ref() {
+            let guard = self.rnacos_console_session.lock().await;
+            if let Some(token) = guard.token.as_ref() {
                 if token.expires_at > Instant::now() + Duration::from_secs(30) {
                     return Ok(token.token.clone());
                 }
@@ -276,12 +298,12 @@ impl NacosOpenApiAdmin {
                 .and_then(|value| value.to_str().ok())
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| "r-nacos console CAPTCHA response did not include a captcha token".to_string())?;
-            *self.rnacos_console_captcha.lock().await = Some(RNacosConsoleCaptchaToken {
+            self.rnacos_console_session.lock().await.captcha = Some(RNacosConsoleCaptchaToken {
                 token: token.to_string(),
                 expires_at: Instant::now() + Duration::from_secs(300),
             });
         } else {
-            *self.rnacos_console_captcha.lock().await = None;
+            self.rnacos_console_session.lock().await.captcha = None;
         }
         Ok(NacosRNacosConsoleCaptcha { required: image.is_some(), image })
     }
@@ -290,8 +312,8 @@ impl NacosOpenApiAdmin {
         let (username, password) = self.cfg.effective_rnacos_console_credentials()?;
         let captcha = captcha.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
         let captcha_token = {
-            let guard = self.rnacos_console_captcha.lock().await;
-            guard.as_ref().filter(|value| value.expires_at > Instant::now()).map(|value| value.token.clone())
+            let guard = self.rnacos_console_session.lock().await;
+            guard.captcha.as_ref().filter(|value| value.expires_at > Instant::now()).map(|value| value.token.clone())
         };
         if captcha.is_some() && captcha_token.is_none() {
             return Err(classified_error(
@@ -326,11 +348,12 @@ impl NacosOpenApiAdmin {
         // r-nacos does not return the session TTL. Keep the token for its
         // documented default lifetime; get_rnacos_console_json invalidates it
         // immediately when a deployment with a shorter timeout returns NO_LOGIN.
-        *self.rnacos_console_token.lock().await = Some(RNacosConsoleToken {
+        let mut session = self.rnacos_console_session.lock().await;
+        session.token = Some(RNacosConsoleToken {
             token: token.clone(),
             expires_at: Instant::now() + Duration::from_secs(RNACOS_CONSOLE_SESSION_CACHE_SECS),
         });
-        *self.rnacos_console_captcha.lock().await = None;
+        session.captcha = None;
         Ok(token)
     }
 
@@ -341,7 +364,7 @@ impl NacosOpenApiAdmin {
             let response = self
                 .http
                 .get(self.rnacos_console_endpoint(path)?)
-                .header("Token", token)
+                .header("Token", token.clone())
                 .query(&query)
                 .send()
                 .await
@@ -352,12 +375,56 @@ impl NacosOpenApiAdmin {
                 return Ok(value);
             }
             if !retried_after_expired_session && rnacos_console_session_expired(&value) {
-                *self.rnacos_console_token.lock().await = None;
+                self.clear_rnacos_console_token_if_matches(&token).await;
                 retried_after_expired_session = true;
                 continue;
             }
             return Err(format!("r-nacos console {path} failed: {}", rnacos_console_error_detail(&value)));
         }
+    }
+
+    /// Do not let an older in-flight request invalidate a newer session that
+    /// another configuration-history request has already refreshed.
+    async fn clear_rnacos_console_token_if_matches(&self, token: &str) {
+        let mut session = self.rnacos_console_session.lock().await;
+        if session.token.as_ref().is_some_and(|current| current.token == token) {
+            session.token = None;
+        }
+    }
+
+    /// r-nacos exposes its build version through a console endpoint. Do not
+    /// initiate console login here: CAPTCHA is an explicit user interaction
+    /// for configuration history, not a prerequisite for opening a connection.
+    async fn rnacos_console_version_if_authenticated(&self) -> Option<String> {
+        let token = {
+            let session = self.rnacos_console_session.lock().await;
+            session
+                .token
+                .as_ref()
+                .filter(|token| token.expires_at > Instant::now() + Duration::from_secs(30))
+                .map(|token| token.token.clone())
+        }?;
+        let response = self
+            .http
+            .get(self.rnacos_console_endpoint("/rnacos/api/console/v2/user/web_resources").ok()?)
+            .header("Token", token.clone())
+            .send()
+            .await
+            .ok()?;
+        let response = error_for_status(response, "r-nacos console version").await.ok()?;
+        let value = response_json_or_text(response).await.ok()?;
+        if value.get("success").and_then(Value::as_bool) != Some(true) {
+            if rnacos_console_session_expired(&value) {
+                self.clear_rnacos_console_token_if_matches(&token).await;
+            }
+            return None;
+        }
+        value
+            .pointer("/data/version")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|version| !version.is_empty())
+            .map(|version| format!("r-nacos {version}"))
     }
 
     async fn list_rnacos_config_history(
@@ -386,7 +453,12 @@ impl NacosOpenApiAdmin {
         // r-nacos implements the Nacos client OpenAPI but not the console state endpoints.
         // Its documented health endpoint is mounted below the same `/nacos` context path,
         // so keep it last to preserve the richer official-Nacos state response when available.
-        for path in ["/v3/console/server/state", "/v1/ns/operator/servers", "/v1/console/server/state", "/health"] {
+        let paths = if matches!(self.cfg.implementation, Some(NacosImplementation::RNacos)) {
+            ["/health", "/v3/console/server/state", "/v1/ns/operator/servers", "/v1/console/server/state"]
+        } else {
+            ["/v3/console/server/state", "/v1/ns/operator/servers", "/v1/console/server/state", "/health"]
+        };
+        for path in paths {
             match self.get_json_without_auth(path, Vec::new()).await {
                 Ok(raw) => {
                     let is_rnacos_compatible = path == "/health"
@@ -637,11 +709,16 @@ impl NacosAdmin for NacosOpenApiAdmin {
                 capabilities.history_unavailable_reason = Some("consoleCredentialsMissing".to_string());
             }
         }
+        let server_version = if state.as_ref().is_some_and(|state| state.is_rnacos_compatible) {
+            self.rnacos_console_version_if_authenticated().await
+        } else {
+            state.as_ref().and_then(|state| extract_server_version(&state.raw))
+        };
         Ok(NacosConnectionInfo {
             server_addr: self.cfg.server_addr.clone(),
             display_server_addr: self.cfg.display_server_addr.clone(),
             namespace: self.cfg.namespace.clone(),
-            server_version: state.as_ref().and_then(|state| extract_server_version(&state.raw)),
+            server_version,
             auth: match self.cfg.auth {
                 NacosAuthConfig::None => "none".to_string(),
                 NacosAuthConfig::UsernamePassword { .. } => "usernamePassword".to_string(),
@@ -1947,6 +2024,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn routes_documented_rnacos_auth_outside_the_nacos_context() {
+        let mut config = test_admin_config("https://nacos.example".to_string());
+        config.context_path = "/gateway/nacos".to_string();
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+
+        assert_eq!(
+            admin.endpoint_with_context("/rnacos/v1/auth/user/login", "/gateway/nacos").unwrap(),
+            "https://nacos.example/gateway/rnacos/v1/auth/user/login"
+        );
+    }
+
     #[tokio::test]
     async fn uses_health_endpoint_when_console_state_apis_are_unavailable() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2204,6 +2293,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reuses_rnacos_console_session_when_the_client_is_rebuilt() {
+        let session = new_rnacos_console_session();
+        let mut config = test_admin_config("http://127.0.0.1:8848".to_string());
+        config.rnacos_console_addr = "http://127.0.0.1:10848".to_string();
+        config.auth =
+            NacosAuthConfig::UsernamePassword { username: "admin".to_string(), password: "admin".to_string() };
+        let first = NacosOpenApiAdmin::new_with_rnacos_console_session(config.clone(), session.clone()).unwrap();
+        first.rnacos_console_session.lock().await.token = Some(RNacosConsoleToken {
+            token: "console-token".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(300),
+        });
+
+        let rebuilt = NacosOpenApiAdmin::new_with_rnacos_console_session(config, session).unwrap();
+
+        assert_eq!(rebuilt.rnacos_console_token().await.unwrap(), "console-token");
+    }
+
+    #[tokio::test]
+    async fn does_not_clear_a_newer_rnacos_console_session_after_an_old_request_fails() {
+        let admin = NacosOpenApiAdmin::new(test_admin_config("http://127.0.0.1:8848".to_string())).unwrap();
+        admin.rnacos_console_session.lock().await.token = Some(RNacosConsoleToken {
+            token: "new-console-token".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(300),
+        });
+
+        admin.clear_rnacos_console_token_if_matches("old-console-token").await;
+
+        assert_eq!(
+            admin.rnacos_console_session.lock().await.token.as_ref().map(|token| token.token.as_str()),
+            Some("new-console-token")
+        );
+    }
+
+    #[tokio::test]
+    async fn exposes_rnacos_version_after_console_authentication() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/rnacos/api/console/v2/user/web_resources");
+            write_json_response(&mut socket, r#"{"success":true,"data":{"version":"0.8.5"}}"#).await;
+        });
+        let mut config = test_admin_config("http://127.0.0.1:8848".to_string());
+        config.rnacos_console_addr = format!("http://{address}");
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+        admin.rnacos_console_session.lock().await.token = Some(RNacosConsoleToken {
+            token: "console-token".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(300),
+        });
+
+        assert_eq!(admin.rnacos_console_version_if_authenticated().await.as_deref(), Some("r-nacos 0.8.5"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn invalidates_expired_rnacos_console_session_and_requests_a_new_captcha() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -2225,7 +2369,7 @@ mod tests {
         config.auth =
             NacosAuthConfig::UsernamePassword { username: "admin".to_string(), password: "admin".to_string() };
         let admin = NacosOpenApiAdmin::new(config).unwrap();
-        *admin.rnacos_console_token.lock().await = Some(RNacosConsoleToken {
+        admin.rnacos_console_session.lock().await.token = Some(RNacosConsoleToken {
             token: "expired-console-token".to_string(),
             expires_at: Instant::now() + Duration::from_secs(300),
         });
@@ -2239,8 +2383,9 @@ mod tests {
             .unwrap_err();
 
         assert!(error.contains("[rnacosConsoleCaptchaRequired]"));
-        assert!(admin.rnacos_console_token.lock().await.is_none());
-        assert!(admin.rnacos_console_captcha.lock().await.is_some());
+        let session = admin.rnacos_console_session.lock().await;
+        assert!(session.token.is_none());
+        assert!(session.captcha.is_some());
         server.await.unwrap();
     }
 

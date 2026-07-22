@@ -586,10 +586,10 @@ const nacosPassword = ref("");
 const nacosTlsSkipVerify = ref(false);
 const nacosPageSize = ref(20);
 const nacosPrimaryAddressLabel = computed(() => {
-  if (nacosImplementation.value === "rnacos") return "Nacos-compatible API address";
-  if (nacosVersionMode.value === "v2") return "Service address (API and console shared)";
-  if (nacosVersionMode.value === "v3") return "Admin API / console address";
-  return "Nacos management address";
+  if (nacosImplementation.value === "rnacos") return t("connection.nacosPrimaryAddressRNacos");
+  if (nacosVersionMode.value === "v2") return t("connection.nacosPrimaryAddressV2");
+  if (nacosVersionMode.value === "v3") return t("connection.nacosPrimaryAddressV3");
+  return t("connection.nacosPrimaryAddressAuto");
 });
 const nacosPrimaryAddressPlaceholder = computed(() => {
   if (nacosImplementation.value === "rnacos" || nacosVersionMode.value === "v2") return "http://127.0.0.1:8848/nacos";
@@ -622,6 +622,13 @@ const nacosEffectiveContextPath = computed(() => {
   } catch {
     return nacosContextPathCustomized.value ? nacosContextPath.value.trim() || "/" : "/";
   }
+});
+const nacosContextPathInput = computed({
+  get: () => (nacosContextPathCustomized.value ? nacosContextPath.value : nacosEffectiveContextPath.value),
+  set: (value: string) => {
+    nacosContextPathCustomized.value = true;
+    nacosContextPath.value = value;
+  },
 });
 
 function resetNacosContextPathCustomization() {
@@ -1214,18 +1221,18 @@ function buildNacosAdminConfig(): NacosAdminConfig {
     contextPath: nacosContextPathCustomized.value ? nacosContextPath.value : undefined,
   });
   if (nacosImplementation.value === "rnacos" && normalized.warnings.length) {
-    throw new Error("r-nacos primary address must use the compatible API, not the independent console URL");
+    throw new Error(t("connection.nacosRNacosOpenApiRequired"));
   }
   let rnacosConsoleAuth: NacosRNacosConsoleAuth | undefined;
   if (nacosImplementation.value === "rnacos" && nacosHistoryEnabled.value) {
-    if (!nacosRNacosConsoleAddr.value.trim()) throw new Error("r-nacos configuration history requires a console address");
+    if (!nacosRNacosConsoleAddr.value.trim()) throw new Error(t("connection.nacosRNacosConsoleUrlRequired"));
     if (nacosConsoleAuthKind.value === "inherit") {
-      if (nacosAuthKind.value !== "usernamePassword") throw new Error("r-nacos console needs separate credentials when primary authentication is None");
+      if (nacosAuthKind.value !== "usernamePassword") throw new Error(t("connection.nacosConsoleAuthSeparateRequired"));
       rnacosConsoleAuth = { kind: "inherit" };
     } else {
       rnacosConsoleAuth = {
         kind: "usernamePassword",
-        username: requireMqField(nacosConsoleUsername.value, "r-nacos console username is required"),
+        username: requireMqField(nacosConsoleUsername.value, t("connection.nacosConsoleUsernameRequired")),
         password: nacosConsolePassword.value,
       };
     }
@@ -4855,16 +4862,16 @@ function openExternalUrl(url: string) {
                 <!-- Nacos: profile-aware endpoint, namespace and auth -->
                 <template v-else-if="form.db_type === 'nacos'">
                   <div class="grid grid-cols-4 items-center gap-4">
-                    <Label :class="connectionLabelClass">Service implementation</Label>
+                    <Label :class="connectionLabelClass">{{ t("connection.nacosImplementation") }}</Label>
                     <div class="col-span-3 flex gap-2">
                       <Button size="sm" :variant="nacosImplementation === 'nacos' ? 'default' : 'outline'" @click="nacosImplementation = 'nacos'">Nacos</Button>
                       <Button size="sm" :variant="nacosImplementation === 'rnacos' ? 'default' : 'outline'" @click="nacosImplementation = 'rnacos'">r-nacos</Button>
                     </div>
                   </div>
                   <div v-if="nacosImplementation === 'nacos'" class="grid grid-cols-4 items-center gap-4">
-                    <Label :class="connectionLabelClass">Nacos version</Label>
+                    <Label :class="connectionLabelClass">{{ t("connection.nacosVersion") }}</Label>
                     <div class="col-span-3 flex flex-wrap gap-2">
-                      <Button size="sm" :variant="nacosVersionMode === 'auto' ? 'default' : 'outline'" @click="nacosVersionMode = 'auto'">Auto detect</Button>
+                      <Button size="sm" :variant="nacosVersionMode === 'auto' ? 'default' : 'outline'" @click="nacosVersionMode = 'auto'">{{ t("connection.nacosVersionAuto") }}</Button>
                       <Button size="sm" :variant="nacosVersionMode === 'v2' ? 'default' : 'outline'" @click="nacosVersionMode = 'v2'">2.x</Button>
                       <Button size="sm" :variant="nacosVersionMode === 'v3' ? 'default' : 'outline'" @click="nacosVersionMode = 'v3'">3.x</Button>
                     </div>
@@ -4875,23 +4882,18 @@ function openExternalUrl(url: string) {
                   </div>
                   <div class="grid grid-cols-4 items-start gap-4">
                     <span />
-                    <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">Paste a full browser or API URL. Known Nacos 3 console routes are normalized; custom proxy prefixes are preserved.</p>
+                    <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">{{ t("connection.nacosPrimaryAddressHint") }}</p>
                   </div>
                   <div v-if="nacosNormalizedPreview" class="grid grid-cols-4 items-start gap-4">
                     <span />
-                    <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">Requests will use {{ nacosNormalizedPreview }}/…</p>
+                    <p class="col-span-3 m-0 text-xs leading-5 text-muted-foreground">{{ t("connection.nacosRequestsUse", { address: nacosNormalizedPreview }) }}</p>
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.nacosContextPath") }}</Label>
                     <div class="col-span-3 flex min-w-0 items-center gap-2">
-                      <code class="min-w-0 flex-1 truncate rounded-md border bg-muted/30 px-3 py-2 text-sm">{{ nacosEffectiveContextPath }}</code>
-                      <Button v-if="!nacosContextPathCustomized" type="button" size="sm" variant="outline" @click="nacosContextPathCustomized = true">自定义</Button>
-                      <Button v-else type="button" size="sm" variant="ghost" @click="resetNacosContextPathCustomization">恢复自动</Button>
+                      <Input v-model="nacosContextPathInput" class="min-w-0 flex-1" :placeholder="t('connection.nacosContextPathPlaceholder')" />
+                      <Button v-if="nacosContextPathCustomized" type="button" size="sm" variant="ghost" @click="resetNacosContextPathCustomization">{{ t("connection.nacosContextPathRestoreAuto") }}</Button>
                     </div>
-                  </div>
-                  <div v-if="nacosContextPathCustomized" class="grid grid-cols-4 items-center gap-4">
-                    <span />
-                    <Input v-model="nacosContextPath" class="col-span-3" :placeholder="t('connection.nacosContextPathPlaceholder')" />
                   </div>
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ t("connection.nacosNamespace") }}</Label>
@@ -4899,8 +4901,21 @@ function openExternalUrl(url: string) {
                   </div>
                   <template v-if="nacosImplementation === 'rnacos'">
                     <div class="grid grid-cols-4 items-center gap-4">
-                      <Label :class="connectionLabelClass">Configuration history</Label>
-                      <label class="col-span-3 inline-flex items-center gap-2"><Switch v-model="nacosHistoryEnabled" /><span class="text-xs text-muted-foreground">Enable configuration history</span></label>
+                      <Label :class="connectionLabelClass">{{ t("connection.nacosConfigurationHistory") }}</Label>
+                      <div class="col-span-3 flex items-center gap-2">
+                        <label class="inline-flex items-center gap-2">
+                          <Switch v-model="nacosHistoryEnabled" />
+                          <span class="text-xs text-muted-foreground">{{ t("connection.nacosConfigurationHistoryEnable") }}</span>
+                        </label>
+                        <Tooltip>
+                          <TooltipTrigger as-child>
+                            <CircleHelp class="h-3.5 w-3.5 cursor-help text-muted-foreground hover:text-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" align="start" class="max-w-[360px] text-xs leading-relaxed">
+                            {{ t("connection.nacosConfigurationHistoryHint") }}
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
                     </div>
                     <template v-if="nacosHistoryEnabled">
                       <div class="grid grid-cols-4 items-center gap-4">
@@ -4908,16 +4923,25 @@ function openExternalUrl(url: string) {
                         <Input v-model="nacosRNacosConsoleAddr" class="col-span-3" :placeholder="t('connection.nacosRNacosConsoleUrlPlaceholder')" />
                       </div>
                       <div class="grid grid-cols-4 items-center gap-4">
-                        <Label :class="connectionLabelClass">Console authentication</Label>
+                        <Label :class="connectionLabelClass">{{ t("connection.nacosConsoleAuthentication") }}</Label>
                         <div class="col-span-3 flex gap-2">
-                          <Button size="sm" :variant="nacosConsoleAuthKind === 'inherit' ? 'default' : 'outline'" :disabled="nacosAuthKind === 'none'" @click="nacosConsoleAuthKind = 'inherit'">Use primary credentials</Button>
-                          <Button size="sm" :variant="nacosConsoleAuthKind === 'usernamePassword' ? 'default' : 'outline'" @click="nacosConsoleAuthKind = 'usernamePassword'">Separate credentials</Button>
+                          <Button size="sm" :variant="nacosConsoleAuthKind === 'inherit' ? 'default' : 'outline'" :disabled="nacosAuthKind === 'none'" @click="nacosConsoleAuthKind = 'inherit'">{{ t("connection.nacosConsoleAuthInherit") }}</Button>
+                          <Button size="sm" :variant="nacosConsoleAuthKind === 'usernamePassword' ? 'default' : 'outline'" @click="nacosConsoleAuthKind = 'usernamePassword'">{{ t("connection.nacosConsoleAuthSeparate") }}</Button>
                         </div>
                       </div>
-                      <p v-if="nacosConsoleAuthKind === 'inherit' && nacosAuthKind === 'none'" class="col-span-3 col-start-2 m-0 text-xs text-destructive">Primary authentication is None; use separate console credentials.</p>
+                      <div v-if="nacosConsoleAuthKind === 'inherit' && nacosAuthKind === 'none'" class="grid grid-cols-4 items-start gap-4">
+                        <span />
+                        <p class="col-span-3 m-0 text-xs text-destructive">{{ t("connection.nacosConsoleAuthPrimaryNone") }}</p>
+                      </div>
                       <template v-if="nacosConsoleAuthKind === 'usernamePassword'">
-                        <div class="grid grid-cols-4 items-center gap-4"><Label :class="connectionLabelClass">Console user</Label><Input v-model="nacosConsoleUsername" class="col-span-3" /></div>
-                        <div class="grid grid-cols-4 items-center gap-4"><Label :class="connectionLabelClass">Console password</Label><PasswordInput v-model="nacosConsolePassword" class="col-span-3" /></div>
+                        <div class="grid grid-cols-4 items-center gap-4">
+                          <Label :class="connectionLabelClass">{{ t("connection.nacosConsoleUser") }}</Label
+                          ><Input v-model="nacosConsoleUsername" class="col-span-3" />
+                        </div>
+                        <div class="grid grid-cols-4 items-center gap-4">
+                          <Label :class="connectionLabelClass">{{ t("connection.nacosConsolePassword") }}</Label
+                          ><PasswordInput v-model="nacosConsolePassword" class="col-span-3" />
+                        </div>
                       </template>
                     </template>
                   </template>
