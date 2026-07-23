@@ -138,6 +138,7 @@ type LegacyTransportFields = {
 type LegacyConnectionConfig = ConnectionConfig & LegacyTransportFields;
 type ConnectionForm = Omit<ConnectionConfig, "id">;
 type ConnectionTestState = ConnectionTestResult & { ok: boolean };
+type SuccessfulConnectionTest = { result: ConnectionTestResult; config: ConnectionConfig };
 
 const { t } = useI18n();
 const { toast } = useToast();
@@ -1307,6 +1308,49 @@ function buildNacosAdminConfig(): NacosAdminConfig {
   };
 }
 
+function dockerNacosConsoleFallbackUrl(serverAddr: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(serverAddr);
+  } catch {
+    return null;
+  }
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  const host = parsed.hostname.toLowerCase();
+  if (port !== "8848" || !["127.0.0.1", "localhost", "::1"].includes(host)) return null;
+
+  parsed.port = "8085";
+  return parsed.toString().replace(/\/$/, "");
+}
+
+function isNacosAdminEndpointNotFound(message: string): boolean {
+  return /Nacos admin endpoint was not found/i.test(message);
+}
+
+async function tryNacosDockerConsoleFallback(config: ConnectionConfig, originalError: string, runId: number): Promise<SuccessfulConnectionTest | null> {
+  if (config.db_type !== "nacos" || !isNacosAdminEndpointNotFound(originalError)) return null;
+
+  const fallbackUrl = dockerNacosConsoleFallbackUrl(nacosServerAddr.value);
+  if (!fallbackUrl || fallbackUrl === nacosServerAddr.value.trim()) return null;
+
+  const previousUrl = nacosServerAddr.value;
+  nacosServerAddr.value = fallbackUrl;
+  try {
+    const fallbackConfig = connectionConfigForSubmit(config.id, config.name);
+    const result = await testConnectionWithTimeout(fallbackConfig, runId);
+    return {
+      config: fallbackConfig,
+      result: {
+        ...result,
+        message: `${result.message} ${t("connection.nacosConsoleUrlAutoAdjusted", { from: previousUrl.trim(), to: fallbackUrl })}`,
+      },
+    };
+  } catch {
+    nacosServerAddr.value = previousUrl;
+    return null;
+  }
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
@@ -1455,6 +1499,11 @@ async function setSqlServerDriverMode(mode: "auto" | "legacy") {
   } catch {
     setSqlServerLegacyCompatibilityConfig(form.value, false);
   }
+}
+
+function isSqlServerTlsHandshakeFailure(message: string): boolean {
+  const text = message.toLowerCase();
+  return text.includes("sql server") && text.includes("tls") && (text.includes("handshake") || text.includes("eof") || text.includes("performing i/o"));
 }
 
 function clearTestedConnectionInfo() {

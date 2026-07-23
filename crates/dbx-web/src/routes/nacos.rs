@@ -220,7 +220,7 @@ pub async fn get_rnacos_console_captcha(
 ) -> Result<Json<dbx_core::nacos::NacosRNacosConsoleCaptcha>, AppError> {
     let result = dbx_core::nacos::service::nacos_get_rnacos_console_captcha_core(&state.app, &req.connection_id)
         .await
-        .map_err(AppError)?;
+        .map_err(AppError::from)?;
     Ok(Json(result))
 }
 
@@ -230,7 +230,7 @@ pub async fn login_rnacos_console(
 ) -> Result<Json<()>, AppError> {
     dbx_core::nacos::service::nacos_login_rnacos_console_core(&state.app, &req.connection_id, req.captcha)
         .await
-        .map_err(AppError)?;
+        .map_err(AppError::from)?;
     Ok(Json(()))
 }
 
