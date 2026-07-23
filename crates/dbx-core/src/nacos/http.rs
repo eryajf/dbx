@@ -722,17 +722,7 @@ impl NacosAdmin for NacosOpenApiAdmin {
         // connection can perform the DBX operations it exposes.
         let state = self.get_server_state().await.ok();
         let _ = self.access_token().await?;
-        if self.is_explicit_rnacos() {
-            // r-nacos keeps namespace administration on its independent,
-            // authenticated console. A console address is optional unless the
-            // user needs console-only features, so do not make a successful
-            // OpenAPI connection depend on namespace discovery when absent.
-            if !self.cfg.rnacos_console_addr.is_empty() {
-                let _ = self.list_rnacos_console_namespaces().await?;
-            }
-        } else {
-            let _ = self.list_namespaces().await?;
-        }
+        let _ = self.list_namespaces().await?;
         let mut capabilities = NacosCapabilities::default();
         let is_rnacos = self.is_explicit_rnacos() || state.as_ref().is_some_and(|state| state.is_rnacos_compatible);
         if is_rnacos {
@@ -776,13 +766,21 @@ impl NacosAdmin for NacosOpenApiAdmin {
 
     async fn list_namespaces(&self) -> Result<Vec<NacosNamespaceInfo>, String> {
         if self.is_explicit_rnacos() {
-            if self.cfg.rnacos_console_addr.is_empty() {
-                return Err(classified_error(
-                    "rnacosConsoleUrlRequired",
-                    "r-nacos namespace management requires an r-nacos console URL",
-                ));
+            // r-nacos v0.6.12 exposes the Nacos-compatible namespace API on
+            // the main OpenAPI service. This keeps the connection tree usable
+            // without a separately configured console, including consoles
+            // that require an interactive CAPTCHA.
+            match self.get_json("/v1/console/namespaces", Vec::new()).await {
+                Ok(value) => return Ok(parse_namespaces(value)),
+                Err(openapi_error) if self.cfg.rnacos_console_addr.is_empty() => return Err(openapi_error),
+                Err(openapi_error) => {
+                    return self.list_rnacos_console_namespaces().await.map_err(|console_error| {
+                        format!(
+                            "Failed to list r-nacos namespaces through the OpenAPI endpoint ({openapi_error}) or console fallback ({console_error})"
+                        )
+                    });
+                }
             }
-            return self.list_rnacos_console_namespaces().await;
         }
         let value = self
             .get_json_from_candidates(
@@ -2137,10 +2135,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_rnacos_uses_console_namespace_api() {
+    async fn explicit_rnacos_falls_back_to_console_namespace_api() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/v1/console/namespaces");
+            write_not_found_response(&mut socket).await;
+
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_http_request(&mut socket).await;
             assert_eq!(request.split_whitespace().nth(1), Some("/rnacos/api/console/v2/namespaces/list"));
@@ -2154,8 +2156,10 @@ mod tests {
         let mut config = test_admin_config(format!("http://{address}"));
         config.implementation = Some(NacosImplementation::RNacos);
         config.rnacos_console_addr = format!("http://{address}");
-        config.auth =
-            NacosAuthConfig::UsernamePassword { username: "admin".to_string(), password: "admin".to_string() };
+        config.rnacos_console_auth = crate::nacos::config::NacosRNacosConsoleAuth::UsernamePassword {
+            username: "admin".to_string(),
+            password: "admin".to_string(),
+        };
         let admin = NacosOpenApiAdmin::new(config).unwrap();
         admin.rnacos_console_session.lock().await.token = Some(RNacosConsoleToken {
             token: "console-token".to_string(),
@@ -2168,7 +2172,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_rnacos_keeps_history_capability_disabled_when_health_is_unavailable() {
+    async fn explicit_rnacos_lists_openapi_namespaces_without_console_url_when_health_is_unavailable() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -2182,6 +2186,10 @@ mod tests {
                 assert_eq!(read_request_target(&mut socket).await, expected_path);
                 write_service_unavailable_response(&mut socket).await;
             }
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/nacos/v1/console/namespaces");
+            write_json_response(&mut socket, r#"{"data":[{"namespace":"public","namespaceShowName":"public"}]}"#).await;
         });
         let mut config = test_admin_config(format!("http://{address}"));
         config.context_path = "/nacos".to_string();
@@ -2193,6 +2201,38 @@ mod tests {
         assert!(!info.capabilities.supports_config_history);
         assert_eq!(info.capabilities.history_unavailable_reason.as_deref(), Some("historyDisabled"));
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_rnacos_uses_openapi_namespaces_before_captcha_protected_console() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let console_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let console_address = console_listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/nacos/health");
+            write_json_response(&mut socket, r#""success""#).await;
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            assert_eq!(read_request_target(&mut socket).await, "/nacos/v1/console/namespaces");
+            write_json_response(&mut socket, r#"{"data":[]}"#).await;
+        });
+        let console_server = tokio::spawn(async move {
+            assert!(tokio::time::timeout(Duration::from_millis(100), console_listener.accept()).await.is_err());
+        });
+        let mut config = test_admin_config(format!("http://{address}"));
+        config.context_path = "/nacos".to_string();
+        config.implementation = Some(NacosImplementation::RNacos);
+        config.rnacos_console_addr = format!("http://{console_address}");
+        config.rnacos_history_enabled = Some(true);
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+
+        let info = admin.test_connection().await.unwrap();
+        assert!(!info.capabilities.supports_config_history);
+        assert_eq!(info.capabilities.history_unavailable_reason.as_deref(), Some("consoleCredentialsMissing"));
+        server.await.unwrap();
+        console_server.await.unwrap();
     }
 
     #[test]
@@ -2780,12 +2820,11 @@ mod tests {
         assert_ne!(encoded, BASE64.encode("admin"));
         let ciphertext = BASE64.decode(encoded).unwrap();
         let mut buffer = vec![0u8; ciphertext.len()];
-        let plaintext = Aes128CbcDecryptor::<aes::Aes128>::new(
-            captcha_token[..16].as_bytes().into(),
-            captcha_token[16..32].as_bytes().into(),
-        )
-        .decrypt_padded_b2b_mut::<Pkcs7>(&ciphertext, &mut buffer)
-        .unwrap();
+        let captcha_bytes = captcha_token.as_bytes();
+        let plaintext =
+            Aes128CbcDecryptor::<aes::Aes128>::new(captcha_bytes[..16].into(), captcha_bytes[16..32].into())
+                .decrypt_padded_b2b_mut::<Pkcs7>(&ciphertext, &mut buffer)
+                .unwrap();
         assert_eq!(plaintext, b"admin");
     }
 
