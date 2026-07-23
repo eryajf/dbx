@@ -88,6 +88,7 @@ fn should_enable_single_instance(debug_build: bool) -> bool {
     !debug_build
 }
 
+#[cfg(target_os = "macos")]
 fn development_dock_badge_label(debug_build: bool) -> Option<&'static str> {
     debug_build.then_some("DEV")
 }
@@ -634,12 +635,11 @@ pub(crate) fn apply_desktop_settings(app: &tauri::AppHandle, desktop_settings: &
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        development_dock_badge_label, linux_appimage_system_gtk_immodules_cache,
-        linux_appimage_wayland_backend_override, linux_nvidia_driver_from_state, linux_selected_drm_render_device,
-        linux_webkit_rendering_workarounds, native_window_decorations_override, should_confirm_app_exit_request,
-        should_enable_single_instance, should_fallback_to_native_quit, should_hide_window_on_close,
-        should_setup_desktop_tray, should_show_main_window_after_setup, uses_application_level_icon,
-        LinuxDrmRenderDevice, LinuxNvidiaDriver,
+        linux_appimage_system_gtk_immodules_cache, linux_appimage_wayland_backend_override,
+        linux_nvidia_driver_from_state, linux_selected_drm_render_device, linux_webkit_rendering_workarounds,
+        native_window_decorations_override, should_confirm_app_exit_request, should_enable_single_instance,
+        should_fallback_to_native_quit, should_hide_window_on_close, should_setup_desktop_tray,
+        should_show_main_window_after_setup, uses_application_level_icon, LinuxDrmRenderDevice, LinuxNvidiaDriver,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -674,10 +674,11 @@ mod tests {
         assert!(should_enable_single_instance(false));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn labels_debug_builds_in_the_macos_dock() {
-        assert_eq!(development_dock_badge_label(true), Some("DEV"));
-        assert_eq!(development_dock_badge_label(false), None);
+        assert_eq!(super::development_dock_badge_label(true), Some("DEV"));
+        assert_eq!(super::development_dock_badge_label(false), None);
     }
 
     #[cfg(target_os = "macos")]
@@ -1045,7 +1046,7 @@ pub fn run() {
             state.set_duckdb_worker_max_processes(desktop_settings.duckdb_worker_max_processes);
             let state = Arc::new(state);
             app.manage(state.clone());
-            commands::redis_pubsub_server::start_pubsub_server(state.clone());
+            app.manage(commands::redis_pubsub_server::start_pubsub_server(state.clone()));
             app.manage(commands::saved_sql::SavedSqlStorageState { data_dir: data_dir.clone() });
             app.manage(commands::external_sql::ExternalSqlOpenState::default());
             app.manage(commands::external_db::ExternalDbOpenState::default());
