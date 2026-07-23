@@ -581,7 +581,11 @@ async fn main() {
         )
         .route("/export/query-result/cancel", post(routes::query_result_export::cancel_query_result_export))
         // SQL file
-        .route("/sql-file/preview", post(routes::sql_file::preview_sql_file))
+        .route(
+            "/sql-file/preview",
+            post(routes::sql_file::preview_sql_file)
+                .layer(DefaultBodyLimit::max(routes::sql_file::SQL_FILE_UPLOAD_MAX_BYTES.saturating_add(1024 * 1024))),
+        )
         .route("/sql-file/execute", post(routes::sql_file::execute_sql_file))
         .route("/sql-file/progress/{executionId}", get(routes::sql_file::sql_file_progress))
         .route("/sql-file/cancel", post(routes::sql_file::cancel_sql_file))

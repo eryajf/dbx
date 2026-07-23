@@ -1478,6 +1478,10 @@ export async function executeSqlFile(request: SqlFileRequest): Promise<void> {
   return post("/api/sql-file/execute", { request });
 }
 
+export async function executeSqlFiles(request: SqlFileRequest, filePaths: string[]): Promise<void> {
+  return post("/api/sql-file/execute", { request, filePaths });
+}
+
 export async function cancelSqlFileExecution(executionId: string): Promise<boolean> {
   return post("/api/sql-file/cancel", { executionId });
 }
