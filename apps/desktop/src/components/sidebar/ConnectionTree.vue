@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref, shallowRef, computed, nextTick, watch, provide, onMounted, onUnmounted, type Component, type ComponentPublicInstance, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
-import { Search, X, ListFilter, ListOrdered, ArrowDownAZ, ArrowUpZA, Crosshair, Server, Database, FolderTree, Table2, Eye, RotateCcw } from "@lucide/vue";
+import { Search, X, ListFilter, ListOrdered, ArrowDownAZ, ArrowUpZA, CircleDot, Crosshair, Server, Database, FolderTree, Table2, Eye, RotateCcw } from "@lucide/vue";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useToast } from "@/composables/useToast";
 import type { ObjectSourceKind, TreeNode, TreeNodeType } from "@/types/database";
-import { filterSidebarSearchRootsByConnectionState, filterSidebarTree } from "@/lib/sidebar/sidebarSearchTree";
+import { filterSidebarSearchRootsByConnectionState, filterSidebarTree, filterSidebarTreeToConnectedConnections } from "@/lib/sidebar/sidebarSearchTree";
 import { isCancelSearchShortcut, isCopySidebarSelectionShortcut, isEditSidebarConnectionShortcut, isPasteSidebarSelectionShortcut } from "@/lib/editor/keyboardShortcuts";
 import { copyNameForTreeNode, objectSourceKindForTreeNode } from "@/lib/sidebar/treeNodeClick";
 import { copyToClipboard } from "@/lib/common/clipboard";
@@ -49,6 +49,7 @@ const settingsStore = useSettingsStore();
 const { toast } = useToast();
 const searchQuery = ref("");
 const deferredSearchQuery = ref("");
+const showConnectedConnectionsOnly = ref(false);
 const searchInputRef = ref<HTMLInputElement>();
 const rootRef = ref<HTMLElement>();
 const pointerInsideTree = ref(false);
@@ -200,7 +201,7 @@ function collectExpandedObjectSearchTargets(node: TreeNode, tasks: Promise<void>
 }
 
 const isSearching = computed(() => !!deferredSearchQuery.value);
-const isFiltering = computed(() => !!searchQuery.value.trim() || hasSearchScopeFilter.value);
+const isFiltering = computed(() => showConnectedConnectionsOnly.value || !!searchQuery.value.trim() || hasSearchScopeFilter.value);
 
 const SEARCH_SCOPE_TO_NODE_TYPES: Record<SearchScope, TreeNodeType[]> = {
   connection: ["connection"],
@@ -343,6 +344,9 @@ const displayedTreeNodes = computed(() => sortConnectionListForDisplay(store.tre
 
 const filteredNodes = computed(() => {
   let nodes = displayedTreeNodes.value;
+  if (showConnectedConnectionsOnly.value) {
+    nodes = filterSidebarTreeToConnectedConnections(nodes, store.connectedIds);
+  }
 
   const q = deferredSearchQuery.value;
   nodes = filterSidebarTree(nodes, q, searchCollapsedIds.value, searchableNodeTypes.value);
@@ -720,6 +724,7 @@ async function startRenamingCreatedGroup(groupId: string) {
   if (isFiltering.value) {
     searchQuery.value = "";
     deferredSearchQuery.value = "";
+    showConnectedConnectionsOnly.value = false;
     clearSearchScopeFilter();
   }
 
@@ -757,6 +762,7 @@ async function locateActiveTabInSidebar() {
   if (isFiltering.value) {
     searchQuery.value = "";
     deferredSearchQuery.value = "";
+    showConnectedConnectionsOnly.value = false;
     clearSearchScopeFilter();
   }
 
@@ -1450,6 +1456,17 @@ defineExpose({ focusSearch, createNewGroup, collapseAllTreeNodes });
           align="end"
           @update:model-value="selectSearchScopeMenuItem"
         />
+        <button
+          type="button"
+          class="shrink-0 h-6 w-6 flex items-center justify-center rounded border hover:bg-accent"
+          :class="showConnectedConnectionsOnly ? 'text-primary bg-primary/10 border-primary/30' : 'border-border text-muted-foreground hover:text-foreground'"
+          :aria-label="t('sidebar.showActiveConnectionsOnly')"
+          :aria-pressed="showConnectedConnectionsOnly"
+          :title="t('sidebar.showActiveConnectionsOnly')"
+          @click="showConnectedConnectionsOnly = !showConnectedConnectionsOnly"
+        >
+          <CircleDot class="h-3.5 w-3.5" />
+        </button>
       </div>
     </div>
     <CustomContextMenu ref="sidebarContextMenuRef" :items="sidebarContextMenuItems" v-slot="contextMenuSlot">
