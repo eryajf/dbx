@@ -80,6 +80,14 @@ export function filterSidebarSearchRootsByConnectionState(nodes: TreeNode[], con
   });
 }
 
+export function resolveSidebarFilterGuards(showConnectedConnectionsOnly: boolean, searchQuery: string, hasSearchScopeFilter: boolean) {
+  const isTreeSearchFiltering = !!searchQuery.trim() || hasSearchScopeFilter;
+  return {
+    isTreeSearchFiltering,
+    isRootListPartial: showConnectedConnectionsOnly || isTreeSearchFiltering,
+  };
+}
+
 /**
  * Produces a display-only connection tree containing connected connections and
  * the groups that contain them. Connection descendants stay intact because

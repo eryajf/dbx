@@ -7,7 +7,7 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useToast } from "@/composables/useToast";
 import type { ObjectSourceKind, TreeNode, TreeNodeType } from "@/types/database";
-import { filterSidebarSearchRootsByConnectionState, filterSidebarTree, filterSidebarTreeToConnectedConnections } from "@/lib/sidebar/sidebarSearchTree";
+import { filterSidebarSearchRootsByConnectionState, filterSidebarTree, filterSidebarTreeToConnectedConnections, resolveSidebarFilterGuards } from "@/lib/sidebar/sidebarSearchTree";
 import { isCancelSearchShortcut, isCopySidebarSelectionShortcut, isEditSidebarConnectionShortcut, isPasteSidebarSelectionShortcut } from "@/lib/editor/keyboardShortcuts";
 import { copyNameForTreeNode, objectSourceKindForTreeNode } from "@/lib/sidebar/treeNodeClick";
 import { copyToClipboard } from "@/lib/common/clipboard";
@@ -119,7 +119,7 @@ watch(
 );
 
 function refreshActiveSidebarTableSearches() {
-  if (isFiltering.value) return;
+  if (isTreeSearchFiltering.value) return;
   for (const parentNodeId of Object.keys(store.sidebarTableSearchQueries)) {
     scheduleSidebarTableSearchRefresh(parentNodeId);
   }
@@ -201,7 +201,11 @@ function collectExpandedObjectSearchTargets(node: TreeNode, tasks: Promise<void>
 }
 
 const isSearching = computed(() => !!deferredSearchQuery.value);
-const isFiltering = computed(() => showConnectedConnectionsOnly.value || !!searchQuery.value.trim() || hasSearchScopeFilter.value);
+const sidebarFilterGuards = computed(() => resolveSidebarFilterGuards(showConnectedConnectionsOnly.value, searchQuery.value, hasSearchScopeFilter.value));
+// Connected-only filtering changes only root visibility, so descendant-local
+// features stay available while operations requiring the full root list pause.
+const isTreeSearchFiltering = computed(() => sidebarFilterGuards.value.isTreeSearchFiltering);
+const isRootListPartial = computed(() => sidebarFilterGuards.value.isRootListPartial);
 
 const SEARCH_SCOPE_TO_NODE_TYPES: Record<SearchScope, TreeNodeType[]> = {
   connection: ["connection"],
@@ -301,7 +305,7 @@ function clearSearchScopeFilter() {
 
 function scheduleSidebarTableSearchRefresh(parentNodeId: string, options?: { restoreFocus?: boolean }) {
   window.clearTimeout(tableSearchTimers.get(parentNodeId));
-  if (isFiltering.value) return;
+  if (isTreeSearchFiltering.value) return;
   const restoreToken = options?.restoreFocus ? ++tableSearchFocusRestoreTokenSeq : 0;
   if (restoreToken) {
     tableSearchFocusRestoreTokens.clear();
@@ -359,7 +363,7 @@ const filteredNodes = computed(() => {
 
 const flatNodes = computed<FlatTreeNode[]>(() =>
   insertSidebarTableSearchControls(flattenTree(filteredNodes.value), {
-    enabled: settingsStore.editorSettings.sidebarTableSearchEnabled && !isFiltering.value,
+    enabled: settingsStore.editorSettings.sidebarTableSearchEnabled && !isTreeSearchFiltering.value,
     sidebarObjectDisplay: settingsStore.editorSettings.sidebarObjectDisplay,
     activeQueries: store.sidebarTableSearchQueries,
   }),
@@ -516,7 +520,7 @@ watch(
 );
 
 const stickyNode = computed<FlatTreeNode | null>(() => {
-  if (!useVirtualTree.value || isFiltering.value) return null;
+  if (!useVirtualTree.value || isTreeSearchFiltering.value) return null;
   const nodes = flatNodes.value;
   const len = nodes.length;
   if (len === 0) return null;
@@ -721,7 +725,7 @@ async function createNewGroup() {
 async function startRenamingCreatedGroup(groupId: string) {
   pendingRenameGroupId.value = groupId;
   store.selectedTreeNodeId = groupId;
-  if (isFiltering.value) {
+  if (isRootListPartial.value) {
     searchQuery.value = "";
     deferredSearchQuery.value = "";
     showConnectedConnectionsOnly.value = false;
@@ -759,7 +763,7 @@ async function locateActiveTabInSidebar() {
   await ensureTreeLoadedForTarget(initialTarget);
 
   // Clear any active search filter so the node is visible
-  if (isFiltering.value) {
+  if (isRootListPartial.value) {
     searchQuery.value = "";
     deferredSearchQuery.value = "";
     showConnectedConnectionsOnly.value = false;
@@ -1489,7 +1493,7 @@ defineExpose({ focusSearch, createNewGroup, collapseAllTreeNodes });
             <TreeItem
               :node="item.node"
               :depth="item.depth"
-              :drag-disabled="isFiltering || isConnectionListAlphabeticallySorted"
+              :drag-disabled="isRootListPartial || isConnectionListAlphabeticallySorted"
               :pending-rename="pendingRenameGroupId === item.node.id"
               :highlighted="highlightedNodeId === item.node.id"
               :comment-label-width="sidebarCommentLabelWidths.get(item.node.id)"
@@ -1513,7 +1517,7 @@ defineExpose({ focusSearch, createNewGroup, collapseAllTreeNodes });
             :key="item.id"
             :node="item.node"
             :depth="item.depth"
-            :drag-disabled="isFiltering || isConnectionListAlphabeticallySorted"
+            :drag-disabled="isRootListPartial || isConnectionListAlphabeticallySorted"
             :pending-rename="pendingRenameGroupId === item.node.id"
             :highlighted="highlightedNodeId === item.id"
             :comment-label-width="sidebarCommentLabelWidths.get(item.node.id)"
