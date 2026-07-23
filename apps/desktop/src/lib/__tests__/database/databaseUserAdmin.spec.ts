@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getDatabaseUserAdminProvider, kingbaseShowGrantsSql, mysqlPrivilegeSelectionFromGrants } from "@/lib/database/databaseUserAdmin";
+import { dorisGrantPrivilegesSql, dorisGrantsResult, dorisPrivilegeTargetSql, dorisUsersResult, getDatabaseUserAdminProvider, kingbaseShowGrantsSql, mysqlPrivilegeSelectionFromGrants } from "@/lib/database/databaseUserAdmin";
+import type { QueryResult } from "@/types/database";
+
+function result(columns: string[], rows: QueryResult["rows"]): QueryResult {
+  return { columns, rows, affected_rows: 0, execution_time_ms: 1 };
+}
 
 describe("MySQL grant privilege selection", () => {
   const availablePrivileges = ["SELECT", "INSERT", "UPDATE", "EXECUTE"];
@@ -50,8 +55,28 @@ describe("MySQL grant privilege selection", () => {
 });
 
 describe("database user admin providers", () => {
+  it("uses Doris 2.x user and privilege syntax", () => {
+    const provider = getDatabaseUserAdminProvider("doris");
+
+    expect(provider?.listUsersSql()).toBe("SHOW ALL GRANTS;");
+    expect(provider?.showGrantsSql({ user: "reporter", host: "%" })).toBe("SHOW GRANTS FOR 'reporter'@'%';");
+    expect(provider?.alterPasswordSql?.({ user: "reporter", host: "%" }, "new'secret")).toBe("SET PASSWORD FOR 'reporter'@'%' = PASSWORD('new''secret');");
+    expect(dorisPrivilegeTargetSql("analytics", "daily`rollup")).toBe("`internal`.`analytics`.`daily``rollup`");
+    expect(dorisGrantPrivilegesSql({ user: { user: "reporter", host: "%" }, privileges: ["select_priv", "LOAD_PRIV"], database: "analytics", grantOption: true })).toBe("GRANT SELECT_PRIV, LOAD_PRIV ON `internal`.`analytics`.* TO 'reporter'@'%';");
+    expect(provider?.alterLoginSql).toBeUndefined();
+    expect(provider?.privilegesForScope?.("table")).toEqual(["SELECT_PRIV", "LOAD_PRIV", "ALTER_PRIV", "CREATE_PRIV", "DROP_PRIV", "SHOW_VIEW_PRIV"]);
+  });
+
+  it("parses Doris SHOW GRANTS users and structured privileges", () => {
+    const grants = result(["UserIdentity", "Comment", "Password", "Roles", "GlobalPrivs", "DatabasePrivs", "TablePrivs"], [["'root'@'%'", "ROOT", "No", "operator", "Admin_priv", "internal.analytics: Select_priv", null]]);
+
+    expect(dorisUsersResult(grants)).toEqual([{ user: "root", host: "%" }]);
+    expect(dorisGrantsResult(grants)).toEqual(["Roles: operator", "GlobalPrivs: Admin_priv", "DatabasePrivs: internal.analytics: Select_priv"]);
+  });
+
   it("syncs loaded grants only for the MySQL provider", () => {
     const mysqlProvider = getDatabaseUserAdminProvider("mysql");
+    const dorisProvider = getDatabaseUserAdminProvider("doris");
     const postgresProvider = getDatabaseUserAdminProvider("postgres");
     const starrocksProvider = getDatabaseUserAdminProvider("starrocks");
 
@@ -64,9 +89,11 @@ describe("database user admin providers", () => {
       }),
     ).toEqual({ privileges: ["INSERT"], grantOption: false });
     expect(postgresProvider?.privilegeSelectionFromGrants).toBeUndefined();
+    expect(dorisProvider?.privilegeSelectionFromGrants).toBeUndefined();
     expect(starrocksProvider?.privilegeSelectionFromGrants).toBeUndefined();
     expect(mysqlProvider?.defaultPrivilegesForScope?.("mysql")).toEqual(["SELECT"]);
     expect(postgresProvider?.defaultPrivilegesForScope?.("database")).toEqual(["CONNECT"]);
+    expect(dorisProvider?.defaultPrivilegesForScope?.("table")).toEqual(["SELECT_PRIV"]);
     expect(starrocksProvider?.defaultPrivilegesForScope?.("table")).toEqual(["SELECT"]);
   });
 

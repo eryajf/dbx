@@ -89,7 +89,7 @@ import {
 import { copyNameForTreeNode, isDocumentBrowserTreeNode, objectSourceKindForTreeNode, shouldRunTreeNodeRowAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/sidebar/treeNodeClick";
 import { dataTabOpenModeFromTreeClick, type DataTabOpenMode } from "@/lib/sidebar/dataTabOpenPolicy";
 import { isCopySidebarSelectionShortcut, isEditSidebarConnectionShortcut, isPasteSidebarSelectionShortcut } from "@/lib/editor/keyboardShortcuts";
-import { canRefreshDataTableFromSingleActivationDoubleClick, dataTableDoubleClickAction } from "@/lib/tabs/dataTabActivation";
+import { dataTableDoubleClickAction } from "@/lib/tabs/dataTabActivation";
 import { attachedDatabaseNameFromPath, buildCreateDatabaseSql, buildDuckDbAttachDatabaseSql, buildSqliteAttachDatabaseSql, supportsCreateDatabaseCharset, uniqueAttachedDatabaseName } from "@/lib/database/createDatabaseSql";
 import { appendCreateDatabaseErrorHint } from "@/lib/database/createDatabaseErrorHints";
 import { SQLITE_DATABASE_FILE_EXTENSIONS } from "@/lib/database/databaseFileDetection";
@@ -518,6 +518,13 @@ async function toggle() {
     return;
   }
 
+  if (node.type === "group-extensions" && connectionStore.isTreeNodeChildrenLoaded(node.id)) {
+    node.isExpanded = !node.isExpanded;
+    if (wasExpanded && !connectionStore.sidebarSearchQuery) connectionStore.releaseCollapsedTreeNodeChildren(node.id);
+    emit("node-toggled", node, wasExpanded);
+    return;
+  }
+
   if (node.isExpanded) {
     node.isExpanded = false;
     if (!connectionStore.sidebarSearchQuery) connectionStore.releaseCollapsedTreeNodeChildren(node.id);
@@ -641,6 +648,8 @@ async function toggle() {
       await connectionStore.loadIndexes(node.connectionId, node.database, node.tableName, node.schema, node.id, node.catalog);
     } else if (node.type === "group-fkeys" && node.connectionId && hasTreeNodeDatabaseContext(node) && node.tableName) {
       await connectionStore.loadForeignKeys(node.connectionId, node.database, node.tableName, node.schema, node.id, node.catalog);
+    } else if (node.type === "group-extensions" && node.connectionId && hasTreeNodeDatabaseContext(node)) {
+      await connectionStore.refreshTreeNode(node);
     }
     emit("node-toggled", node, wasExpanded);
   } catch (e: any) {
@@ -671,9 +680,6 @@ function runRowClickAction(clickDetail: number) {
   const action = treeNodeRowAction(node.type, canExpand.value, settingsStore.editorSettings.sidebarActivation);
   if (!shouldRunTreeNodeRowAction(action, clickDetail)) return;
   if (action === "open-data") {
-    if (node.type === "table") {
-      singleActivationDoubleClickRefreshAllowed = canRefreshDataTableFromSingleActivationDoubleClick(findExistingSameTableDataTab());
-    }
     scheduleOpenData(node);
   } else if (isDocumentBrowserTreeNode(node.type)) {
     openMongoTreeData(node);
@@ -683,8 +689,6 @@ function runRowClickAction(clickDetail: number) {
     toggle();
   }
 }
-
-let singleActivationDoubleClickRefreshAllowed = false;
 
 function refreshActiveKvBrowserAfterOpen(mode: "etcd" | "zookeeper", connectionId: string) {
   void nextTick(() => {
@@ -919,8 +923,8 @@ function onDoubleClick(event: MouseEvent) {
     if (!activeNode.value.isExpanded) void toggle();
   } else if (action === "open-data") {
     openDataImmediately(activeNode.value);
-  } else if (action === "refresh-data") {
-    void refreshData();
+  } else if (action === "activate-data") {
+    activateDataTableFromDoubleClick();
   } else if (action === "open-source") {
     openObjectSourceDialog(false);
   } else if (action === "open-saved-sql") {
@@ -932,24 +936,21 @@ function onDoubleClick(event: MouseEvent) {
   }
 }
 
-async function refreshData() {
+function activateDataTableFromDoubleClick() {
   const node = activeNode.value;
   if (node.type !== "table" || !hasNodeDatabaseContext(node)) return;
-  const singleActivationRefreshAllowed = singleActivationDoubleClickRefreshAllowed;
-  singleActivationDoubleClickRefreshAllowed = false;
   const activation = settingsStore.editorSettings.sidebarActivation;
-  if (activation === "single" && !singleActivationRefreshAllowed) return;
   const existingSameTableTab = findExistingSameTableDataTab();
-  const action = dataTableDoubleClickAction(existingSameTableTab, activation, singleActivationRefreshAllowed);
+  const action = dataTableDoubleClickAction(existingSameTableTab, activation);
   if (action === "none") return;
   if (action === "open") {
     openDataImmediately(node);
     return;
   }
   if (!existingSameTableTab) return;
+  // Reopening an available table follows DBeaver's editor reuse model: only
+  // activate the existing tab so filters, result rows, and in-flight work stay intact.
   queryStore.switchTab(existingSameTableTab.id);
-  if (action === "activate") return;
-  await queryStore.refreshDataTab(existingSameTableTab.id);
 }
 
 function findExistingSameTableDataTab() {
@@ -2836,23 +2837,6 @@ async function confirmPasteTable() {
   }
 }
 
-function copyTableToClipboard() {
-  const node = activeNode.value;
-  if (node.type !== "table" || !node.connectionId || !node.database) return;
-  connectionStore.treeClipboard = {
-    kind: "table-copy",
-    tables: [
-      {
-        connectionId: node.connectionId,
-        database: node.database,
-        schema: node.schema,
-        tableName: node.label,
-      },
-    ],
-  };
-  toast(t("contextMenu.pasteTableClipboardUpdated"), 2000);
-}
-
 function openPasteTableDialog() {
   const clipboard = connectionStore.treeClipboard;
   if (clipboard?.kind !== "table-copy" || !canPasteTreeClipboardToCurrentNode()) {
@@ -3938,7 +3922,8 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
     if (isTableNotView.value) {
       items.push({ label: "", separator: true });
       items.push({ label: t("contextMenu.duplicateStructure"), action: duplicateStructure, icon: CopyPlus });
-      items.push({ label: t("contextMenu.copyTable"), action: copyTableToClipboard, icon: Copy });
+      // Keep menu copy aligned with keyboard copy so frozen multi-selection and single-row fallback stay compatible.
+      items.push({ label: t("contextMenu.copyTable"), action: copySelectedNames, icon: Copy });
       if (supportsTruncate.value) {
         destructiveActions.push({
           label: truncateMenuLabel(t("contextMenu.truncateTable")),
