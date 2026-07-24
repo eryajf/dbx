@@ -807,13 +807,16 @@ pub async fn find_documents_extended_json(
     let mut cursor = find.await.map_err(|e| e.to_string())?;
 
     let mut documents = Vec::new();
+    let mut extended_documents = Vec::new();
     while cursor.advance().await.map_err(|e| e.to_string())? {
         let doc = cursor.deserialize_current().map_err(|e| e.to_string())?;
-        documents.push(bson_to_browser_json(&Bson::Document(doc)));
+        let (document, extended_document) = document_json_views(doc);
+        documents.push(document);
+        extended_documents.push(extended_document);
     }
 
     Ok(MongoDocumentResult {
-        extended_documents: Some(documents.clone()),
+        extended_documents: Some(extended_documents),
         documents,
         raw_documents: None,
         total,
@@ -1584,6 +1587,14 @@ fn bson_to_browser_json(bson: &Bson) -> serde_json::Value {
     }
 }
 
+fn document_json_views(document: Document) -> (serde_json::Value, serde_json::Value) {
+    let bson = Bson::Document(document);
+    let browser = bson_to_browser_json(&bson);
+    // Derive copy JSON from the original BSON so every BSON type keeps its canonical wrapper.
+    let extended = bson.into_canonical_extjson();
+    (browser, extended)
+}
+
 /// Convert a `serde_json::Value` (JSON object) to a BSON `Document`,
 /// handling MongoDB extended JSON conventions such as `{"$oid":"..."}`.
 pub fn json_object_to_document(value: &serde_json::Value) -> Result<Document, String> {
@@ -2273,6 +2284,36 @@ mod tests {
         let extended = result.extended_documents.expect("extended documents");
         assert_eq!(extended[0]["lastUpdatedDate"], serde_json::json!({ "$date": { "$numberLong": "1746520532000" } }));
         assert_eq!(extended[0]["dateText"], serde_json::json!("ISODate(\"2025-05-06T08:35:32Z\")"));
+    }
+
+    #[test]
+    fn document_json_views_keep_browser_display_and_canonical_bson_types() {
+        let date = DateTime::parse_rfc3339_str("2026-06-10T13:59:31.287Z").unwrap();
+        let (browser, extended) = document_json_views(doc! {
+            "date": date,
+            "int32": Bson::Int32(42),
+            "int64": Bson::Int64(42),
+            "unsafeInt64": Bson::Int64(2_326_645_729_978_441_729),
+        });
+
+        assert_eq!(
+            browser,
+            serde_json::json!({
+                "date": "ISODate(\"2026-06-10T13:59:31.287Z\")",
+                "int32": 42,
+                "int64": 42,
+                "unsafeInt64": { "$numberLong": "2326645729978441729" },
+            })
+        );
+        assert_eq!(
+            extended,
+            serde_json::json!({
+                "date": { "$date": { "$numberLong": "1781099971287" } },
+                "int32": { "$numberInt": "42" },
+                "int64": { "$numberLong": "42" },
+                "unsafeInt64": { "$numberLong": "2326645729978441729" },
+            })
+        );
     }
 
     #[test]
