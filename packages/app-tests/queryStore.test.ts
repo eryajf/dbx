@@ -3330,6 +3330,47 @@ test("mongo multi-find results use database and collection source labels", async
   }
 });
 
+test("mongo projected find results do not enable copy as UPDATE", async () => {
+  const restoreStorage = installMemoryStorage();
+  setActivePinia(createPinia());
+  const connectionStore = useConnectionStore();
+  const store = useQueryStore();
+  const originalFetch = globalThis.fetch;
+
+  connectionStore.addEphemeralConnection({
+    ...conn("mongo-projection-1"),
+    db_type: "mongodb",
+    port: 27017,
+  });
+
+  globalThis.fetch = withConnectionHealthMock(async (input, init) => {
+    if (String(input) === "/api/document-store/find-documents") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      assert.equal(body.projection, '{"_id":1,"profile.name":1}');
+      return new Response(
+        JSON.stringify({
+          documents: [{ _id: "user-1", profile: { name: "Ada" } }],
+          extended_documents: [{ _id: "user-1", profile: { name: "Ada" } }],
+          total: 1,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return new Response("unexpected request", { status: 500 });
+  });
+
+  try {
+    const tabId = store.createTab("mongo-projection-1", "accounting", "Query", "query", "");
+    await store.executeTabSql(tabId, 'db.users.find({}, { _id: 1, "profile.name": 1 })');
+
+    const tab = store.tabs.find((item) => item.id === tabId);
+    assert.equal(tab?.mongoEditTarget, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreStorage();
+  }
+});
+
 test("replacing one paginated SQL result preserves the grouped refresh SQL", async () => {
   const restoreStorage = installMemoryStorage();
   setActivePinia(createPinia());

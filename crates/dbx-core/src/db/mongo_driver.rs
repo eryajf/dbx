@@ -667,7 +667,7 @@ pub async fn find_documents(
     while cursor.advance().await.map_err(|e| e.to_string())? {
         let doc = cursor.deserialize_current().map_err(|e| e.to_string())?;
         documents.push(bson_to_json(&Bson::Document(doc.clone())));
-        extended_documents.push(Bson::Document(doc).into_relaxed_extjson());
+        extended_documents.push(Bson::Document(doc).into_canonical_extjson());
     }
 
     Ok(MongoDocumentResult {
@@ -1346,7 +1346,7 @@ fn single_document_result(document: Option<Document>) -> MongoDocumentResult {
         Some(document) => MongoDocumentResult {
             documents: vec![bson_to_json(&Bson::Document(document.clone()))],
             raw_documents: None,
-            extended_documents: Some(vec![Bson::Document(document).into_relaxed_extjson()]),
+            extended_documents: Some(vec![Bson::Document(document).into_canonical_extjson()]),
             total: 1,
             total_is_exact: true,
         },
@@ -2271,7 +2271,7 @@ mod tests {
 
         assert_eq!(result.documents[0]["lastUpdatedDate"], serde_json::json!("ISODate(\"2025-05-06T08:35:32Z\")"));
         let extended = result.extended_documents.expect("extended documents");
-        assert_eq!(extended[0]["lastUpdatedDate"], serde_json::json!({ "$date": "2025-05-06T08:35:32Z" }));
+        assert_eq!(extended[0]["lastUpdatedDate"], serde_json::json!({ "$date": { "$numberLong": "1746520532000" } }));
         assert_eq!(extended[0]["dateText"], serde_json::json!("ISODate(\"2025-05-06T08:35:32Z\")"));
     }
 
