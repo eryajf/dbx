@@ -290,18 +290,7 @@ export function transposeRecordIndexesForMode(options: TransposeRecordIndexesFor
 }
 
 export function transposeAnchorRowIndex(options: TransposeAnchorOptions): number {
-  const requestedRowId = options.rowIds[options.requestedRowIndex];
-  if (requestedRowId !== undefined && options.selectedRowIds.size > 1 && options.selectedRowIds.has(requestedRowId)) {
-    const firstSelectedIndex = options.rowIds.findIndex((rowId) => options.selectedRowIds.has(rowId));
-    if (firstSelectedIndex >= 0) return firstSelectedIndex;
-  }
-
-  const range = options.selectedRange;
-  if (range && range.startRow !== range.endRow && options.requestedRowIndex >= range.startRow && options.requestedRowIndex <= range.endRow) {
-    return range.startRow;
-  }
-
-  return options.requestedRowIndex;
+  return Math.max(0, Math.min(options.rowIds.length - 1, options.requestedRowIndex));
 }
 
 export function transposeFieldWidth(columns: string[], options: TransposeFieldWidthOptions = {}): number {

@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { averageTransposeRecordWidth, calculateTransposeRecordWidth, defaultTransposeRecordWidth, minTransposeFieldWidth, shouldAutoTransposeSingleRow, transposeFieldWidth, transposeRecordWidthsForDensity, visibleTransposeRecordWindow } from "@/lib/dataGrid/dataGridTranspose";
+import {
+  averageTransposeRecordWidth,
+  calculateTransposeRecordWidth,
+  defaultTransposeRecordWidth,
+  minTransposeFieldWidth,
+  shouldAutoTransposeSingleRow,
+  transposeAnchorRowIndex,
+  transposeFieldWidth,
+  transposeRecordWidthsForDensity,
+  visibleTransposeRecordWindow,
+} from "@/lib/dataGrid/dataGridTranspose";
 
 describe("single-row automatic transpose", () => {
   it("only opens for enabled multi-column results that are not preserving a manual transpose", () => {
@@ -9,6 +19,21 @@ describe("single-row automatic transpose", () => {
     expect(shouldAutoTransposeSingleRow({ enabled: true, preserveTranspose: false, rowCount: 0, columnCount: 2 })).toBe(false);
     expect(shouldAutoTransposeSingleRow({ enabled: true, preserveTranspose: false, rowCount: 2, columnCount: 2 })).toBe(false);
     expect(shouldAutoTransposeSingleRow({ enabled: true, preserveTranspose: false, rowCount: 1, columnCount: 1 })).toBe(false);
+  });
+});
+
+describe("transpose row anchor", () => {
+  it("keeps the requested row when multiple rows or cells are selected", () => {
+    const rowIds = [1, 2, 3, 4];
+
+    expect(
+      transposeAnchorRowIndex({
+        requestedRowIndex: 3,
+        rowIds,
+        selectedRowIds: new Set([1, 4]),
+        selectedRange: { startRow: 0, endRow: 3, startCol: 0, endCol: 1 },
+      }),
+    ).toBe(3);
   });
 });
 
