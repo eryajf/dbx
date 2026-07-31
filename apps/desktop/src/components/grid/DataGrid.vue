@@ -6401,6 +6401,13 @@ function copyColumnDetailFieldValue(field: DataGridCellDetail) {
 
 const transposeRecordWidths = ref<number[]>([]);
 const transposeManualRecordWidthIndexes = ref(new Set<number>());
+const transposeRecordOffsets = computed(() => {
+  const offsets = [0];
+  for (let index = 0; index < displayRowCount.value; index += 1) {
+    offsets.push(offsets[index] + getTransposeRecordWidth(index));
+  }
+  return offsets;
+});
 
 function calcTransposeRecordWidth(recordIndex: number): number {
   const item = displayItemAt(recordIndex);
@@ -6451,6 +6458,7 @@ const transposeRecordWindow = computed(() =>
     viewportWidth: transposeViewportWidth.value,
     pinnedWidth: transposePinnedWidth.value,
     recordWidth: estimatedTransposeRecordWidth(),
+    recordOffsets: transposeRecordOffsets.value,
     overscan: 2,
   }),
 );
@@ -6514,6 +6522,8 @@ function scrollTransposeRecordIntoView(rowIndex: number) {
       viewportWidth: el.clientWidth,
       pinnedWidth: transposePinnedWidth.value,
       recordWidth: estimatedTransposeRecordWidth(),
+      recordOffsets: transposeRecordOffsets.value,
+      currentScrollLeft: el.scrollLeft,
     });
     updateTransposeViewport();
   });

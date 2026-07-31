@@ -256,10 +256,10 @@ test("calculates a horizontal record window with spacer widths", () => {
       overscan: 1,
     }),
     {
-      start: 1,
-      end: 7,
-      beforeWidth: 160,
-      afterWidth: 14880,
+      start: 3,
+      end: 9,
+      beforeWidth: 480,
+      afterWidth: 14560,
     },
   );
 });

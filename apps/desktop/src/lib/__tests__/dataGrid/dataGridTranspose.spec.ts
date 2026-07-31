@@ -7,6 +7,7 @@ import {
   shouldAutoTransposeSingleRow,
   transposeAnchorRowIndex,
   transposeFieldWidth,
+  transposeScrollLeftForRecord,
   transposeRecordWidthsForDensity,
   visibleTransposeRecordWindow,
 } from "@/lib/dataGrid/dataGridTranspose";
@@ -101,5 +102,48 @@ describe("dataGridTranspose density widths", () => {
     expect(compactWindow.beforeWidth).not.toBe(comfortableWindow.beforeWidth);
     expect(compactWindow.afterWidth).not.toBe(comfortableWindow.afterWidth);
     expect(averageTransposeRecordWidth([], "compact")).toBe(defaultTransposeRecordWidth("compact"));
+  });
+});
+
+describe("transpose record scrolling", () => {
+  it("uses the scroll position after the sticky field for virtualization", () => {
+    expect(
+      visibleTransposeRecordWindow({
+        totalRecords: 3,
+        scrollLeft: 500,
+        viewportWidth: 300,
+        pinnedWidth: 100,
+        recordWidth: 230,
+        recordOffsets: [0, 500, 596, 692],
+        overscan: 0,
+      }),
+    ).toEqual({ start: 1, end: 3, beforeWidth: 500, afterWidth: 0 });
+  });
+
+  it("uses actual record widths and nearest scrolling", () => {
+    const recordOffsets = [0, 500, 596, 692];
+
+    expect(
+      transposeScrollLeftForRecord({
+        recordIndex: 2,
+        totalRecords: 3,
+        viewportWidth: 300,
+        pinnedWidth: 100,
+        recordWidth: 230,
+        recordOffsets,
+        currentScrollLeft: 0,
+      }),
+    ).toBe(492);
+    expect(
+      transposeScrollLeftForRecord({
+        recordIndex: 1,
+        totalRecords: 3,
+        viewportWidth: 300,
+        pinnedWidth: 100,
+        recordWidth: 230,
+        recordOffsets,
+        currentScrollLeft: 450,
+      }),
+    ).toBe(450);
   });
 });

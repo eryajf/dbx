@@ -50,6 +50,7 @@ export interface TransposeRecordWindowOptions {
   viewportWidth: number;
   pinnedWidth: number;
   recordWidth: number;
+  recordOffsets?: readonly number[];
   overscan?: number;
 }
 
@@ -159,6 +160,8 @@ export interface TransposeScrollLeftOptions {
   viewportWidth: number;
   pinnedWidth: number;
   recordWidth: number;
+  recordOffsets?: readonly number[];
+  currentScrollLeft?: number;
 }
 
 export interface TransposeRecordIndexesForModeOptions {
@@ -269,8 +272,25 @@ export function visibleTransposeRecordWindow(options: TransposeRecordWindowOptio
   }
 
   const overscan = options.overscan ?? 2;
-  const recordScrollLeft = Math.max(0, options.scrollLeft - options.pinnedWidth);
+  const recordScrollLeft = Math.max(0, options.scrollLeft);
   const recordViewportWidth = Math.max(0, options.viewportWidth - options.pinnedWidth);
+  if (options.recordOffsets?.length === options.totalRecords + 1) {
+    const offsets = options.recordOffsets;
+    const firstVisible = Math.max(
+      0,
+      offsets.findIndex((_offset, index) => index < options.totalRecords && offsets[index + 1] > recordScrollLeft),
+    );
+    const firstAfterViewport = offsets.findIndex((offset, index) => index > firstVisible && offset >= recordScrollLeft + recordViewportWidth);
+    const start = Math.max(0, firstVisible - overscan);
+    const end = Math.min(options.totalRecords, (firstAfterViewport < 0 ? options.totalRecords : firstAfterViewport) + overscan);
+    const totalWidth = offsets[options.totalRecords];
+    return {
+      start,
+      end,
+      beforeWidth: offsets[start],
+      afterWidth: Math.max(0, totalWidth - offsets[end]),
+    };
+  }
   const start = Math.max(0, Math.floor(recordScrollLeft / options.recordWidth) - overscan);
   const end = Math.min(options.totalRecords, Math.ceil((recordScrollLeft + recordViewportWidth) / options.recordWidth) + overscan + 1);
 
@@ -306,8 +326,15 @@ export function transposeFieldWidth(columns: string[], options: TransposeFieldWi
 
 export function transposeScrollLeftForRecord(options: TransposeScrollLeftOptions): number {
   if (options.recordWidth <= 0 || options.totalRecords <= 0) return 0;
-  const desired = Math.max(0, options.recordIndex) * options.recordWidth;
-  const totalWidth = options.pinnedWidth + options.totalRecords * options.recordWidth;
+  const recordIndex = Math.max(0, Math.min(options.totalRecords - 1, options.recordIndex));
+  const offsets = options.recordOffsets?.length === options.totalRecords + 1 ? options.recordOffsets : undefined;
+  const recordStart = offsets ? offsets[recordIndex] : recordIndex * options.recordWidth;
+  const recordEnd = offsets ? offsets[recordIndex + 1] : recordStart + options.recordWidth;
+  const recordsWidth = offsets ? offsets[options.totalRecords] : options.totalRecords * options.recordWidth;
+  const recordViewportWidth = Math.max(0, options.viewportWidth - options.pinnedWidth);
+  const currentScrollLeft = Math.max(0, options.currentScrollLeft ?? recordStart);
+  const desired = recordStart < currentScrollLeft ? recordStart : recordEnd > currentScrollLeft + recordViewportWidth ? recordEnd - recordViewportWidth : currentScrollLeft;
+  const totalWidth = options.pinnedWidth + recordsWidth;
   const maxScrollLeft = Math.max(0, totalWidth - options.viewportWidth);
-  return Math.min(desired, maxScrollLeft);
+  return Math.max(0, Math.min(desired, maxScrollLeft));
 }
