@@ -25,7 +25,7 @@ import { useEditorFontFamilyStyle } from "@/composables/useEditorFontFamilyStyle
 import { createShikiJsonHighlighter, type JsonHighlighter } from "@/lib/common/shikiJsonHighlighter";
 import { copyToClipboard } from "@/lib/common/clipboard";
 import { formatTtl } from "@/lib/common/ttlFormat";
-import { computeDisplayTtl, computeTtlCountdownTick, computeTtlForExpiryEdit, DEFAULT_REDIS_AUTO_REFRESH_INTERVAL_SECONDS, normalizeRedisAutoRefreshInterval } from "@/lib/redis/redisAutoRefresh";
+import { computeDisplayTtl, computeTtlCountdownTick, computeTtlCountdownValue, computeTtlForExpiryEdit, DEFAULT_REDIS_AUTO_REFRESH_INTERVAL_SECONDS, normalizeRedisAutoRefreshInterval } from "@/lib/redis/redisAutoRefresh";
 import {
   canRenderRedisValueFormat,
   canEditRedisMemberDetail,
@@ -174,6 +174,7 @@ const refreshingValue = ref(false);
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
 let autoRefreshRequestId = 0;
+let countdownTtlObservedAtMs = Date.now();
 let redisValueViewerIsActive = true;
 
 function canRunAutoRefresh(): boolean {
@@ -207,13 +208,23 @@ function startCountdown() {
   stopCountdown();
   if (!data.value || !canRunAutoRefresh()) return;
 
-  countdownTtl.value = data.value.ttl;
+  updateCountdownTtl();
   countdownTimer = setInterval(() => {
     const action = computeTtlCountdownTick(countdownTtl.value);
     if (action.type === "decrement") {
-      countdownTtl.value--;
+      updateCountdownTtl();
     }
   }, 1000);
+}
+
+function syncCountdownTtl(serverTtl: number) {
+  countdownTtl.value = serverTtl;
+  countdownTtlObservedAtMs = Date.now();
+}
+
+function updateCountdownTtl() {
+  if (!data.value) return;
+  countdownTtl.value = computeTtlCountdownValue(data.value.ttl, countdownTtlObservedAtMs, Date.now());
 }
 
 function startRefreshTimers() {
@@ -222,7 +233,7 @@ function startRefreshTimers() {
 }
 
 async function refreshAutoValue() {
-  if (refreshingValue.value || loading.value || editingTtl.value || savingTtl.value || hasUnsavedRedisDraft.value || !autoRefreshEnabled.value || !data.value || !canRunAutoRefresh()) return;
+  if (refreshingValue.value || loading.value || editingTtl.value || savingTtl.value || hasUnsavedRedisDraft.value || shouldPauseAutoValueRefresh() || !autoRefreshEnabled.value || !data.value || !canRunAutoRefresh()) return;
 
   const requestId = ++autoRefreshRequestId;
   refreshingValue.value = true;
@@ -231,10 +242,9 @@ async function refreshAutoValue() {
       background: true,
       preserveDraft: true,
       notifyParent: false,
-      shouldApply: () => requestId === autoRefreshRequestId && !hasUnsavedRedisDraft.value && autoRefreshEnabled.value && canRunAutoRefresh(),
+      shouldApply: () => requestId === autoRefreshRequestId && !hasUnsavedRedisDraft.value && !shouldPauseAutoValueRefresh() && autoRefreshEnabled.value && canRunAutoRefresh(),
     });
     if (requestId !== autoRefreshRequestId || !applied || !data.value) return;
-    countdownTtl.value = data.value.ttl;
   } catch {
     // A failed background read must not retry in a tight loop. Manual refresh
     // remains available and starts a fresh polling lifecycle on success.
@@ -482,6 +492,12 @@ let hashResizeStartX = 0;
 let hashResizeStartWidth = 0;
 let zsetResizeStartX = 0;
 let zsetResizeStartWidth = 0;
+
+function shouldPauseAutoValueRefresh(): boolean {
+  const loadedPageSize = data.value ? redisValueCollectionItems(data.value).length : 0;
+  const hasExpandedCollectionPage = collectionItems.value.length > loadedPageSize;
+  return showMemberDetail.value || valueSearchOpen.value || Boolean(hashSearchQuery.value.trim()) || Boolean(activeHashSearchQuery.value) || searchLoading.value || loadingMore.value || hasExpandedCollectionPage;
+}
 
 type PendingDelete = { kind: "key" } | { kind: "hash"; field: string } | { kind: "list"; index: number } | { kind: "set"; member: string } | { kind: "zset"; member: string };
 const pendingDelete = ref<PendingDelete | null>(null);
@@ -1062,6 +1078,7 @@ async function load(options: { background?: boolean; notifyParent?: boolean; pre
       if (currentValue) {
         const preservedValue = { ...currentValue, ttl: loadedValue.ttl };
         data.value = preservedValue;
+        syncCountdownTtl(loadedValue.ttl);
         if (notifyParent) emit("loaded", preservedValue);
       }
       return false;
@@ -1075,6 +1092,7 @@ async function load(options: { background?: boolean; notifyParent?: boolean; pre
     searchLoading.value = false;
     resetValueSearch();
     data.value = loadedValue;
+    syncCountdownTtl(loadedValue.ttl);
     if (notifyParent) emit("loaded", loadedValue);
     scanCursor.value = redisValueCollectionScanCursor(loadedValue);
     collectionItems.value = redisValueCollectionItems(loadedValue);

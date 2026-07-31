@@ -29,6 +29,13 @@ export function computeTtlCountdownTick(countdownTtl: number): TtlCountdownTickA
   return countdownTtl > 0 ? { type: "decrement" } : { type: "idle" };
 }
 
+/** Compute a TTL countdown from the time the server value was observed. */
+export function computeTtlCountdownValue(serverTtl: number, observedAtMs: number, nowMs: number): number {
+  if (serverTtl <= 0) return serverTtl;
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - observedAtMs) / 1000));
+  return Math.max(serverTtl - elapsedSeconds, 0);
+}
+
 /**
  * Compute the TTL value that should be displayed in the badge.
  *

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { computeDisplayTtl, computeTtlCountdownTick, computeTtlForExpiryEdit, DEFAULT_REDIS_AUTO_REFRESH_INTERVAL_SECONDS, normalizeRedisAutoRefreshInterval } from "@/lib/redis/redisAutoRefresh";
+import { computeDisplayTtl, computeTtlCountdownTick, computeTtlCountdownValue, computeTtlForExpiryEdit, DEFAULT_REDIS_AUTO_REFRESH_INTERVAL_SECONDS, normalizeRedisAutoRefreshInterval } from "@/lib/redis/redisAutoRefresh";
 
 describe("computeTtlCountdownTick", () => {
   it("returns decrement while a positive TTL remains", () => {
@@ -11,6 +11,18 @@ describe("computeTtlCountdownTick", () => {
   it("stops decrementing after the TTL has reached zero", () => {
     expect(computeTtlCountdownTick(0)).toEqual({ type: "idle" });
     expect(computeTtlCountdownTick(-1)).toEqual({ type: "idle" });
+  });
+});
+
+describe("computeTtlCountdownValue", () => {
+  it("accounts for time elapsed while countdown timers are paused", () => {
+    expect(computeTtlCountdownValue(60, 10_000, 40_000)).toBe(30);
+  });
+
+  it("preserves Redis sentinel values and clamps expired TTLs", () => {
+    expect(computeTtlCountdownValue(5, 10_000, 20_000)).toBe(0);
+    expect(computeTtlCountdownValue(-1, 10_000, 20_000)).toBe(-1);
+    expect(computeTtlCountdownValue(-2, 10_000, 20_000)).toBe(-2);
   });
 });
 
