@@ -4893,6 +4893,12 @@ export default withEnglishFallback({
     routineSourceOpenModeQueryTabDescription: "Abrir código-fonte em uma nova aba de dados, da mesma forma que executar uma consulta SQL.",
     routineSourceOpenModeDialog: "Janela pop-up",
     routineSourceOpenModeDialogDescription: "Abrir código-fonte em uma caixa de diálogo pop-up, facilitando a visualização e edição rápida.",
+    syncSnippetMigrateLegacy: "Migrar snippet legado",
+    syncSnippetMigrateLegacyRequired: "Este snippet legado em texto simples deve ser migrado pela ação Migrar snippet legado.",
+    syncSnippetMigrateLegacyConfirm: "O DBX criará primeiro uma substituição criptografada e depois excluirá permanentemente o snippet legado em texto simples {id}. Esta ação não pode ser desfeita. Continuar?",
+    syncSnippetMigrateLegacySuccess: "O snippet criptografado {id} foi criado e o snippet legado em texto simples foi removido.",
+    syncSnippetMigrateLegacyCreated: "O snippet criptografado {id} foi criado.",
+    syncSnippetMigrateLegacyCleanupRequired: "O snippet criptografado foi criado, mas não foi possível excluir o snippet legado {id}. Exclua-o manualmente e altere as credenciais que possam ter sido expostas.",
   },
   driverStore: {
     jreDirRemoveFailed: "Não foi possível remover o diretório JRE antigo: {path} (erro original: {error})",

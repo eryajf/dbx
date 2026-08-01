@@ -4357,6 +4357,12 @@ export default withEnglishFallback({
     routineSourceOpenModeQueryTabDescription: "在新的資料標籤頁中開啟原始碼，與執行 SQL 查詢方式相同。",
     routineSourceOpenModeDialog: "彈出視窗",
     routineSourceOpenModeDialogDescription: "在彈出對話方塊中開啟原始碼，方便快速檢視和編輯。",
+    syncSnippetMigrateLegacy: "遷移舊版程式碼片段",
+    syncSnippetMigrateLegacyRequired: "此舊版明文程式碼片段必須透過「遷移舊版程式碼片段」操作處理。",
+    syncSnippetMigrateLegacyConfirm: "DBX 會先建立新的加密程式碼片段，再永久刪除舊明文程式碼片段 {id}。此操作無法復原，是否繼續？",
+    syncSnippetMigrateLegacySuccess: "已建立加密程式碼片段 {id}，並刪除舊明文程式碼片段。",
+    syncSnippetMigrateLegacyCreated: "已建立加密程式碼片段 {id}。",
+    syncSnippetMigrateLegacyCleanupRequired: "已建立加密程式碼片段，但無法刪除舊程式碼片段 {id}。請手動刪除它，並輪換可能已暴露的憑據。",
   },
   driverStore: {
     jreDirRemoveFailed: "無法刪除舊的 JRE 目錄：{path}（原始錯誤：{error}）",
