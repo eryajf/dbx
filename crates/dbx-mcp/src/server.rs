@@ -783,6 +783,7 @@ impl DbxMcpServer {
 
     /// Resolve the schema for scoped CLI agents. A selected schema is a hard
     /// bound, matching the existing database scope behavior.
+    #[allow(clippy::result_large_err)]
     fn resolve_schema(&self, requested: Option<String>) -> Result<String, CallToolResult> {
         let requested = requested.map(|schema| schema.trim().to_string()).filter(|schema| !schema.is_empty());
         if let Some(scoped) = self.scope.schema.as_deref() {
