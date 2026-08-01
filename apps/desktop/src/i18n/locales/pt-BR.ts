@@ -4240,6 +4240,11 @@ export default withEnglishFallback({
   },
   settings: {
     title: "Configurações",
+    searchSettings: "Pesquisar configurações",
+    searchSettingsNoResults: "Nenhuma configuração encontrada",
+    searchSettingsResults: "Resultados da pesquisa de configurações",
+    clearSettingsSearch: "Limpar pesquisa de configurações",
+    exitSettingsSearch: "Voltar às configurações",
     editorTab: "Editor",
     sqlFormatterTab: "Formatador SQL",
     sqlFormatterImport: "Importar configuração",

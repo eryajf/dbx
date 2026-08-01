@@ -4238,6 +4238,11 @@ export default withEnglishFallback({
   },
   settings: {
     title: "Configuración",
+    searchSettings: "Buscar configuración",
+    searchSettingsNoResults: "No hay ajustes coincidentes",
+    searchSettingsResults: "Resultados de búsqueda de configuración",
+    clearSettingsSearch: "Borrar búsqueda de configuración",
+    exitSettingsSearch: "Volver a configuración",
     editorTab: "Editor",
     sqlFormatterTab: "Formateador SQL",
     sqlFormatterImport: "Importar configuración",

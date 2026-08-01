@@ -118,6 +118,7 @@ import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { usePromptTemplateStore } from "@/stores/promptTemplateStore";
 import { useTunnelProfileStore } from "@/stores/tunnelProfileStore";
 import { currentLocale, setLocale, type Locale } from "@/i18n";
+import { SETTINGS_SEARCH_DEFINITIONS, TOOLBAR_VISIBILITY_ITEMS, createShortcutSettingsSearchDefinitions, resolveSettingsSearchEntries, searchSettings, toolbarVisibilityItemLabel, type SettingsCategory, type SettingsSearchEntry, type ToolbarVisibilityItem } from "@/lib/settings/settingsSearch";
 import { LOCALE_OPTIONS } from "@/lib/app/localeOptions";
 import { DEFAULT_WEB_DAV_AUTO_UPLOAD_INTERVAL_MINUTES, DEFAULT_WEB_DAV_REMOTE_PATH, normalizedWebDavAutoUploadInterval, writeWebDavAutoUploadFields } from "@/lib/webdav/webdavAutoUploadConfig";
 import { apiUrl } from "@/lib/common/webPath";
@@ -407,6 +408,10 @@ const editExportRowLimit = ref(settingsStore.editorSettings.exportRowLimit);
 const editQueryExportKeysetOptimizationEnabled = ref(settingsStore.editorSettings.queryExportKeysetOptimizationEnabled);
 const editUpdateDownloadSource = ref<UpdateDownloadSource>(settingsStore.editorSettings.updateDownloadSource);
 const editToolbarItems = ref({ ...settingsStore.editorSettings.toolbarItems });
+const toolbarVisibilityItems = TOOLBAR_VISIBILITY_ITEMS;
+function getToolbarVisibilityItemLabel(item: ToolbarVisibilityItem): string {
+  return toolbarVisibilityItemLabel(item, t);
+}
 const systemFonts = ref<string[]>([]);
 const systemFontsLoading = ref(false);
 const systemFontsLoaded = ref(false);
@@ -1366,7 +1371,6 @@ const appSupportInfoLabels = computed<AppSupportInfoLabels>(() => ({
   unknown: t("settings.supportInfoUnknown"),
 }));
 const appSupportInfoRows = computed(() => (appSupportInfo.value ? buildAppSupportInfoRows(appSupportInfo.value, appSupportInfoLabels.value) : []));
-type SettingsCategory = "editor" | "formatter" | "appearance" | "navigation" | "data" | "backups" | "tunnels" | "shortcuts" | "snippets" | "sync" | "ai" | "mcp" | "security" | "about";
 const settingsCategoryNav = computed<{ value: SettingsCategory; label: string }[]>(() => [
   { value: "appearance", label: t("settings.appearanceTab") },
   { value: "editor", label: t("settings.editorTab") },
@@ -1394,6 +1398,158 @@ function settingsCategoryButton(value: SettingsCategory): string {
     "settings-category-button w-auto shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition-colors lg:w-full",
     value === activeSettingsTab.value ? "settings-category-button--active bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground",
   ].join(" ");
+}
+
+const settingsSearchQuery = ref("");
+const settingsSearchOpen = ref(false);
+const settingsSearchActiveIndex = ref(0);
+const settingsSearchInputContainerRef = ref<HTMLElement | null>(null);
+const highlightedSettingsSearchTargetId = ref("");
+let highlightedSettingsSearchElement: HTMLElement | null = null;
+let pendingSettingsSearchResult: SettingsSearchEntry | null = null;
+let settingsSearchHighlightTimer: ReturnType<typeof window.setTimeout> | null = null;
+let settingsSearchHighlightAnimationHandler: ((event: AnimationEvent) => void) | null = null;
+const settingsSearchHighlightClasses = ["rounded-md", "bg-primary/5", "transition-[box-shadow,background-color]", "duration-200", "settings-search-highlight-breathe"];
+
+const settingsSearchCategoryLabels = computed(() => Object.fromEntries(settingsCategoryNav.value.map((category) => [category.value, category.label])) as Record<SettingsCategory, string>);
+const settingsSearchEntries = computed(() =>
+  resolveSettingsSearchEntries(
+    [...SETTINGS_SEARCH_DEFINITIONS, ...createShortcutSettingsSearchDefinitions(SHORTCUT_DEFINITIONS)],
+    {
+      isWeb,
+      visibleCategories: new Set(settingsCategoryNav.value.map((category) => category.value)),
+    },
+    t,
+    settingsSearchCategoryLabels.value,
+  ),
+);
+const settingsSearchResults = computed(() => searchSettings(settingsSearchEntries.value, settingsSearchQuery.value, currentLocale()));
+const settingsSearchActive = computed(() => Boolean(settingsSearchQuery.value.trim()));
+const settingsSearchResultGroups = computed(() => {
+  const groups = new Map<SettingsCategory, { categoryLabel: string; results: (typeof settingsSearchResults.value)[number][] }>();
+  for (const result of settingsSearchResults.value) {
+    const group = groups.get(result.category) ?? { categoryLabel: result.categoryLabel, results: [] };
+    group.results.push(result);
+    groups.set(result.category, group);
+  }
+  return Array.from(groups, ([category, group]) => ({ category, ...group }));
+});
+
+function clearSettingsSearchHighlight() {
+  if (settingsSearchHighlightTimer) {
+    window.clearTimeout(settingsSearchHighlightTimer);
+    settingsSearchHighlightTimer = null;
+  }
+  if (highlightedSettingsSearchElement && settingsSearchHighlightAnimationHandler) {
+    highlightedSettingsSearchElement.removeEventListener("animationend", settingsSearchHighlightAnimationHandler);
+  }
+  settingsSearchHighlightAnimationHandler = null;
+  highlightedSettingsSearchElement?.classList.remove(...settingsSearchHighlightClasses);
+  highlightedSettingsSearchElement = null;
+  highlightedSettingsSearchTargetId.value = "";
+}
+
+function resetSettingsSearchState() {
+  settingsSearchQuery.value = "";
+  settingsSearchOpen.value = false;
+  settingsSearchActiveIndex.value = 0;
+  pendingSettingsSearchResult = null;
+  shortcutSearchQuery.value = "";
+  clearSettingsSearchHighlight();
+}
+
+function exitSettingsSearch() {
+  settingsSearchQuery.value = "";
+  settingsSearchOpen.value = false;
+}
+
+async function focusSettingsSearchInput() {
+  await nextTick();
+  settingsSearchInputContainerRef.value?.querySelector<HTMLInputElement>("input")?.focus();
+}
+
+function settingsSearchTargetClass(targetId: string): string {
+  return highlightedSettingsSearchTargetId.value === targetId ? "ring-2 ring-primary ring-offset-2 ring-offset-background transition-shadow" : "";
+}
+
+function onSettingsCategoryClick(category: SettingsCategory) {
+  settingsSearchOpen.value = false;
+  activeSettingsTab.value = category;
+}
+
+function normalizeSettingsSearchText(value: string | null | undefined): string {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function findSettingsSearchHighlightTarget(searchRoot: HTMLElement, title: string): HTMLElement {
+  const titleElement = Array.from(searchRoot.querySelectorAll<HTMLElement>("label, h3, h4")).find((element) => normalizeSettingsSearchText(element.textContent) === title);
+  if (!titleElement) return searchRoot;
+
+  let candidate = titleElement.parentElement;
+  while (candidate && candidate !== searchRoot) {
+    if (candidate.classList.contains("rounded-md") && candidate.classList.contains("border")) return candidate;
+    if (candidate.querySelector("input, button, [role='combobox'], textarea")) return candidate;
+    candidate = candidate.parentElement;
+  }
+  return titleElement;
+}
+
+async function revealSettingsSearchTarget(result: SettingsSearchEntry) {
+  await nextTick();
+  const searchRoot = settingsContentScrollRef.value?.querySelector<HTMLElement>(`[data-settings-search-id="${result.targetId}"]`);
+  if (!searchRoot) return;
+  const target = findSettingsSearchHighlightTarget(searchRoot, result.title);
+  target.scrollIntoView({ block: "center", behavior: "smooth" });
+  clearSettingsSearchHighlight();
+  if (target === searchRoot) {
+    highlightedSettingsSearchTargetId.value = result.targetId;
+  }
+  target.classList.add(...settingsSearchHighlightClasses);
+  highlightedSettingsSearchElement = target;
+
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+    settingsSearchHighlightTimer = window.setTimeout(clearSettingsSearchHighlight, 1500);
+    return;
+  }
+  settingsSearchHighlightAnimationHandler = (event) => {
+    if (event.animationName === "settings-search-highlight-breathe") clearSettingsSearchHighlight();
+  };
+  target.addEventListener("animationend", settingsSearchHighlightAnimationHandler);
+}
+
+async function selectSettingsSearchResult(result: SettingsSearchEntry) {
+  pendingSettingsSearchResult = result;
+  if (result.shortcutId) shortcutSearchQuery.value = result.title;
+  settingsSearchQuery.value = "";
+  settingsSearchOpen.value = false;
+  settingsSearchActiveIndex.value = 0;
+  if (activeSettingsTab.value === result.category) {
+    pendingSettingsSearchResult = null;
+    await revealSettingsSearchTarget(result);
+    return;
+  }
+  activeSettingsTab.value = result.category;
+}
+
+function onSettingsSearchKeydown(event: KeyboardEvent) {
+  const results = settingsSearchResults.value;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    exitSettingsSearch();
+    return;
+  }
+  if (!results.length) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    settingsSearchOpen.value = true;
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    settingsSearchActiveIndex.value = (settingsSearchActiveIndex.value + direction + results.length) % results.length;
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void selectSettingsSearchResult(results[settingsSearchActiveIndex.value] ?? results[0]);
+  }
 }
 
 async function resetSettingsContentScroll() {
@@ -1952,6 +2108,8 @@ watch(
   () => settingsVisible.value,
   async (open) => {
     if (open) {
+      resetSettingsSearchState();
+      void focusSettingsSearchInput();
       mcpPolicyLoading.value = true;
       mcpPolicyLoadError.value = "";
       aiConfigListMode.value = "list";
@@ -2004,6 +2162,8 @@ watch(
       if (!isWeb && activeSettingsTab.value === "ai" && aiIsCliProvider.value) void ensureCliMcpStatus();
       if (activeSettingsTab.value === "about") void refreshAppSupportInfo();
       await scrollToInitialSettingsSection();
+    } else {
+      resetSettingsSearchState();
     }
   },
   { immediate: true },
@@ -2060,6 +2220,16 @@ watch(activeSettingsTab, async (tab) => {
     checkLayoutDescTruncation();
     checkIconThemeDescTruncation();
   }
+  const result = pendingSettingsSearchResult;
+  if (result) {
+    pendingSettingsSearchResult = null;
+    await revealSettingsSearchTarget(result);
+  }
+});
+
+watch(settingsSearchQuery, (query) => {
+  settingsSearchActiveIndex.value = 0;
+  settingsSearchOpen.value = Boolean(query.trim());
 });
 
 // If the store finishes loading while the AI tab is already open (e.g. a retry
@@ -3130,7 +3300,10 @@ watch(
   },
 );
 
-onUnmounted(cleanupPreviewEditor);
+onUnmounted(() => {
+  cleanupPreviewEditor();
+  resetSettingsSearchState();
+});
 </script>
 
 <template>
@@ -3144,15 +3317,72 @@ onUnmounted(cleanupPreviewEditor);
       </DialogHeader>
 
       <div class="settings-layout flex min-h-0 flex-1 flex-col gap-3 overflow-hidden lg:flex-row">
-        <nav class="settingsCategoryNav settings-category-nav flex min-h-0 shrink-0 gap-1 overflow-x-auto border-b pb-3 lg:w-40 lg:flex-col lg:overflow-x-hidden lg:overflow-y-auto lg:border-b-0 lg:border-r lg:pb-0 lg:pr-3">
-          <button v-for="category in settingsCategoryNav" :key="category.value" type="button" :class="settingsCategoryButton(category.value)" @click="activeSettingsTab = category.value">
+        <nav class="settingsCategoryNav settings-category-nav flex min-h-0 shrink-0 gap-1 overflow-x-auto border-b pb-3 lg:w-52 lg:flex-col lg:overflow-x-hidden lg:overflow-y-auto lg:border-b-0 lg:border-r lg:pb-0 lg:pr-3">
+          <button v-for="category in settingsCategoryNav" :key="category.value" type="button" :class="settingsCategoryButton(category.value)" @click="onSettingsCategoryClick(category.value)">
             {{ category.label }}
           </button>
         </nav>
 
         <div class="min-w-0 flex-1 overflow-hidden px-1 flex flex-col">
-          <div ref="settingsContentScrollRef" class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 pr-2">
-            <section v-if="activeSettingsTab === 'editor'" class="flex flex-col gap-5 py-2">
+          <div class="shrink-0 px-2 pt-1 pb-3">
+            <div ref="settingsSearchInputContainerRef" class="relative">
+              <Search class="pointer-events-none absolute top-1/2 left-4 z-10 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                v-model="settingsSearchQuery"
+                type="text"
+                autocomplete="off"
+                role="combobox"
+                :aria-label="t('settings.searchSettings')"
+                :aria-expanded="settingsSearchActive ? 'true' : 'false'"
+                aria-controls="settings-search-results"
+                :aria-activedescendant="settingsSearchActive && settingsSearchResults.length ? `settings-search-result-${settingsSearchResults[settingsSearchActiveIndex]?.id}` : undefined"
+                :placeholder="t('settings.searchSettings')"
+                class="h-11 w-full rounded-xl border-border bg-muted/30 pr-10 pl-11 text-sm shadow-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:border-primary focus-visible:bg-background"
+                @focus="settingsSearchOpen = Boolean(settingsSearchQuery.trim())"
+                @keydown="onSettingsSearchKeydown"
+              />
+              <button v-if="settingsSearchQuery" type="button" class="absolute top-1/2 right-2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" :aria-label="t('settings.clearSettingsSearch')" @click="exitSettingsSearch">
+                <X class="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div v-if="settingsSearchActive" id="settings-search-results" role="listbox" :aria-label="t('settings.searchSettingsResults')" class="min-h-0 flex-1 overflow-y-auto px-1 pr-2">
+            <div class="mx-auto w-full max-w-3xl pb-4">
+              <button type="button" class="mb-4 inline-flex items-center gap-1.5 rounded-md px-1 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground" @click="exitSettingsSearch">
+                <ArrowLeft class="h-4 w-4" />
+                {{ t("settings.exitSettingsSearch") }}
+              </button>
+              <div v-if="settingsSearchResults.length === 0" class="rounded-xl border border-dashed px-4 py-12 text-center text-sm text-muted-foreground">
+                {{ t("settings.searchSettingsNoResults") }}
+              </div>
+              <div v-for="group in settingsSearchResultGroups" :key="group.category" class="mb-6 last:mb-0">
+                <div class="mb-2 flex items-center gap-2 px-1 text-sm font-medium text-muted-foreground">
+                  <span class="flex h-7 w-7 items-center justify-center rounded-md border bg-muted/40">
+                    <Settings class="h-4 w-4" />
+                  </span>
+                  {{ group.categoryLabel }}
+                </div>
+                <div class="overflow-hidden rounded-xl border bg-card p-1 shadow-sm">
+                  <button
+                    v-for="result in group.results"
+                    :id="`settings-search-result-${result.id}`"
+                    :key="result.id"
+                    type="button"
+                    role="option"
+                    :aria-selected="result.id === settingsSearchResults[settingsSearchActiveIndex]?.id"
+                    :class="['flex w-full flex-col gap-1 rounded-lg px-3 py-3 text-left outline-none transition-colors sm:px-4', result.id === settingsSearchResults[settingsSearchActiveIndex]?.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/70']"
+                    @mousedown.prevent
+                    @click="void selectSettingsSearchResult(result)"
+                  >
+                    <span class="text-sm font-medium">{{ result.title }}</span>
+                    <span v-if="result.description" class="line-clamp-2 text-xs text-muted-foreground">{{ result.description }}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else ref="settingsContentScrollRef" class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 pr-2">
+            <section v-if="activeSettingsTab === 'editor'" data-settings-search-id="editor" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('editor')]">
               <div class="grid gap-4 md:grid-cols-[1fr_auto]">
                 <!-- Font Family -->
                 <div class="space-y-2 min-w-0">
@@ -3469,7 +3699,7 @@ onUnmounted(cleanupPreviewEditor);
               </div>
             </section>
 
-            <section v-else-if="activeSettingsTab === 'formatter'" class="flex flex-col gap-5 py-2">
+            <section v-else-if="activeSettingsTab === 'formatter'" data-settings-search-id="formatter" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('formatter')]">
               <div class="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                 <div class="text-sm font-medium">
                   {{ t("settings.sqlFormatterEditorShortcuts") }}
@@ -3542,7 +3772,7 @@ onUnmounted(cleanupPreviewEditor);
               <SqlFormatterSettingsPanel v-model="editSqlFormatter" @validity-change="(value: boolean) => (sqlFormatterConfigValid = value)" />
             </section>
 
-            <section v-else-if="activeSettingsTab === 'appearance'" class="settings-appearance-section flex flex-col gap-4 py-2">
+            <section v-else-if="activeSettingsTab === 'appearance'" class="settings-appearance-section flex flex-col gap-4 py-2" data-settings-search-id="appearance" :class="settingsSearchTargetClass('appearance')">
               <div class="settings-appearance-top-grid">
                 <div class="settings-appearance-field min-w-0">
                   <div class="flex h-9 items-end">
@@ -4047,38 +4277,15 @@ onUnmounted(cleanupPreviewEditor);
                   <Switch id="exclusive-right-sidebar-panels" v-model="editToolbarItems.exclusiveRightSidebarPanels" />
                 </div>
                 <div class="grid grid-cols-3 gap-2 mt-2">
-                  <div
-                    v-for="item in [
-                      {
-                        key: 'dataTransfer',
-                        label: t('transfer.dataTransfer'),
-                      },
-                      {
-                        key: 'driverManager',
-                        label: t('toolbar.driverManager'),
-                      },
-                      { key: 'sqlFile', label: t('sqlFile.title') },
-                      { key: 'schemaDiff', label: t('diff.title') },
-                      { key: 'dataCompare', label: t('dataCompare.title') },
-                      { key: 'checkUpdates', label: t('updates.check') },
-                      { key: 'sqlLibrary', label: t('sqlLibrary.title') },
-                      { key: 'sqlFileTree', label: t('sqlFileTree.title') },
-                      { key: 'history', label: t('history.title') },
-                      { key: 'ai', label: 'AI' },
-                      { key: 'theme', label: t('toolbar.theme') },
-                      { key: 'github', label: 'GitHub' },
-                    ]"
-                    :key="item.key"
-                    class="flex items-center gap-2"
-                  >
+                  <div v-for="item in toolbarVisibilityItems" :key="item.key" class="flex items-center gap-2">
                     <Switch :id="`toolbar-${item.key}`" :model-value="(editToolbarItems as any)[item.key]" @update:model-value="(v: boolean) => ((editToolbarItems as any)[item.key] = v)" />
-                    <Label :for="`toolbar-${item.key}`" class="text-sm cursor-pointer">{{ item.label }}</Label>
+                    <Label :for="`toolbar-${item.key}`" class="text-sm cursor-pointer">{{ getToolbarVisibilityItemLabel(item) }}</Label>
                   </div>
                 </div>
               </div>
             </section>
 
-            <section v-else-if="activeSettingsTab === 'navigation'" class="flex flex-col gap-5 py-2">
+            <section v-else-if="activeSettingsTab === 'navigation'" data-settings-search-id="navigation" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('navigation')]">
               <div class="space-y-2">
                 <Label>{{ t("settings.sidebarActivation") }}</Label>
                 <div class="grid grid-cols-2 gap-2">
@@ -4315,7 +4522,7 @@ onUnmounted(cleanupPreviewEditor);
             </section>
 
             <!-- Data Tab -->
-            <section v-else-if="activeSettingsTab === 'data'" class="flex flex-col gap-5 py-2">
+            <section v-else-if="activeSettingsTab === 'data'" data-settings-search-id="data" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('data')]">
               <div class="space-y-3">
                 <div class="text-sm font-medium text-muted-foreground">
                   {{ t("settings.dataGridDisplay") }}
@@ -4504,7 +4711,7 @@ onUnmounted(cleanupPreviewEditor);
                 <div class="text-sm font-medium text-muted-foreground">
                   {{ t("settings.tableStructureSection") }}
                 </div>
-                <div ref="tableColumnTemplateSectionRef" class="space-y-2 rounded-md border bg-muted/20 px-3 py-2">
+                <div ref="tableColumnTemplateSectionRef" data-settings-search-id="table-column-templates" :class="['space-y-2 rounded-md border bg-muted/20 px-3 py-2', settingsSearchTargetClass('table-column-templates')]">
                   <div class="flex items-start justify-between gap-3">
                     <div class="space-y-1">
                       <Label>{{ t("settings.tableColumnTemplateFields") }}</Label>
@@ -4607,7 +4814,7 @@ onUnmounted(cleanupPreviewEditor);
               </div>
             </section>
 
-            <section v-else-if="activeSettingsTab === 'shortcuts'" class="flex flex-col gap-2 py-2">
+            <section v-else-if="activeSettingsTab === 'shortcuts'" data-settings-search-id="shortcuts" :class="['flex flex-col gap-2 py-2', settingsSearchTargetClass('shortcuts')]">
               <div class="relative">
                 <Search class="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input v-model="shortcutSearchQuery" autocomplete="off" :placeholder="t('settings.shortcutSearchPlaceholder')" class="h-9 pl-9 text-sm" />
@@ -4687,7 +4894,7 @@ onUnmounted(cleanupPreviewEditor);
             </section>
 
             <!-- Snippets Tab -->
-            <section v-else-if="activeSettingsTab === 'snippets'" class="flex flex-col gap-4 py-2">
+            <section v-else-if="activeSettingsTab === 'snippets'" data-settings-search-id="snippets" :class="['flex flex-col gap-4 py-2', settingsSearchTargetClass('snippets')]">
               <div class="flex items-center justify-between">
                 <p class="text-sm text-muted-foreground">
                   {{ t("settings.snippetsDescription") }}
@@ -4752,11 +4959,11 @@ onUnmounted(cleanupPreviewEditor);
               </div>
             </section>
 
-            <section v-else-if="activeSettingsTab === 'backups' && !isWeb" class="py-2">
+            <section v-else-if="activeSettingsTab === 'backups' && !isWeb" data-settings-search-id="backups" :class="['py-2', settingsSearchTargetClass('backups')]">
               <ScheduledDatabaseBackupSettings />
             </section>
 
-            <section v-else-if="activeSettingsTab === 'sync'" class="py-2">
+            <section v-else-if="activeSettingsTab === 'sync'" data-settings-search-id="sync" :class="['py-2', settingsSearchTargetClass('sync')]">
               <Tabs v-model="syncMethodTab" class="w-full">
                 <TabsList class="grid w-full grid-cols-2">
                   <TabsTrigger value="webdav">WebDAV</TabsTrigger>
@@ -4982,7 +5189,7 @@ onUnmounted(cleanupPreviewEditor);
             </section>
 
             <!-- AI Settings Tab -->
-            <section v-else-if="activeSettingsTab === 'ai'" class="flex flex-col gap-5 py-2">
+            <section v-else-if="activeSettingsTab === 'ai'" data-settings-search-id="ai" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('ai')]">
               <!-- Config List View -->
               <div v-if="aiConfigListMode === 'list'" class="space-y-4">
                 <div class="flex items-center justify-between">
@@ -5438,7 +5645,7 @@ onUnmounted(cleanupPreviewEditor);
               </div>
             </section>
 
-            <section v-else-if="activeSettingsTab === 'mcp'" class="flex flex-col gap-5 py-2">
+            <section v-else-if="activeSettingsTab === 'mcp'" data-settings-search-id="mcp" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('mcp')]">
               <div class="rounded-md border bg-muted/20 p-4">
                 <div class="flex items-start justify-between gap-4">
                   <div class="min-w-0 space-y-2">
@@ -5786,7 +5993,7 @@ onUnmounted(cleanupPreviewEditor);
               </div>
             </section>
 
-            <section v-else-if="activeSettingsTab === 'security' && isWeb" class="flex flex-col gap-5 py-2">
+            <section v-else-if="activeSettingsTab === 'security' && isWeb" data-settings-search-id="security" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('security')]">
               <div class="space-y-3">
                 <Label class="text-base">{{ t("auth.changePassword") }}</Label>
                 <p class="text-sm text-muted-foreground">
@@ -5801,11 +6008,11 @@ onUnmounted(cleanupPreviewEditor);
               </div>
             </section>
 
-            <section v-else-if="activeSettingsTab === 'tunnels'" class="flex flex-col gap-5 py-2">
+            <section v-else-if="activeSettingsTab === 'tunnels'" data-settings-search-id="tunnels" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('tunnels')]">
               <TunnelProfileManager />
             </section>
 
-            <section v-else-if="activeSettingsTab === 'about'" class="flex flex-col gap-5 py-2">
+            <section v-else-if="activeSettingsTab === 'about'" data-settings-search-id="about" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('about')]">
               <div class="rounded-lg border p-4">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div class="min-w-0 space-y-1">
