@@ -1425,6 +1425,7 @@ const settingsSearchEntries = computed(() =>
 );
 const settingsSearchResults = computed(() => searchSettings(settingsSearchEntries.value, settingsSearchQuery.value, currentLocale()));
 const settingsSearchActive = computed(() => Boolean(settingsSearchQuery.value.trim()));
+const settingsSearchVisible = computed(() => settingsSearchOpen.value && settingsSearchActive.value);
 const settingsSearchResultGroups = computed(() => {
   const groups = new Map<SettingsCategory, { categoryLabel: string; results: (typeof settingsSearchResults.value)[number][] }>();
   for (const result of settingsSearchResults.value) {
@@ -1477,6 +1478,10 @@ function onSettingsCategoryClick(category: SettingsCategory) {
   activeSettingsTab.value = category;
 }
 
+function applySettingsSearchRoute(result: SettingsSearchEntry) {
+  if (result.route?.syncMethodTab) syncMethodTab.value = result.route.syncMethodTab;
+}
+
 function normalizeSettingsSearchText(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -1520,6 +1525,7 @@ async function revealSettingsSearchTarget(result: SettingsSearchEntry) {
 async function selectSettingsSearchResult(result: SettingsSearchEntry) {
   pendingSettingsSearchResult = result;
   if (result.shortcutId) shortcutSearchQuery.value = result.title;
+  applySettingsSearchRoute(result);
   settingsSearchQuery.value = "";
   settingsSearchOpen.value = false;
   settingsSearchActiveIndex.value = 0;
@@ -3333,9 +3339,9 @@ onUnmounted(() => {
                 autocomplete="off"
                 role="combobox"
                 :aria-label="t('settings.searchSettings')"
-                :aria-expanded="settingsSearchActive ? 'true' : 'false'"
+                :aria-expanded="settingsSearchVisible ? 'true' : 'false'"
                 aria-controls="settings-search-results"
-                :aria-activedescendant="settingsSearchActive && settingsSearchResults.length ? `settings-search-result-${settingsSearchResults[settingsSearchActiveIndex]?.id}` : undefined"
+                :aria-activedescendant="settingsSearchVisible && settingsSearchResults.length ? `settings-search-result-${settingsSearchResults[settingsSearchActiveIndex]?.id}` : undefined"
                 :placeholder="t('settings.searchSettings')"
                 class="h-11 w-full rounded-xl border-border bg-muted/30 pr-10 pl-11 text-sm shadow-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:border-primary focus-visible:bg-background"
                 @focus="settingsSearchOpen = Boolean(settingsSearchQuery.trim())"
@@ -3346,7 +3352,7 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
-          <div v-if="settingsSearchActive" id="settings-search-results" role="listbox" :aria-label="t('settings.searchSettingsResults')" class="min-h-0 flex-1 overflow-y-auto px-1 pr-2">
+          <div v-if="settingsSearchVisible" id="settings-search-results" role="listbox" :aria-label="t('settings.searchSettingsResults')" class="min-h-0 flex-1 overflow-y-auto px-1 pr-2">
             <div class="mx-auto w-full max-w-3xl pb-4">
               <button type="button" class="mb-4 inline-flex items-center gap-1.5 rounded-md px-1 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground" @click="exitSettingsSearch">
                 <ArrowLeft class="h-4 w-4" />
@@ -4970,7 +4976,7 @@ onUnmounted(() => {
                   <TabsTrigger value="snippet">GitHub / Gitee</TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="webdav" class="mt-5 space-y-5">
+                <TabsContent value="webdav" data-settings-search-id="sync-webdav" :class="['mt-5 space-y-5', settingsSearchTargetClass('sync-webdav')]">
                   <div class="space-y-1">
                     <div class="flex items-center gap-2 text-sm font-medium">
                       <Cloud class="h-4 w-4 text-muted-foreground" />
@@ -5066,7 +5072,7 @@ onUnmounted(() => {
                   </div>
                 </TabsContent>
 
-                <TabsContent value="snippet" class="mt-5 space-y-5">
+                <TabsContent value="snippet" data-settings-search-id="sync-snippet" :class="['mt-5 space-y-5', settingsSearchTargetClass('sync-snippet')]">
                   <div class="space-y-1">
                     <div class="flex items-center justify-between gap-3">
                       <div class="flex items-center gap-2 text-sm font-medium">
