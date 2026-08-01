@@ -73,12 +73,7 @@ describe("settings search", () => {
   });
 
   it("preserves nested settings routes on resolved entries", () => {
-    const [entry] = resolveSettingsSearchEntries(
-      [{ id: "snippet", category: "sync", title: "GitHub", targetId: "sync-snippet", route: { syncMethodTab: "snippet" } }],
-      { isWeb: false, visibleCategories: new Set<SettingsCategory>(["sync"]) },
-      translate,
-      categoryLabels,
-    );
+    const [entry] = resolveSettingsSearchEntries([{ id: "snippet", category: "sync", title: "GitHub", targetId: "sync-snippet", route: { syncMethodTab: "snippet" } }], { isWeb: false, visibleCategories: new Set<SettingsCategory>(["sync"]) }, translate, categoryLabels);
 
     expect(entry).toMatchObject({ targetId: "sync-snippet", route: { syncMethodTab: "snippet" } });
   });
