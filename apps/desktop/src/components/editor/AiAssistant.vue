@@ -75,7 +75,7 @@ import { aiCancelStream, saveAiConversation, loadAiConversations, deleteAiConver
 import type { AiMessage } from "@/lib/backend/api";
 import type { AiConfigItem, AiEffortCapability, AiEffortOption, AiEffortSelection } from "@/types/ai";
 import type { ConnectionConfig, QueryTab, SavedSqlFile, TableInfo } from "@/types/database";
-import { useDatabaseOptions } from "@/composables/useDatabaseOptions";
+import { fetchNamespaceOptionsForConnection, useDatabaseOptions } from "@/composables/useDatabaseOptions";
 import { decodeSelectableDatabaseValue, encodeSelectableDatabaseValue, formatDatabaseLabel, resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
 import { normalizeSqliteNamespace } from "@/lib/database/sqliteNamespace";
 import { isSchemaAware } from "@/lib/database/databaseCapabilities";
@@ -804,11 +804,17 @@ function selectModeActionItem(action: AiAction) {
   modeActionOpen.value = false;
 }
 
-const { databaseOptions: allDbOptions, loadDatabaseOptions } = useDatabaseOptions();
+const { databaseOptions, loadDatabaseOptions } = useDatabaseOptions();
+
+// Dameng presents schemas as its top-level namespace, unlike the other
+// connection types that rely on the shared database-options loader.
+const aiDatabaseOptions = ref<Record<string, string[]>>({});
 
 const dbOptions = computed(() => {
-  if (!props.connection) return [];
-  return allDbOptions.value[props.connection.id] || [];
+  const connection = props.connection;
+  if (!connection) return [];
+  if (connection.db_type === "dameng") return aiDatabaseOptions.value[connection.id] || [];
+  return databaseOptions.value[connection.id] || [];
 });
 
 const dbSelectOptions = computed(() => {
@@ -835,9 +841,16 @@ const selectedDatabaseLabel = computed(() => {
   });
 });
 
-async function loadDatabases() {
-  if (!props.connection) return;
-  await loadDatabaseOptions(props.connection.id);
+async function loadDatabases(connection = props.connection): Promise<string[]> {
+  if (!connection) return [];
+  if (connection.db_type !== "dameng") {
+    await loadDatabaseOptions(connection.id);
+    return databaseOptions.value[connection.id] || [];
+  }
+  await connectionStore.ensureConnected(connection.id);
+  const options = await fetchNamespaceOptionsForConnection(connection.id, connection);
+  aiDatabaseOptions.value[connection.id] = options;
+  return options;
 }
 
 async function changeConnection(connectionId: string) {
@@ -851,8 +864,8 @@ async function changeConnection(connectionId: string) {
     queryStore.createTab(connectionId, resolveDefaultDatabase(conn, []));
   }
   try {
-    await loadDatabaseOptions(connectionId);
-    const database = resolveDefaultDatabase(conn, allDbOptions.value[connectionId] || []);
+    const options = await loadDatabases(conn);
+    const database = resolveDefaultDatabase(conn, options);
     if (tab) {
       queryStore.updateDatabase(tab.id, database);
     }
