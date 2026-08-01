@@ -55,7 +55,7 @@ import ConnectionGroupBadge from "@/components/connection/ConnectionGroupBadge.v
 import { useQueryStore } from "@/stores/queryStore";
 import { useToast } from "@/composables/useToast";
 import { useNavigationTargets } from "@/composables/useNavigationTargets";
-import { buildAiContext, runAgentStream, isVectorDbType, isValidActionForMode, defaultActionForMode, type AiAction, type AiAssistantMode, type AiSqlFileContext, type CustomPromptContext } from "@/lib/ai/ai";
+import { buildAiContext, resolveAiDatabaseTarget, runAgentStream, isVectorDbType, isValidActionForMode, defaultActionForMode, type AiAction, type AiAssistantMode, type AiSqlFileContext, type CustomPromptContext } from "@/lib/ai/ai";
 import { isAiConfigModelCandidate } from "@/lib/ai/aiConfigCandidates";
 import { orderAiConfigsForDisplay } from "@/lib/ai/aiConfigOrdering";
 import { effortSelectionEquals, runtimeEffortFromPreference } from "@/lib/ai/aiEffortPreference";
@@ -730,6 +730,7 @@ let confirmedWriteSqlText: string | undefined = undefined;
  *  to prevent a database change between confirmation and execution. */
 let confirmedConnectionId: string | undefined = undefined;
 let confirmedDatabase: string | undefined = undefined;
+let confirmedSchema: string | undefined = undefined;
 
 /** Clear all pending write-confirmation state. Call on every early-return
  *  and failure path so a stale grant cannot leak into a subsequent send(). */
@@ -738,9 +739,13 @@ function clearPendingWriteGrant() {
   confirmedWriteSqlText = undefined;
   confirmedConnectionId = undefined;
   confirmedDatabase = undefined;
+  confirmedSchema = undefined;
 }
 
-const productionContext = computed(() => productionContextForDatabase(props.connection, props.tab?.database));
+const productionContext = computed(() => {
+  const target = props.connection && props.tab ? resolveAiDatabaseTarget(props.tab, props.connection) : undefined;
+  return productionContextForDatabase(props.connection, target?.database);
+});
 
 function sendProposalReply(positive: boolean) {
   // Disable while a stream is in flight or no proposal is currently active.
@@ -762,7 +767,11 @@ function sendProposalReply(positive: boolean) {
     if (confirmedWriteSqlText) {
       allowWriteSqlForNextRun = true;
       confirmedConnectionId = props.connection?.id;
-      confirmedDatabase = props.tab?.database || "";
+      if (props.tab && props.connection) {
+        const target = resolveAiDatabaseTarget(props.tab, props.connection);
+        confirmedDatabase = target.database;
+        confirmedSchema = target.schema;
+      }
     }
     // When no SQL code block is found in the proposal, treat the
     // confirmation as rejected — we cannot bind the agent to a
@@ -1730,7 +1739,9 @@ async function send() {
         if (msg.role === "assistant" && msg.content) {
           confirmedWriteSqlText = extractSingleSqlCodeBlock(msg.content);
           confirmedConnectionId = connection.id;
-          confirmedDatabase = tab.database || "";
+          const target = resolveAiDatabaseTarget(tab, connection);
+          confirmedDatabase = target.database;
+          confirmedSchema = target.schema;
           break;
         }
         if (msg.role === "user") break;
@@ -1740,11 +1751,12 @@ async function send() {
       }
     }
   }
-  // Verify the connection/database haven't changed since the user confirmed
-  // the write operation. If the user switched connections or databases between
+  // Verify the connection/database/schema haven't changed since the user confirmed
+  // the write operation. If the user switched connections or namespaces between
   // confirmation and execution, the grant is void.
   if (allowWriteSqlForNextRun && confirmedWriteSqlText) {
-    if (confirmedConnectionId !== connection.id || confirmedDatabase !== (tab.database || "")) {
+    const target = resolveAiDatabaseTarget(tab, connection);
+    if (confirmedConnectionId !== connection.id || confirmedDatabase !== target.database || confirmedSchema !== target.schema) {
       allowWriteSqlForNextRun = false;
       confirmedWriteSqlText = undefined;
     }
@@ -1756,10 +1768,12 @@ async function send() {
   // state, so the values survive to be passed through to the backend.
   const confirmedTargetConnId = allowWriteSql ? confirmedConnectionId : undefined;
   const confirmedTargetDb = allowWriteSql ? confirmedDatabase : undefined;
+  const confirmedTargetSchema = allowWriteSql ? confirmedSchema : undefined;
   allowWriteSqlForNextRun = false;
   confirmedWriteSqlText = undefined;
   confirmedConnectionId = undefined;
   confirmedDatabase = undefined;
+  confirmedSchema = undefined;
   messages.value.push({ role: "assistant", content: "", sourceConnectionName: connection.name });
   const assistantIdx = messages.value.length - 1;
   const sessionId = uuid();
@@ -1783,6 +1797,7 @@ async function send() {
         confirmedWriteSql,
         confirmedConnectionId: confirmedTargetConnId,
         confirmedDatabase: confirmedTargetDb,
+        confirmedSchema: confirmedTargetSchema,
       },
       history,
       (event: AgentEvent) => {

@@ -14,6 +14,7 @@ pub struct CliAgentRunOptions {
     pub connection_id: String,
     pub connection_name: String,
     pub database: String,
+    pub schema: Option<String>,
     pub agent_mode: bool,
     pub allow_writes: bool,
     pub allow_dangerous: bool,
@@ -71,6 +72,9 @@ pub fn dbx_mcp_scope_env(options: &CliAgentRunOptions) -> Vec<(&'static str, Str
         ("DBX_MCP_SCOPE_CONNECTION_NAME", options.connection_name.clone()),
         ("DBX_MCP_SCOPE_DATABASE", options.database.clone()),
     ];
+    if let Some(schema) = options.schema.as_deref().filter(|schema| !schema.trim().is_empty()) {
+        env.push(("DBX_MCP_SCOPE_SCHEMA", schema.to_string()));
+    }
     if let Some(ref sql) = options.confirmed_write_sql {
         env.push(("DBX_MCP_CONFIRMED_WRITE_SQL", sql.clone()));
     }
@@ -87,6 +91,7 @@ mod scope_env_tests {
             connection_id: "connection-1".to_string(),
             connection_name: "staging".to_string(),
             database: "app".to_string(),
+            schema: Some("reporting".to_string()),
             agent_mode: true,
             allow_writes: true,
             allow_dangerous: true,
@@ -98,6 +103,7 @@ mod scope_env_tests {
         assert!(env.contains(&("DBX_MCP_CONFIRMED_WRITE_SQL", "DELETE FROM sessions WHERE id = 7".to_string())));
         assert!(env.contains(&("DBX_MCP_ALLOW_WRITES", "1".to_string())));
         assert!(env.contains(&("DBX_MCP_ALLOW_DANGEROUS_SQL", "1".to_string())));
+        assert!(env.contains(&("DBX_MCP_SCOPE_SCHEMA", "reporting".to_string())));
     }
 }
 

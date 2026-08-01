@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildAiContext } from "@/lib/ai/ai";
+import { buildAiContext, resolveAiDatabaseTarget } from "@/lib/ai/ai";
 import type { ConnectionConfig, QueryTab } from "@/types/database";
 
 const apiMock = vi.hoisted(() => ({
@@ -38,6 +38,19 @@ function queryTab(database: string): QueryTab {
   };
 }
 
+function damengConnection(database = "APPDB"): ConnectionConfig {
+  return {
+    id: "dameng-1",
+    name: "Dameng",
+    db_type: "dameng",
+    host: "127.0.0.1",
+    port: 5236,
+    username: "APP_USER",
+    password: "",
+    database,
+  };
+}
+
 describe("SQLite AI context routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -59,5 +72,28 @@ describe("SQLite AI context routing", () => {
 
     expect(context.database).toBe("analytics");
     expect(apiMock.listTables).toHaveBeenCalledWith("sqlite-1", "analytics", "analytics");
+  });
+});
+
+describe("Dameng AI context routing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMock.listTables.mockResolvedValue([]);
+    apiMock.getColumns.mockResolvedValue([]);
+    apiMock.listIndexes.mockResolvedValue([]);
+    apiMock.listForeignKeys.mockResolvedValue([]);
+  });
+
+  it("keeps the connection database while routing metadata through the selected schema", async () => {
+    const tab = { ...queryTab("REPORTING"), connectionId: "dameng-1" };
+    const context = await buildAiContext(tab, damengConnection());
+
+    expect(context.database).toBe("APPDB");
+    expect(context.schema).toBe("REPORTING");
+    expect(apiMock.listTables).toHaveBeenCalledWith("dameng-1", "APPDB", "REPORTING");
+  });
+
+  it("does not change non-Dameng namespace behavior", () => {
+    expect(resolveAiDatabaseTarget(queryTab("analytics"), sqliteConnection())).toEqual({ database: "analytics" });
   });
 });
