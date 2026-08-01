@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use dbx_core::cloud_sync::{
-    apply_sync_snapshot, build_sync_snapshot_with_saved_secrets, forget_snippet_token, forget_webdav_password,
-    forget_webdav_sync_secrets_passphrase as core_forget_webdav_sync_secrets_passphrase, resolve_snippet_token,
-    resolve_webdav_password, resolve_webdav_sync_secrets_passphrase, save_snippet_sync_id as core_save_snippet_sync_id,
-    save_snippet_token, save_webdav_password,
+    apply_sync_snapshot, build_sync_snapshot, build_sync_snapshot_with_saved_secrets, forget_snippet_token,
+    forget_webdav_password, forget_webdav_sync_secrets_passphrase as core_forget_webdav_sync_secrets_passphrase,
+    resolve_snippet_token, resolve_webdav_password, resolve_webdav_sync_secrets_passphrase,
+    save_snippet_sync_id as core_save_snippet_sync_id, save_snippet_token, save_webdav_password,
     save_webdav_sync_secrets_preference as core_save_webdav_sync_secrets_preference, snippet_saved_token_status,
     snippet_sync_settings as core_snippet_sync_settings, webdav_saved_password_status,
     webdav_sync_secrets_status as core_webdav_sync_secrets_status, ApplySnapshotOptions, ApplySnapshotSummary,
@@ -117,7 +117,10 @@ pub async fn webdav_sync_download(
     let apply_summary = apply_sync_snapshot(
         &state.storage,
         &snapshot,
-        ApplySnapshotOptions { secrets_passphrase: explicit_passphrase.or(saved_passphrase.as_deref()) },
+        ApplySnapshotOptions {
+            secrets_passphrase: explicit_passphrase.or(saved_passphrase.as_deref()),
+            restore_secrets: true,
+        },
     )
     .await?;
     Ok(WebDavDownloadResult {
@@ -181,27 +184,32 @@ pub async fn snippet_sync_upload(
     state: State<'_, Arc<AppState>>,
     mut config: SnippetSyncConfig,
     editor_settings: Option<serde_json::Value>,
+    snippet_passphrase: Option<String>,
+    include_secrets: bool,
     secrets_passphrase: Option<String>,
 ) -> Result<SnippetSyncSummary, String> {
     resolve_snippet_token(&state.storage, &mut config).await?;
-    let explicit_passphrase = secrets_passphrase.as_deref().map(str::trim).filter(|value| !value.is_empty());
-    let saved_passphrase = if explicit_passphrase.is_some() {
-        None
+    let secrets_passphrase = if include_secrets {
+        Some(
+            secrets_passphrase
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "A sync password is required when including synced secrets.".to_string())?,
+        )
     } else {
-        resolve_webdav_sync_secrets_passphrase(&state.storage).await?
+        None
     };
-    let passphrase = explicit_passphrase.or(saved_passphrase.as_deref());
     let snapshot =
-        build_sync_snapshot_with_saved_secrets(&state.storage, env!("CARGO_PKG_VERSION"), editor_settings, passphrase)
-            .await?;
+        build_sync_snapshot(&state.storage, env!("CARGO_PKG_VERSION"), editor_settings, secrets_passphrase).await?;
     let provider = config.provider;
     let client = SnippetSyncClient::new(config);
-    let mut summary = client.put_snapshot(&snapshot, passphrase).await?;
-    if let Some(legacy_id) = summary.legacy_cleanup_required_id.clone() {
+    let mut summary = client.put_snapshot(&snapshot, snippet_passphrase.as_deref(), secrets_passphrase).await?;
+    if summary.legacy_cleanup_required_id.is_some() {
         // Persist the new pointer before deleting the old plaintext remote.
         // A persistence failure therefore leaves the legacy snippet intact.
         core_save_snippet_sync_id(&state.storage, provider, Some(&summary.snippet_id)).await?;
-        if client.delete_legacy_snippet(&legacy_id).await.is_ok() {
+        if client.delete_legacy_snippet_if_unchanged(&summary).await.unwrap_or(false) {
             summary.legacy_cleanup_required_id = None;
         }
     }
@@ -212,19 +220,18 @@ pub async fn snippet_sync_upload(
 pub async fn snippet_sync_download(
     state: State<'_, Arc<AppState>>,
     mut config: SnippetSyncConfig,
+    snippet_passphrase: Option<String>,
+    restore_secrets: bool,
     secrets_passphrase: Option<String>,
 ) -> Result<SnippetDownloadResult, String> {
     resolve_snippet_token(&state.storage, &mut config).await?;
-    let explicit_passphrase = secrets_passphrase.as_deref().map(str::trim).filter(|value| !value.is_empty());
-    let saved_passphrase = if explicit_passphrase.is_some() {
-        None
-    } else {
-        resolve_webdav_sync_secrets_passphrase(&state.storage).await?
-    };
-    let passphrase = explicit_passphrase.or(saved_passphrase.as_deref());
-    let (snapshot, summary) = SnippetSyncClient::new(config).get_snapshot(passphrase).await?;
-    let apply_summary =
-        apply_sync_snapshot(&state.storage, &snapshot, ApplySnapshotOptions { secrets_passphrase: passphrase }).await?;
+    let (snapshot, summary) = SnippetSyncClient::new(config).get_snapshot(snippet_passphrase.as_deref()).await?;
+    let apply_summary = apply_sync_snapshot(
+        &state.storage,
+        &snapshot,
+        ApplySnapshotOptions { secrets_passphrase: secrets_passphrase.as_deref(), restore_secrets },
+    )
+    .await?;
     Ok(SnippetDownloadResult {
         summary,
         editor_settings: snapshot.editor_settings,

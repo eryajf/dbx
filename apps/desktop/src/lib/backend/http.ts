@@ -1702,17 +1702,21 @@ export async function saveSnippetSyncId(provider: SnippetProvider, snippetId?: s
   await post("/api/cloud-sync/snippet/save-id", { provider, snippetId });
 }
 
-export async function snippetSyncUpload(config: SnippetSyncConfig, editorSettings?: unknown, secretsPassphrase?: string): Promise<SnippetSyncSummary> {
+export async function snippetSyncUpload(config: SnippetSyncConfig, editorSettings?: unknown, snippetPassphrase?: string, includeSecrets = false, secretsPassphrase?: string): Promise<SnippetSyncSummary> {
   return post("/api/cloud-sync/snippet/upload", {
     config,
     editorSettings,
+    snippetPassphrase,
+    includeSecrets,
     secretsPassphrase,
   });
 }
 
-export async function snippetSyncDownload(config: SnippetSyncConfig, secretsPassphrase?: string): Promise<SnippetDownloadResult> {
+export async function snippetSyncDownload(config: SnippetSyncConfig, snippetPassphrase?: string, restoreSecrets = false, secretsPassphrase?: string): Promise<SnippetDownloadResult> {
   return post("/api/cloud-sync/snippet/download", {
     config,
+    snippetPassphrase,
+    restoreSecrets,
     secretsPassphrase,
   });
 }

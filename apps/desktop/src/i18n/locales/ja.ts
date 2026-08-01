@@ -4931,7 +4931,7 @@ export default withEnglishFallback({
     routineSourceOpenModeQueryTabDescription: "新しいデータタブでソースコードを開きます。SQLクエリの実行と同じ方法です。",
     routineSourceOpenModeDialog: "ポップアップウィンドウ",
     routineSourceOpenModeDialogDescription: "ポップアップダイアログでソースコードを開き、素早く表示・編集できます。",
-    syncSecretsSharedDescription: "GitHub Gist と Gitee スニペットでは、この同期パスワードによるスナップショット全体の暗号化が必須です。WebDAV では同期する機密情報のみを暗号化します。",
+    syncSecretsSharedDescription: "WebDAV では、このパスワードで含める認証情報を暗号化します。GitHub Gist と Gitee スニペットでは独立した暗号化と認証情報の設定を使用します。",
     syncSnippetTitle: "GitHub / Gitee スニペット同期",
     syncSnippetDescription: "同一の DBX スナップショットを非公開スニペットに保存します。初回アップロード時にスニペットが自動作成され、ID が保存されます。",
     syncSnippetProvider: "プロバイダー",

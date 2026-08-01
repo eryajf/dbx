@@ -163,6 +163,10 @@ pub struct ConnectionSecretSnapshot {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ApplySnapshotOptions<'a> {
     pub secrets_passphrase: Option<&'a str>,
+    /// Whether encrypted secrets in the remote snapshot may replace local
+    /// secrets. Metadata is always applied, but callers can explicitly keep
+    /// device-local credentials while restoring the rest of a snapshot.
+    pub restore_secrets: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -193,6 +197,11 @@ pub struct SnippetSyncSummary {
     /// could not be removed. The caller must surface this id for manual cleanup.
     #[serde(default)]
     pub legacy_cleanup_required_id: Option<String>,
+    /// Internal guard for a later legacy cleanup. It is deliberately omitted
+    /// from the API response so remote snapshot content never leaves the
+    /// process through a status payload.
+    #[serde(skip)]
+    legacy_cleanup_expected_content_hash: Option<String>,
 }
 
 pub async fn build_sync_snapshot(
@@ -257,10 +266,15 @@ pub async fn apply_sync_snapshot(
     }
 
     let encrypted_secrets_present = snapshot.encrypted_secrets.is_some();
-    let sensitive_payload = match (&snapshot.encrypted_secrets, normalized_passphrase(options.secrets_passphrase)) {
-        (Some(blob), Some(passphrase)) => Some(decrypt_sensitive_payload(blob, passphrase)?),
-        _ => None,
-    };
+    let sensitive_payload =
+        match (options.restore_secrets, &snapshot.encrypted_secrets, normalized_passphrase(options.secrets_passphrase))
+        {
+            (true, Some(blob), Some(passphrase)) => Some(decrypt_sensitive_payload(blob, passphrase)?),
+            // Restore intent is explicit. Do not silently leave a user with a
+            // partial restore when the remote snapshot contains secrets.
+            (true, Some(_), None) => return Err("A sync password is required to restore synced secrets.".to_string()),
+            _ => None,
+        };
 
     let mut connections = snapshot.connections.clone();
     for config in &mut connections {
@@ -292,6 +306,7 @@ pub struct WebDavClient {
 pub struct SnippetSyncClient {
     http: Client,
     config: SnippetSyncConfig,
+    api_base: String,
 }
 
 pub async fn webdav_saved_password_status(
@@ -509,16 +524,23 @@ impl WebDavClient {
 
 impl SnippetSyncClient {
     pub fn new(config: SnippetSyncConfig) -> Self {
-        Self { http: Client::new(), config }
+        let api_base = match config.provider {
+            SnippetProvider::GitHub => GITHUB_API_BASE,
+            SnippetProvider::Gitee => GITEE_API_BASE,
+        };
+        Self { http: Client::new(), config, api_base: api_base.to_string() }
+    }
+
+    #[cfg(test)]
+    fn with_api_base(config: SnippetSyncConfig, api_base: String) -> Self {
+        Self { http: Client::new(), config, api_base }
     }
 
     pub async fn test(&self) -> Result<(), String> {
         self.require_token()?;
         let url = match (self.config.provider, normalized_snippet_id(self.config.snippet_id.as_deref())) {
-            (SnippetProvider::GitHub, Some(id)) => format!("{GITHUB_API_BASE}/gists/{id}"),
-            (SnippetProvider::GitHub, None) => format!("{GITHUB_API_BASE}/user"),
-            (SnippetProvider::Gitee, Some(id)) => format!("{GITEE_API_BASE}/gists/{id}"),
-            (SnippetProvider::Gitee, None) => format!("{GITEE_API_BASE}/user"),
+            (_, Some(id)) => format!("{}/gists/{id}", self.api_base),
+            (_, None) => format!("{}/user", self.api_base),
         };
         let response = self.request(Method::GET, &url)?.send().await.map_err(|e| e.to_string())?;
         ensure_snippet_success(response.status(), "test")
@@ -527,10 +549,11 @@ impl SnippetSyncClient {
     pub async fn put_snapshot(
         &self,
         snapshot: &SyncSnapshot,
+        snippet_passphrase: Option<&str>,
         secrets_passphrase: Option<&str>,
     ) -> Result<SnippetSyncSummary, String> {
         self.require_token()?;
-        let passphrase = required_sync_passphrase(secrets_passphrase)?;
+        let passphrase = required_snippet_passphrase(snippet_passphrase)?;
         let existing_id = normalized_snippet_id(self.config.snippet_id.as_deref());
         let legacy_snapshot = if let Some(id) = existing_id {
             let existing_content = self.load_snippet_content(id).await?;
@@ -549,11 +572,20 @@ impl SnippetSyncClient {
                     );
                 }
                 let legacy_snapshot = parse_legacy_dbx_snapshot(&existing_content)?;
-                Some((id, prepare_legacy_snippet_snapshot(legacy_snapshot, passphrase)?))
+                Some((
+                    id,
+                    prepare_legacy_snippet_snapshot(legacy_snapshot, secrets_passphrase)?,
+                    content_hash(&existing_content),
+                ))
             } else {
                 if self.config.replace_legacy_snippet {
                     return Err("The selected snippet is already encrypted; use the normal upload action.".to_string());
                 }
+                // Refuse a PATCH unless the supplied snippet encryption
+                // password decrypts the currently stored envelope. Otherwise
+                // an accidental password change would silently lock out the
+                // user's other devices.
+                parse_snippet_snapshot(&existing_content, Some(passphrase))?;
                 None
             }
         } else {
@@ -563,7 +595,7 @@ impl SnippetSyncClient {
         // caller's current local state. Otherwise a stale second device could
         // erase the only copy of newer remote settings or saved SQL.
         let snapshot_to_upload =
-            snapshot_for_snippet_upload(snapshot, legacy_snapshot.as_ref().map(|(_, snapshot)| snapshot));
+            snapshot_for_snippet_upload(snapshot, legacy_snapshot.as_ref().map(|(_, snapshot, _)| snapshot));
         let encrypted = encrypt_snippet_snapshot(snapshot_to_upload, passphrase)?;
         let bytes = serde_json::to_vec_pretty(&encrypted).map_err(|e| e.to_string())?;
         let content = String::from_utf8(bytes.clone()).map_err(|e| e.to_string())?;
@@ -571,10 +603,8 @@ impl SnippetSyncClient {
         // snippet would retain its plaintext revision history on the provider.
         let update_id = if legacy_snapshot.is_some() { None } else { existing_id };
         let (method, url) = match (self.config.provider, update_id) {
-            (SnippetProvider::GitHub, Some(id)) => (Method::PATCH, format!("{GITHUB_API_BASE}/gists/{id}")),
-            (SnippetProvider::GitHub, None) => (Method::POST, format!("{GITHUB_API_BASE}/gists")),
-            (SnippetProvider::Gitee, Some(id)) => (Method::PATCH, format!("{GITEE_API_BASE}/gists/{id}")),
-            (SnippetProvider::Gitee, None) => (Method::POST, format!("{GITEE_API_BASE}/gists")),
+            (_, Some(id)) => (Method::PATCH, format!("{}/gists/{id}", self.api_base)),
+            (_, None) => (Method::POST, format!("{}/gists", self.api_base)),
         };
 
         let response = match self.config.provider {
@@ -606,7 +636,7 @@ impl SnippetSyncClient {
         // without a pointer to either remote snippet.
         let exported_at = Some(snapshot_to_upload.exported_at.clone());
         let app_version = Some(snapshot_to_upload.app_version.clone());
-        let legacy_cleanup_required_id = legacy_snapshot.as_ref().map(|(id, _)| (*id).to_string());
+        let legacy_cleanup_required_id = legacy_snapshot.as_ref().map(|(id, _, _)| (*id).to_string());
         Ok(SnippetSyncSummary {
             provider: self.config.provider,
             snippet_id,
@@ -614,6 +644,7 @@ impl SnippetSyncClient {
             exported_at,
             app_version,
             legacy_cleanup_required_id,
+            legacy_cleanup_expected_content_hash: legacy_snapshot.map(|(_, _, hash)| hash),
         })
     }
 
@@ -633,14 +664,14 @@ impl SnippetSyncClient {
             exported_at: Some(snapshot.exported_at.clone()),
             app_version: Some(snapshot.app_version.clone()),
             legacy_cleanup_required_id: None,
+            legacy_cleanup_expected_content_hash: None,
         };
         Ok((snapshot, summary))
     }
 
     async fn load_snippet_content(&self, snippet_id: &str) -> Result<String, String> {
         let url = match self.config.provider {
-            SnippetProvider::GitHub => format!("{GITHUB_API_BASE}/gists/{snippet_id}"),
-            SnippetProvider::Gitee => format!("{GITEE_API_BASE}/gists/{snippet_id}"),
+            _ => format!("{}/gists/{snippet_id}", self.api_base),
         };
         let response = self.request(Method::GET, &url)?.send().await.map_err(|e| e.to_string())?;
         let status = response.status();
@@ -660,19 +691,29 @@ impl SnippetSyncClient {
         Ok(content)
     }
 
-    pub async fn delete_legacy_snippet(&self, snippet_id: &str) -> Result<(), String> {
-        let url = match self.config.provider {
-            SnippetProvider::GitHub => format!("{GITHUB_API_BASE}/gists/{snippet_id}"),
-            SnippetProvider::Gitee => format!("{GITEE_API_BASE}/gists/{snippet_id}"),
+    pub async fn delete_legacy_snippet_if_unchanged(&self, summary: &SnippetSyncSummary) -> Result<bool, String> {
+        let Some(snippet_id) = summary.legacy_cleanup_required_id.as_deref() else {
+            return Ok(true);
         };
+        let Some(expected_hash) = summary.legacy_cleanup_expected_content_hash.as_deref() else {
+            return Err("Legacy snippet cleanup is missing its content verification state.".to_string());
+        };
+        // Neither provider documents a conditional DELETE for snippets. Read
+        // again after creating the replacement and refuse cleanup when another
+        // device has changed the legacy content in the meantime.
+        if content_hash(&self.load_snippet_content(snippet_id).await?) != expected_hash {
+            return Ok(false);
+        }
+        let url = format!("{}/gists/{snippet_id}", self.api_base);
         let response = self.request(Method::DELETE, &url)?.send().await.map_err(|e| e.to_string())?;
         // If the provider reports that the old snippet is already absent, the
         // cleanup goal is satisfied and the newly created encrypted snippet is
         // still safe to use.
         if response.status() == StatusCode::NOT_FOUND {
-            return Ok(());
+            return Ok(true);
         }
-        ensure_snippet_success(response.status(), "delete legacy snippet")
+        ensure_snippet_success(response.status(), "delete legacy snippet")?;
+        Ok(true)
     }
 
     fn require_token(&self) -> Result<&str, String> {
@@ -1019,9 +1060,9 @@ fn parse_snippet_snapshot(content: &str, secrets_passphrase: Option<&str>) -> Re
         {
             return Err("Unsupported encrypted sync snapshot format".to_string());
         }
-        let passphrase = required_sync_passphrase(secrets_passphrase)?;
+        let passphrase = required_snippet_passphrase(secrets_passphrase)?;
         let plaintext = decrypt_bytes_with_secret(&envelope.payload, passphrase)
-            .map_err(|_| "Failed to decrypt the synced snapshot. Check the sync password.".to_string())?;
+            .map_err(|_| "Failed to decrypt the synced snapshot. Check the snippet encryption password.".to_string())?;
         return serde_json::from_slice(&plaintext).map_err(|e| e.to_string());
     }
     serde_json::from_str(content).map_err(|e| e.to_string())
@@ -1057,11 +1098,15 @@ fn parse_legacy_dbx_snapshot(content: &str) -> Result<SyncSnapshot, String> {
     })
 }
 
-fn prepare_legacy_snippet_snapshot(mut snapshot: SyncSnapshot, passphrase: &str) -> Result<SyncSnapshot, String> {
+fn prepare_legacy_snippet_snapshot(
+    mut snapshot: SyncSnapshot,
+    secrets_passphrase: Option<&str>,
+) -> Result<SyncSnapshot, String> {
     if let Some(encrypted_secrets) = snapshot.encrypted_secrets.as_ref() {
-        // The legacy snapshot may contain an independently encrypted secrets
-        // payload. The migration UI has one password field, so require that it
-        // can decrypt this payload before deleting the only legacy copy.
+        // The legacy snapshot can contain an independently encrypted secrets
+        // payload. Verify it with its own password before deleting the only
+        // legacy copy; the outer snippet password is intentionally separate.
+        let passphrase = required_sync_passphrase(secrets_passphrase)?;
         let secrets = decrypt_sensitive_payload(encrypted_secrets, passphrase).map_err(|_| {
             "The legacy snapshot contains encrypted secrets that cannot be verified with this sync password, so it will not be replaced or deleted."
                 .to_string()
@@ -1136,6 +1181,17 @@ fn normalized_passphrase(passphrase: Option<&str>) -> Option<&str> {
 
 fn normalized_snippet_id(snippet_id: Option<&str>) -> Option<&str> {
     snippet_id.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn content_hash(content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn required_snippet_passphrase(passphrase: Option<&str>) -> Result<&str, String> {
+    normalized_passphrase(passphrase)
+        .ok_or_else(|| "A snippet encryption password is required for GitHub and Gitee sync.".to_string())
 }
 
 fn required_sync_passphrase(passphrase: Option<&str>) -> Result<&str, String> {
@@ -1269,7 +1325,7 @@ mod tests {
         resolve_webdav_sync_secrets_passphrase, save_snippet_sync_id, save_webdav_sync_secrets_preference,
         scrub_connection_secrets, snapshot_for_snippet_upload, snippet_file_content, snippet_response_id,
         snippet_sync_settings, webdav_sync_secrets_status, ApplySnapshotOptions, ConnectionSecretSnapshot,
-        SensitiveSyncPayload, SnippetProvider, SnippetSyncConfig,
+        SensitiveSyncPayload, SnippetProvider, SnippetSyncClient, SnippetSyncConfig, DEFAULT_SNIPPET_FILE_NAME,
     };
     use crate::ai::{AiApiStyle, AiAuthMethod, AiConfig, AiConfigItem};
     use crate::connection_secrets::NACOS_AUTH_PASSWORD_KEY;
@@ -1310,6 +1366,42 @@ mod tests {
 
     fn temp_db_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("dbx-cloud-sync-{name}-{}.db", uuid::Uuid::new_v4()))
+    }
+
+    async fn spawn_snippet_server(responses: Vec<String>) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut methods = Vec::new();
+            for body in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0_u8; 4096];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = socket.read(&mut chunk).await.unwrap();
+                    assert!(read > 0, "request ended before headers were complete");
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                let request = String::from_utf8(request).unwrap();
+                methods.push(request.lines().next().unwrap().to_string());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+            methods
+        });
+        (format!("http://{address}"), server)
+    }
+
+    fn github_snippet_response(content: &str) -> String {
+        serde_json::json!({
+            "files": { DEFAULT_SNIPPET_FILE_NAME: { "content": content } }
+        })
+        .to_string()
     }
 
     #[test]
@@ -1636,6 +1728,134 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn encrypted_snippet_can_exclude_secrets_and_keep_local_credentials_on_restore() {
+        let source = Storage::open(&temp_db_path("snippet-without-secrets-source")).await.unwrap();
+        source.save_connections(&[postgres_connection("pg", "remote-secret")]).await.unwrap();
+        let snapshot = build_sync_snapshot(&source, "test-version", None, None).await.unwrap();
+        assert!(snapshot.encrypted_secrets.is_none());
+
+        let encrypted = encrypt_snippet_snapshot(&snapshot, "snippet-password").unwrap();
+        let restored =
+            parse_snippet_snapshot(&serde_json::to_string(&encrypted).unwrap(), Some("snippet-password")).unwrap();
+        let target = Storage::open(&temp_db_path("snippet-without-secrets-target")).await.unwrap();
+        target.save_connections(&[postgres_connection("pg", "local-secret")]).await.unwrap();
+
+        let summary = apply_sync_snapshot(
+            &target,
+            &restored,
+            ApplySnapshotOptions { secrets_passphrase: None, restore_secrets: false },
+        )
+        .await
+        .unwrap();
+        assert!(!summary.encrypted_secrets_present);
+        assert!(!summary.secrets_applied);
+        assert_eq!(target.load_connections().await.unwrap()[0].password, "local-secret");
+    }
+
+    #[tokio::test]
+    async fn skipping_snippet_secret_restore_keeps_local_credentials() {
+        let source = Storage::open(&temp_db_path("snippet-skip-secrets-source")).await.unwrap();
+        source.save_connections(&[postgres_connection("pg", "remote-secret")]).await.unwrap();
+        let snapshot = build_sync_snapshot(&source, "test-version", None, Some("secrets-password")).await.unwrap();
+        assert!(snapshot.encrypted_secrets.is_some());
+
+        let encrypted = encrypt_snippet_snapshot(&snapshot, "snippet-password").unwrap();
+        let restored =
+            parse_snippet_snapshot(&serde_json::to_string(&encrypted).unwrap(), Some("snippet-password")).unwrap();
+        let target = Storage::open(&temp_db_path("snippet-skip-secrets-target")).await.unwrap();
+        target.save_connections(&[postgres_connection("pg", "local-secret")]).await.unwrap();
+
+        let summary = apply_sync_snapshot(
+            &target,
+            &restored,
+            ApplySnapshotOptions { secrets_passphrase: None, restore_secrets: false },
+        )
+        .await
+        .unwrap();
+        assert!(summary.encrypted_secrets_present);
+        assert!(!summary.secrets_applied);
+        assert_eq!(target.load_connections().await.unwrap()[0].password, "local-secret");
+    }
+
+    #[tokio::test]
+    async fn existing_encrypted_snippet_rejects_wrong_password_without_patch() {
+        let storage = Storage::open(&temp_db_path("snippet-password-guard")).await.unwrap();
+        let snapshot = build_sync_snapshot(&storage, "test-version", None, None).await.unwrap();
+        let encrypted = encrypt_snippet_snapshot(&snapshot, "correct-password").unwrap();
+        let (base, server) =
+            spawn_snippet_server(vec![github_snippet_response(&serde_json::to_string(&encrypted).unwrap())]).await;
+        let client = SnippetSyncClient::with_api_base(
+            SnippetSyncConfig {
+                provider: SnippetProvider::GitHub,
+                token: Some("test-token".to_string()),
+                snippet_id: Some("existing-id".to_string()),
+                replace_legacy_snippet: false,
+            },
+            base,
+        );
+
+        assert!(client.put_snapshot(&snapshot, Some("wrong-password"), None).await.is_err());
+        assert_eq!(server.await.unwrap(), vec!["GET /gists/existing-id HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn existing_encrypted_snippet_accepts_correct_password_before_patch() {
+        let storage = Storage::open(&temp_db_path("snippet-password-update")).await.unwrap();
+        let snapshot = build_sync_snapshot(&storage, "test-version", None, None).await.unwrap();
+        let encrypted = encrypt_snippet_snapshot(&snapshot, "correct-password").unwrap();
+        let (base, server) = spawn_snippet_server(vec![
+            github_snippet_response(&serde_json::to_string(&encrypted).unwrap()),
+            serde_json::json!({ "id": "existing-id" }).to_string(),
+        ])
+        .await;
+        let client = SnippetSyncClient::with_api_base(
+            SnippetSyncConfig {
+                provider: SnippetProvider::GitHub,
+                token: Some("test-token".to_string()),
+                snippet_id: Some("existing-id".to_string()),
+                replace_legacy_snippet: false,
+            },
+            base,
+        );
+
+        client.put_snapshot(&snapshot, Some("correct-password"), None).await.unwrap();
+        assert_eq!(server.await.unwrap(), vec!["GET /gists/existing-id HTTP/1.1", "PATCH /gists/existing-id HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn legacy_migration_skips_delete_when_remote_content_changes() {
+        let storage = Storage::open(&temp_db_path("legacy-snippet-change-guard")).await.unwrap();
+        let snapshot = build_sync_snapshot(&storage, "test-version", None, None).await.unwrap();
+        let legacy_content = serde_json::to_string(&snapshot).unwrap();
+        let changed_content =
+            serde_json::to_string(&build_sync_snapshot(&storage, "newer-version", None, None).await.unwrap()).unwrap();
+        let (base, server) = spawn_snippet_server(vec![
+            github_snippet_response(&legacy_content),
+            serde_json::json!({ "id": "new-id" }).to_string(),
+            github_snippet_response(&changed_content),
+        ])
+        .await;
+        let client = SnippetSyncClient::with_api_base(
+            SnippetSyncConfig {
+                provider: SnippetProvider::GitHub,
+                token: Some("test-token".to_string()),
+                snippet_id: Some("legacy-id".to_string()),
+                replace_legacy_snippet: true,
+            },
+            base,
+        );
+
+        let summary = client.put_snapshot(&snapshot, Some("snippet-password"), None).await.unwrap();
+        assert_eq!(summary.snippet_id, "new-id");
+        assert_eq!(summary.legacy_cleanup_required_id.as_deref(), Some("legacy-id"));
+        assert!(!client.delete_legacy_snippet_if_unchanged(&summary).await.unwrap());
+        assert_eq!(
+            server.await.unwrap(),
+            vec!["GET /gists/legacy-id HTTP/1.1", "POST /gists HTTP/1.1", "GET /gists/legacy-id HTTP/1.1",]
+        );
+    }
+
+    #[tokio::test]
     async fn legacy_snippet_migration_preserves_remote_snapshot() {
         let storage = Storage::open(&temp_db_path("legacy-snippet-migration-guard")).await.unwrap();
         let local_snapshot = build_sync_snapshot(&storage, "local-version", None, None).await.unwrap();
@@ -1665,8 +1885,8 @@ mod tests {
         let content = serde_json::to_string(&remote_snapshot).unwrap();
 
         let legacy = parse_legacy_dbx_snapshot(&content).unwrap();
-        assert!(prepare_legacy_snippet_snapshot(legacy.clone(), "wrong-pass").is_err());
-        let prepared = prepare_legacy_snippet_snapshot(legacy, "remote-pass").unwrap();
+        assert!(prepare_legacy_snippet_snapshot(legacy.clone(), Some("wrong-pass")).is_err());
+        let prepared = prepare_legacy_snippet_snapshot(legacy, Some("remote-pass")).unwrap();
         let secrets = decrypt_sensitive_payload(prepared.encrypted_secrets.as_ref().unwrap(), "remote-pass").unwrap();
         assert!(secrets.connection_secrets.iter().any(|secret| secret.secret == "db-secret"));
     }
@@ -1845,9 +2065,13 @@ mod tests {
 
         // Applying with the passphrase restores the full profile on the target.
         let target = Storage::open(&temp_db_path("tunnel-profiles-dst")).await.unwrap();
-        apply_sync_snapshot(&target, &snapshot, ApplySnapshotOptions { secrets_passphrase: Some("sync-pass") })
-            .await
-            .unwrap();
+        apply_sync_snapshot(
+            &target,
+            &snapshot,
+            ApplySnapshotOptions { secrets_passphrase: Some("sync-pass"), restore_secrets: true },
+        )
+        .await
+        .unwrap();
         assert_eq!(target.load_tunnel_profiles().await.unwrap(), vec![profile]);
     }
 

@@ -3,10 +3,10 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::Json;
 use dbx_core::cloud_sync::{
-    apply_sync_snapshot, build_sync_snapshot_with_saved_secrets, forget_snippet_token, forget_webdav_password,
-    forget_webdav_sync_secrets_passphrase as core_forget_webdav_sync_secrets_passphrase, resolve_snippet_token,
-    resolve_webdav_password, resolve_webdav_sync_secrets_passphrase, save_snippet_sync_id as core_save_snippet_sync_id,
-    save_snippet_token, save_webdav_password,
+    apply_sync_snapshot, build_sync_snapshot, build_sync_snapshot_with_saved_secrets, forget_snippet_token,
+    forget_webdav_password, forget_webdav_sync_secrets_passphrase as core_forget_webdav_sync_secrets_passphrase,
+    resolve_snippet_token, resolve_webdav_password, resolve_webdav_sync_secrets_passphrase,
+    save_snippet_sync_id as core_save_snippet_sync_id, save_snippet_token, save_webdav_password,
     save_webdav_sync_secrets_preference as core_save_webdav_sync_secrets_preference, snippet_saved_token_status,
     snippet_sync_settings as core_snippet_sync_settings, webdav_saved_password_status,
     webdav_sync_secrets_status as core_webdav_sync_secrets_status, ApplySnapshotOptions, ApplySnapshotSummary,
@@ -90,6 +90,9 @@ pub struct SaveSnippetTokenRequest {
 pub struct SnippetUploadRequest {
     pub config: SnippetSyncConfig,
     pub editor_settings: Option<serde_json::Value>,
+    pub snippet_passphrase: Option<String>,
+    #[serde(default)]
+    pub include_secrets: bool,
     pub secrets_passphrase: Option<String>,
 }
 
@@ -97,6 +100,9 @@ pub struct SnippetUploadRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SnippetDownloadRequest {
     pub config: SnippetSyncConfig,
+    pub snippet_passphrase: Option<String>,
+    #[serde(default)]
+    pub restore_secrets: bool,
     pub secrets_passphrase: Option<String>,
 }
 
@@ -197,7 +203,10 @@ pub async fn webdav_sync_download(
     let apply_summary = apply_sync_snapshot(
         &state.app.storage,
         &snapshot,
-        ApplySnapshotOptions { secrets_passphrase: explicit_passphrase.or(saved_passphrase.as_deref()) },
+        ApplySnapshotOptions {
+            secrets_passphrase: explicit_passphrase.or(saved_passphrase.as_deref()),
+            restore_secrets: true,
+        },
     )
     .await
     .map_err(AppError::from)?;
@@ -263,30 +272,33 @@ pub async fn snippet_sync_upload(
     Json(mut req): Json<SnippetUploadRequest>,
 ) -> Result<Json<SnippetSyncSummary>, AppError> {
     resolve_snippet_token(&state.app.storage, &mut req.config).await.map_err(AppError::from)?;
-    let explicit_passphrase = req.secrets_passphrase.as_deref().map(str::trim).filter(|value| !value.is_empty());
-    let saved_passphrase = if explicit_passphrase.is_some() {
-        None
+    let secrets_passphrase = if req.include_secrets {
+        Some(
+            req.secrets_passphrase
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| AppError::from("A sync password is required when including synced secrets."))?,
+        )
     } else {
-        resolve_webdav_sync_secrets_passphrase(&state.app.storage).await.map_err(AppError::from)?
+        None
     };
-    let passphrase = explicit_passphrase.or(saved_passphrase.as_deref());
-    let snapshot = build_sync_snapshot_with_saved_secrets(
-        &state.app.storage,
-        env!("CARGO_PKG_VERSION"),
-        req.editor_settings,
-        passphrase,
-    )
-    .await
-    .map_err(AppError::from)?;
+    let snapshot =
+        build_sync_snapshot(&state.app.storage, env!("CARGO_PKG_VERSION"), req.editor_settings, secrets_passphrase)
+            .await
+            .map_err(AppError::from)?;
     let provider = req.config.provider;
     let client = SnippetSyncClient::new(req.config);
-    let mut summary = client.put_snapshot(&snapshot, passphrase).await.map_err(AppError::from)?;
-    if let Some(legacy_id) = summary.legacy_cleanup_required_id.clone() {
+    let mut summary = client
+        .put_snapshot(&snapshot, req.snippet_passphrase.as_deref(), secrets_passphrase)
+        .await
+        .map_err(AppError::from)?;
+    if summary.legacy_cleanup_required_id.is_some() {
         // Keep the replacement id durable before the destructive cleanup.
         core_save_snippet_sync_id(&state.app.storage, provider, Some(&summary.snippet_id))
             .await
             .map_err(AppError::from)?;
-        if client.delete_legacy_snippet(&legacy_id).await.is_ok() {
+        if client.delete_legacy_snippet_if_unchanged(&summary).await.unwrap_or(false) {
             summary.legacy_cleanup_required_id = None;
         }
     }
@@ -298,19 +310,20 @@ pub async fn snippet_sync_download(
     Json(mut req): Json<SnippetDownloadRequest>,
 ) -> Result<Json<SnippetDownloadResult>, AppError> {
     resolve_snippet_token(&state.app.storage, &mut req.config).await.map_err(AppError::from)?;
-    let explicit_passphrase = req.secrets_passphrase.as_deref().map(str::trim).filter(|value| !value.is_empty());
-    let saved_passphrase = if explicit_passphrase.is_some() {
-        None
-    } else {
-        resolve_webdav_sync_secrets_passphrase(&state.app.storage).await.map_err(AppError::from)?
-    };
-    let passphrase = explicit_passphrase.or(saved_passphrase.as_deref());
-    let (snapshot, summary) =
-        SnippetSyncClient::new(req.config).get_snapshot(passphrase).await.map_err(AppError::from)?;
-    let apply_summary =
-        apply_sync_snapshot(&state.app.storage, &snapshot, ApplySnapshotOptions { secrets_passphrase: passphrase })
-            .await
-            .map_err(AppError::from)?;
+    let (snapshot, summary) = SnippetSyncClient::new(req.config)
+        .get_snapshot(req.snippet_passphrase.as_deref())
+        .await
+        .map_err(AppError::from)?;
+    let apply_summary = apply_sync_snapshot(
+        &state.app.storage,
+        &snapshot,
+        ApplySnapshotOptions {
+            secrets_passphrase: req.secrets_passphrase.as_deref(),
+            restore_secrets: req.restore_secrets,
+        },
+    )
+    .await
+    .map_err(AppError::from)?;
     Ok(Json(SnippetDownloadResult {
         summary,
         editor_settings: snapshot.editor_settings,

@@ -1676,6 +1676,10 @@ const snippetId = ref("");
 const snippetToken = ref("");
 const snippetRememberToken = ref(localStorage.getItem(`dbx-snippet-remember-token-${snippetProvider.value}`) === "true");
 const snippetHasSavedToken = ref(false);
+const snippetPassphrase = ref("");
+const snippetSecretsPassphrase = ref("");
+const snippetIncludeSecrets = ref(false);
+const snippetRestoreSecrets = ref(false);
 const snippetBusy = ref<"" | "test" | "upload" | "download" | "migrate">("");
 const snippetMessage = ref("");
 const snippetError = ref(false);
@@ -1684,7 +1688,11 @@ const snippetSyncSettingsLoading = ref(true);
 
 const webdavReady = computed(() => !!webdavEndpoint.value.trim() && !webdavBusy.value && (!webdavSyncSecrets.value || !!webdavSecretsPassphrase.value.trim() || webdavHasSavedSecretsPassphrase.value));
 const snippetReady = computed(() => !snippetSyncSettingsLoading.value && !snippetBusy.value && (!!snippetToken.value.trim() || snippetHasSavedToken.value));
-const snippetProtectedReady = computed(() => snippetReady.value && webdavSyncSecrets.value && (!!webdavSecretsPassphrase.value.trim() || webdavHasSavedSecretsPassphrase.value));
+const snippetUploadReady = computed(() => snippetReady.value && !!snippetPassphrase.value.trim() && (!snippetIncludeSecrets.value || !!snippetSecretsPassphrase.value.trim()));
+// Legacy plaintext snippets have no outer encryption password. Let the
+// backend require one only after it detects an encrypted envelope so those
+// snapshots remain recoverable for migration.
+const snippetDownloadReady = computed(() => snippetReady.value && (!snippetRestoreSecrets.value || !!snippetSecretsPassphrase.value.trim()));
 
 function currentSnippetConfig(replaceLegacySnippet = false): SnippetSyncConfig {
   return {
@@ -1757,7 +1765,6 @@ async function runSnippetAction(kind: "test" | "upload" | "download" | "migrate"
     localStorage.setItem(`dbx-snippet-remember-token-${snippetProvider.value}`, String(snippetRememberToken.value));
     if (persistCurrentSnippetId) await persistSnippetSyncId();
     await applySnippetTokenPreference();
-    await applyWebDavSyncSecretsPreference();
     snippetMessage.value = await action();
   } catch (e: any) {
     snippetMessage.value = e?.message || String(e);
@@ -1784,7 +1791,7 @@ async function uploadSnippetSnapshot() {
     return;
   }
   await runSnippetAction("upload", async () => {
-    const summary = await snippetSyncUpload(currentSnippetConfig(), settingsStore.editorSettings, webdavSyncSecrets.value ? webdavSecretsPassphrase.value : undefined);
+    const summary = await snippetSyncUpload(currentSnippetConfig(), settingsStore.editorSettings, snippetPassphrase.value, snippetIncludeSecrets.value, snippetIncludeSecrets.value ? snippetSecretsPassphrase.value : undefined);
     snippetId.value = summary.snippetId;
     await persistSnippetSyncId();
     return t("settings.syncSnippetUploadSuccess", {
@@ -1802,7 +1809,7 @@ async function migrateLegacySnippet() {
     async () => {
       const config = currentSnippetConfig(true);
       config.snippetId = id;
-      const summary = await snippetSyncUpload(config, settingsStore.editorSettings, webdavSyncSecrets.value ? webdavSecretsPassphrase.value : undefined);
+      const summary = await snippetSyncUpload(config, settingsStore.editorSettings, snippetPassphrase.value, snippetIncludeSecrets.value, snippetSecretsPassphrase.value || undefined);
       snippetId.value = summary.snippetId;
       await persistSnippetSyncId();
       legacySnippetId.value = "";
@@ -1818,7 +1825,7 @@ async function migrateLegacySnippet() {
 async function downloadSnippetSnapshot() {
   if (!snippetId.value.trim() || !window.confirm(t("settings.syncDownloadConfirm"))) return;
   await runSnippetAction("download", async () => {
-    const result = await snippetSyncDownload(currentSnippetConfig(), webdavSyncSecrets.value ? webdavSecretsPassphrase.value : undefined);
+    const result = await snippetSyncDownload(currentSnippetConfig(), snippetPassphrase.value, snippetRestoreSecrets.value, snippetRestoreSecrets.value ? snippetSecretsPassphrase.value : undefined);
     if (result.editorSettings && typeof result.editorSettings === "object") settingsStore.updateEditorSettings(result.editorSettings as any);
     await settingsStore.updateDesktopSettings(result.desktopSettings);
     await connectionStore.initFromDisk();
@@ -4984,6 +4991,30 @@ onUnmounted(cleanupPreviewEditor);
                         {{ t("settings.syncSnippetTokenDescription") }}
                       </p>
                     </div>
+                    <div class="space-y-2 md:col-span-2">
+                      <Label for="snippet-sync-passphrase">{{ t("settings.syncSnippetPassphrase") }}</Label>
+                      <PasswordInput id="snippet-sync-passphrase" v-model="snippetPassphrase" autocomplete="new-password" />
+                      <p class="text-xs text-muted-foreground">
+                        {{ t("settings.syncSnippetPassphraseDescription") }}
+                      </p>
+                    </div>
+                    <div class="space-y-2 md:col-span-2">
+                      <label class="flex items-center gap-2 text-xs text-muted-foreground">
+                        <input v-model="snippetIncludeSecrets" type="checkbox" class="h-4 w-4 shrink-0 accent-primary" />
+                        <span>{{ t("settings.syncSnippetIncludeSecrets") }}</span>
+                      </label>
+                      <label class="flex items-center gap-2 text-xs text-muted-foreground">
+                        <input v-model="snippetRestoreSecrets" type="checkbox" class="h-4 w-4 shrink-0 accent-primary" />
+                        <span>{{ t("settings.syncSnippetRestoreSecrets") }}</span>
+                      </label>
+                    </div>
+                    <div v-if="snippetIncludeSecrets || snippetRestoreSecrets || legacySnippetId" class="space-y-2 md:col-span-2">
+                      <Label for="snippet-sync-secrets-passphrase">{{ t("settings.syncSecretsPassphrase") }}</Label>
+                      <PasswordInput id="snippet-sync-secrets-passphrase" v-model="snippetSecretsPassphrase" autocomplete="new-password" />
+                      <p class="text-xs text-muted-foreground">
+                        {{ t("settings.syncSecretsPassphraseDescription") }}
+                      </p>
+                    </div>
                     <div class="flex flex-wrap items-center justify-between gap-3 md:col-span-2">
                       <div v-if="snippetMessage" class="min-w-0 flex-1 text-xs" :class="snippetError ? 'text-destructive' : 'text-green-600 dark:text-green-400'">
                         {{ snippetMessage }}
@@ -4994,17 +5025,17 @@ onUnmounted(cleanupPreviewEditor);
                           <Loader2 v-if="snippetBusy === 'test'" class="mr-1 h-3 w-3 animate-spin" />
                           {{ t("settings.syncTest") }}
                         </Button>
-                        <Button variant="outline" size="sm" :disabled="!snippetReady || !snippetId.trim()" @click="downloadSnippetSnapshot">
+                        <Button variant="outline" size="sm" :disabled="!snippetDownloadReady || !snippetId.trim()" @click="downloadSnippetSnapshot">
                           <Loader2 v-if="snippetBusy === 'download'" class="mr-1 h-3 w-3 animate-spin" />
                           <Download v-else class="mr-1 h-3 w-3" />
                           {{ t("settings.syncDownload") }}
                         </Button>
-                        <Button size="sm" :disabled="!snippetProtectedReady" @click="uploadSnippetSnapshot">
+                        <Button size="sm" :disabled="!snippetUploadReady" @click="uploadSnippetSnapshot">
                           <Loader2 v-if="snippetBusy === 'upload'" class="mr-1 h-3 w-3 animate-spin" />
                           <Upload v-else class="mr-1 h-3 w-3" />
                           {{ t("settings.syncUpload") }}
                         </Button>
-                        <Button v-if="legacySnippetId" variant="destructive" size="sm" :disabled="!snippetProtectedReady" @click="migrateLegacySnippet">
+                        <Button v-if="legacySnippetId" variant="destructive" size="sm" :disabled="!snippetUploadReady" @click="migrateLegacySnippet">
                           <Loader2 v-if="snippetBusy === 'migrate'" class="mr-1 h-3 w-3 animate-spin" />
                           {{ t("settings.syncSnippetMigrateLegacy") }}
                         </Button>

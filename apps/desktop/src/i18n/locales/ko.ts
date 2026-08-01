@@ -4516,7 +4516,7 @@ export default withEnglishFallback({
     syncSecretNotice: "기본적으로 DBX는 연결 세부 정보와 설정만 동기화합니다. 데이터베이스 비밀번호, SSH 비밀번호, 프록시 비밀번호, HTTP 터널 토큰, 연결 문자열 및 AI API 키는 로컬에 유지됩니다.",
     syncSecrets: "암호화된 비밀 동기화",
     syncSecretsDescription: "활성화하면 DBX가 데이터베이스 비밀번호, SSH 비밀번호, 프록시 비밀번호, HTTP 터널 토큰 및 AI API 키를 암호화하여 원격 저장소에 업로드합니다.",
-    syncSecretsSharedDescription: "GitHub Gist 및 Gitee 스니펫은 이 동기화 비밀번호로 전체 스냅샷을 암호화해야 합니다. WebDAV에서는 동기화되는 비밀만 암호화합니다.",
+    syncSecretsSharedDescription: "WebDAV에서는 이 비밀번호로 포함할 자격 증명을 암호화합니다. GitHub Gist 및 Gitee 스니펫은 별도의 암호화 및 자격 증명 설정을 사용합니다.",
     syncSecretsPassphrase: "동기화 비밀번호",
     syncSecretsPassphraseDescription: "이 비밀번호는 민감한 데이터를 암호화하고 복원하는 데만 사용됩니다. DBX가 저장하지 않으므로 각 기기에서 다시 입력하세요.",
     syncTest: "테스트",
