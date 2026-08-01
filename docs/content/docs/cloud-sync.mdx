@@ -52,7 +52,11 @@ A classic token also works, but grant only the `gist` scope.
   <Step>### Create the Gist Leave **Snippet ID** empty and select **Upload**. DBX creates a private Gist and stores the returned ID.</Step>
 </Steps>
 
-DBX stores the snapshot as `dbx-sync.json`. Later uploads update the same Gist, and GitHub keeps its revision history.
+DBX stores an encrypted `dbx-sync.json` file in the Gist. New uploads and encrypted GitHub/Gitee snippets require the sync password, so the snippet URL does not expose connection details, SQL, or settings. Existing plain-text snippets can still be downloaded once for migration.
+
+<Callout type="warn">
+Plain-text snippets created by older versions cannot be safely migrated in place: updating the same Gist does not remove its revision history. Use **Migrate legacy snippet** instead. DBX encrypts the existing remote snapshot into a new snippet first, then deletes the old plaintext snippet only after the new ID is stored locally. If the old snapshot contains encrypted secrets, enter its original sync password so DBX can verify them before deleting the old copy. If deletion fails, DBX preserves the new ID and tells you which old snippet must be deleted manually. Rotate any credentials the old snippet may have exposed.
+</Callout>
 
 ### Restore on Another Device
 
@@ -82,7 +86,9 @@ DBX stores the snapshot as `dbx-sync.json`. Later uploads update the same Gist, 
 
 Gitee snippets also use a `dbx-sync.json` file.
 
-## Synchronizing Secrets
+## Sync Password and Secrets
+
+GitHub Gist and Gitee snippets always encrypt the entire snapshot with the sync password. The password is never uploaded and cannot be recovered.
 
 Snapshots exclude credentials by default. To restore passwords on another device:
 
@@ -91,10 +97,10 @@ Snapshots exclude credentials by default. To restore passwords on another device
 3. Upload the snapshot.
 4. Enter the same passphrase when downloading on another device.
 
-DBX derives the encryption key with **Argon2id** and encrypts secrets using **AES-256-GCM**. Provider access tokens are encrypted with a device-local key and are never written to `dbx-sync.json`.
+DBX derives the encryption key with **Argon2id** and uses **AES-256-GCM** encryption. Provider access tokens are encrypted with a device-local key and are never written to `dbx-sync.json`.
 
 <Callout type="warn">
-The sync passphrase cannot be recovered. Without it, DBX can still restore non-secret connection settings and saved SQL, but not the encrypted secrets.
+The sync passphrase cannot be recovered. An encrypted GitHub/Gitee snippet cannot be restored without it. For WebDAV, a snapshot without encrypted secrets can still be restored without a passphrase.
 </Callout>
 
 ## WebDAV

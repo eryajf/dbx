@@ -301,6 +301,8 @@ export const snippetSyncTest = forward("snippetSyncTest");
 export const snippetTokenStatus = forward("snippetTokenStatus");
 export const saveSnippetSavedToken = forward("saveSnippetSavedToken");
 export const forgetSnippetSavedToken = forward("forgetSnippetSavedToken");
+export const snippetSyncSettings = forward("snippetSyncSettings");
+export const saveSnippetSyncId = forward("saveSnippetSyncId");
 export const snippetSyncUpload = forward("snippetSyncUpload");
 export const snippetSyncDownload = forward("snippetSyncDownload");
 export const saveAiConversation = forward("saveAiConversation");
@@ -635,6 +637,7 @@ export type {
   WebDavDownloadResult,
   SnippetProvider,
   SnippetSyncConfig,
+  SnippetSyncSettings,
   SnippetSyncSummary,
   SnippetDownloadResult,
   SnippetTokenStatus,

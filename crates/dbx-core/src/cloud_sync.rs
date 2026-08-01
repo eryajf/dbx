@@ -19,6 +19,8 @@ use crate::saved_sql::SavedSqlLibrary;
 use crate::storage::{DesktopSettings, Storage};
 
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+const ENCRYPTED_SNIPPET_SNAPSHOT_FORMAT: &str = "dbx-encrypted-sync-snapshot";
+const ENCRYPTED_SNIPPET_SNAPSHOT_VERSION: u32 = 1;
 const DEFAULT_REMOTE_PATH: &str = "DBX/sync/snapshot.json";
 const DEFAULT_SNIPPET_FILE_NAME: &str = "dbx-sync.json";
 const GITHUB_API_BASE: &str = "https://api.github.com";
@@ -65,12 +67,23 @@ pub struct SnippetSyncConfig {
     pub provider: SnippetProvider,
     pub token: Option<String>,
     pub snippet_id: Option<String>,
+    /// Explicitly requested one-time migration for a legacy plaintext snippet.
+    /// The remote plaintext snippet is only deleted after a new encrypted one
+    /// has been created successfully.
+    #[serde(default)]
+    pub replace_legacy_snippet: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnippetTokenStatus {
     pub has_saved_token: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnippetSyncSettings {
+    pub snippet_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -114,6 +127,14 @@ pub struct EncryptedSecretsBlob {
     pub salt: String,
     pub nonce: String,
     pub ciphertext: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EncryptedSnippetSnapshot {
+    format: String,
+    version: u32,
+    payload: EncryptedSecretsBlob,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +189,10 @@ pub struct SnippetSyncSummary {
     pub bytes: usize,
     pub exported_at: Option<String>,
     pub app_version: Option<String>,
+    /// A new encrypted snippet was created, but the old plaintext snippet
+    /// could not be removed. The caller must surface this id for manual cleanup.
+    #[serde(default)]
+    pub legacy_cleanup_required_id: Option<String>,
 }
 
 pub async fn build_sync_snapshot(
@@ -318,6 +343,21 @@ pub async fn save_snippet_token(storage: &Storage, config: &SnippetSyncConfig, t
 
 pub async fn forget_snippet_token(storage: &Storage, config: &SnippetSyncConfig) -> Result<(), String> {
     storage.delete_webdav_password_blob(&snippet_token_account(config.provider)).await
+}
+
+pub async fn snippet_sync_settings(
+    storage: &Storage,
+    provider: SnippetProvider,
+) -> Result<SnippetSyncSettings, String> {
+    Ok(SnippetSyncSettings { snippet_id: storage.load_snippet_sync_id(snippet_provider_storage_key(provider)).await? })
+}
+
+pub async fn save_snippet_sync_id(
+    storage: &Storage,
+    provider: SnippetProvider,
+    snippet_id: Option<&str>,
+) -> Result<(), String> {
+    storage.save_snippet_sync_id(snippet_provider_storage_key(provider), snippet_id).await
 }
 
 pub async fn resolve_snippet_token(storage: &Storage, config: &mut SnippetSyncConfig) -> Result<(), String> {
@@ -484,12 +524,53 @@ impl SnippetSyncClient {
         ensure_snippet_success(response.status(), "test")
     }
 
-    pub async fn put_snapshot(&self, snapshot: &SyncSnapshot) -> Result<SnippetSyncSummary, String> {
+    pub async fn put_snapshot(
+        &self,
+        snapshot: &SyncSnapshot,
+        secrets_passphrase: Option<&str>,
+    ) -> Result<SnippetSyncSummary, String> {
         self.require_token()?;
-        let bytes = serde_json::to_vec_pretty(snapshot).map_err(|e| e.to_string())?;
-        let content = String::from_utf8(bytes.clone()).map_err(|e| e.to_string())?;
+        let passphrase = required_sync_passphrase(secrets_passphrase)?;
         let existing_id = normalized_snippet_id(self.config.snippet_id.as_deref());
-        let (method, url) = match (self.config.provider, existing_id) {
+        let legacy_snapshot = if let Some(id) = existing_id {
+            let existing_content = self.load_snippet_content(id).await?;
+            if !is_encrypted_snippet_snapshot(&existing_content) {
+                // Never delete an arbitrary snippet merely because it is not an
+                // encrypted DBX envelope. It must first prove to be a legacy DBX
+                // snapshot, and the caller must explicitly request migration.
+                if !is_legacy_dbx_snapshot(&existing_content) {
+                    return Err("The selected snippet is not a DBX sync snapshot; refusing to replace or delete it."
+                        .to_string());
+                }
+                if !self.config.replace_legacy_snippet {
+                    return Err(
+                        "This snippet contains a legacy unencrypted DBX snapshot. Use the secure migration action to create an encrypted replacement and delete the legacy snippet only after the new one is created."
+                            .to_string(),
+                    );
+                }
+                let legacy_snapshot = parse_legacy_dbx_snapshot(&existing_content)?;
+                Some((id, prepare_legacy_snippet_snapshot(legacy_snapshot, passphrase)?))
+            } else {
+                if self.config.replace_legacy_snippet {
+                    return Err("The selected snippet is already encrypted; use the normal upload action.".to_string());
+                }
+                None
+            }
+        } else {
+            None
+        };
+        // Migration encrypts the already-read remote snapshot rather than the
+        // caller's current local state. Otherwise a stale second device could
+        // erase the only copy of newer remote settings or saved SQL.
+        let snapshot_to_upload =
+            snapshot_for_snippet_upload(snapshot, legacy_snapshot.as_ref().map(|(_, snapshot)| snapshot));
+        let encrypted = encrypt_snippet_snapshot(snapshot_to_upload, passphrase)?;
+        let bytes = serde_json::to_vec_pretty(&encrypted).map_err(|e| e.to_string())?;
+        let content = String::from_utf8(bytes.clone()).map_err(|e| e.to_string())?;
+        // A migration must create a separate snippet. Updating the legacy
+        // snippet would retain its plaintext revision history on the provider.
+        let update_id = if legacy_snapshot.is_some() { None } else { existing_id };
+        let (method, url) = match (self.config.provider, update_id) {
             (SnippetProvider::GitHub, Some(id)) => (Method::PATCH, format!("{GITHUB_API_BASE}/gists/{id}")),
             (SnippetProvider::GitHub, None) => (Method::POST, format!("{GITHUB_API_BASE}/gists")),
             (SnippetProvider::Gitee, Some(id)) => (Method::PATCH, format!("{GITEE_API_BASE}/gists/{id}")),
@@ -517,21 +598,46 @@ impl SnippetSyncClient {
         ensure_snippet_response_success(status, "upload", &response_body)?;
         let value: serde_json::Value = serde_json::from_str(&response_body).map_err(|e| e.to_string())?;
         let snippet_id = snippet_response_id(&value)
-            .or_else(|| existing_id.map(str::to_string))
+            .or_else(|| update_id.map(str::to_string))
             .ok_or_else(|| "Snippet API response did not include an id".to_string())?;
+        // The command layer persists the replacement id before calling
+        // `delete_legacy_snippet`. If the app stops before persistence, the
+        // old plaintext snippet remains available instead of leaving users
+        // without a pointer to either remote snippet.
+        let exported_at = Some(snapshot_to_upload.exported_at.clone());
+        let app_version = Some(snapshot_to_upload.app_version.clone());
+        let legacy_cleanup_required_id = legacy_snapshot.as_ref().map(|(id, _)| (*id).to_string());
         Ok(SnippetSyncSummary {
             provider: self.config.provider,
             snippet_id,
             bytes: bytes.len(),
-            exported_at: Some(snapshot.exported_at.clone()),
-            app_version: Some(snapshot.app_version.clone()),
+            exported_at,
+            app_version,
+            legacy_cleanup_required_id,
         })
     }
 
-    pub async fn get_snapshot(&self) -> Result<(SyncSnapshot, SnippetSyncSummary), String> {
+    pub async fn get_snapshot(
+        &self,
+        secrets_passphrase: Option<&str>,
+    ) -> Result<(SyncSnapshot, SnippetSyncSummary), String> {
         self.require_token()?;
         let snippet_id = normalized_snippet_id(self.config.snippet_id.as_deref())
             .ok_or_else(|| "Snippet id is required for download".to_string())?;
+        let content = self.load_snippet_content(snippet_id).await?;
+        let snapshot = parse_snippet_snapshot(&content, secrets_passphrase)?;
+        let summary = SnippetSyncSummary {
+            provider: self.config.provider,
+            snippet_id: snippet_id.to_string(),
+            bytes: content.len(),
+            exported_at: Some(snapshot.exported_at.clone()),
+            app_version: Some(snapshot.app_version.clone()),
+            legacy_cleanup_required_id: None,
+        };
+        Ok((snapshot, summary))
+    }
+
+    async fn load_snippet_content(&self, snippet_id: &str) -> Result<String, String> {
         let url = match self.config.provider {
             SnippetProvider::GitHub => format!("{GITHUB_API_BASE}/gists/{snippet_id}"),
             SnippetProvider::Gitee => format!("{GITEE_API_BASE}/gists/{snippet_id}"),
@@ -551,15 +657,22 @@ impl SnippetSyncClient {
                 response.text().await.map_err(|e| e.to_string())?
             }
         };
-        let snapshot: SyncSnapshot = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-        let summary = SnippetSyncSummary {
-            provider: self.config.provider,
-            snippet_id: snippet_id.to_string(),
-            bytes: content.len(),
-            exported_at: Some(snapshot.exported_at.clone()),
-            app_version: Some(snapshot.app_version.clone()),
+        Ok(content)
+    }
+
+    pub async fn delete_legacy_snippet(&self, snippet_id: &str) -> Result<(), String> {
+        let url = match self.config.provider {
+            SnippetProvider::GitHub => format!("{GITHUB_API_BASE}/gists/{snippet_id}"),
+            SnippetProvider::Gitee => format!("{GITEE_API_BASE}/gists/{snippet_id}"),
         };
-        Ok((snapshot, summary))
+        let response = self.request(Method::DELETE, &url)?.send().await.map_err(|e| e.to_string())?;
+        // If the provider reports that the old snippet is already absent, the
+        // cleanup goal is satisfied and the newly created encrypted snippet is
+        // still safe to use.
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        ensure_snippet_success(response.status(), "delete legacy snippet")
     }
 
     fn require_token(&self) -> Result<&str, String> {
@@ -889,6 +1002,82 @@ fn decrypt_sensitive_payload(blob: &EncryptedSecretsBlob, passphrase: &str) -> R
     serde_json::from_slice(&plaintext).map_err(|e| e.to_string())
 }
 
+fn encrypt_snippet_snapshot(snapshot: &SyncSnapshot, passphrase: &str) -> Result<EncryptedSnippetSnapshot, String> {
+    let plaintext = serde_json::to_vec(snapshot).map_err(|e| e.to_string())?;
+    Ok(EncryptedSnippetSnapshot {
+        format: ENCRYPTED_SNIPPET_SNAPSHOT_FORMAT.to_string(),
+        version: ENCRYPTED_SNIPPET_SNAPSHOT_VERSION,
+        payload: encrypt_bytes_with_secret(&plaintext, passphrase)?,
+    })
+}
+
+fn parse_snippet_snapshot(content: &str, secrets_passphrase: Option<&str>) -> Result<SyncSnapshot, String> {
+    if is_encrypted_snippet_snapshot(content) {
+        let envelope: EncryptedSnippetSnapshot = serde_json::from_str(content).map_err(|e| e.to_string())?;
+        if envelope.format != ENCRYPTED_SNIPPET_SNAPSHOT_FORMAT
+            || envelope.version != ENCRYPTED_SNIPPET_SNAPSHOT_VERSION
+        {
+            return Err("Unsupported encrypted sync snapshot format".to_string());
+        }
+        let passphrase = required_sync_passphrase(secrets_passphrase)?;
+        let plaintext = decrypt_bytes_with_secret(&envelope.payload, passphrase)
+            .map_err(|_| "Failed to decrypt the synced snapshot. Check the sync password.".to_string())?;
+        return serde_json::from_slice(&plaintext).map_err(|e| e.to_string());
+    }
+    serde_json::from_str(content).map_err(|e| e.to_string())
+}
+
+fn is_encrypted_snippet_snapshot(content: &str) -> bool {
+    serde_json::from_str::<EncryptedSnippetSnapshot>(content)
+        .ok()
+        .is_some_and(|envelope| envelope.format == ENCRYPTED_SNIPPET_SNAPSHOT_FORMAT)
+}
+
+/// Keep the migration guard deliberately more tolerant than deserializing the
+/// current `SyncSnapshot`: older DBX releases may not contain fields added
+/// since their snapshot was written. At the same time, require the stable DBX
+/// snapshot markers before a destructive remote delete is allowed.
+fn is_legacy_dbx_snapshot(content: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(content).ok().is_some_and(|snapshot| {
+        snapshot.get("schemaVersion").and_then(serde_json::Value::as_u64).is_some()
+            && snapshot.get("exportedAt").and_then(serde_json::Value::as_str).is_some()
+            && snapshot.get("appVersion").and_then(serde_json::Value::as_str).is_some()
+            && snapshot.get("connections").is_some_and(serde_json::Value::is_array)
+            && snapshot.get("savedSql").is_some_and(serde_json::Value::is_object)
+            && snapshot.get("desktopSettings").is_some_and(serde_json::Value::is_object)
+    })
+}
+
+fn parse_legacy_dbx_snapshot(content: &str) -> Result<SyncSnapshot, String> {
+    if !is_legacy_dbx_snapshot(content) {
+        return Err("The selected snippet is not a DBX sync snapshot; refusing to replace or delete it.".to_string());
+    }
+    serde_json::from_str(content).map_err(|_| {
+        "The legacy DBX snapshot is incompatible with this version, so it will not be replaced or deleted.".to_string()
+    })
+}
+
+fn prepare_legacy_snippet_snapshot(mut snapshot: SyncSnapshot, passphrase: &str) -> Result<SyncSnapshot, String> {
+    if let Some(encrypted_secrets) = snapshot.encrypted_secrets.as_ref() {
+        // The legacy snapshot may contain an independently encrypted secrets
+        // payload. The migration UI has one password field, so require that it
+        // can decrypt this payload before deleting the only legacy copy.
+        let secrets = decrypt_sensitive_payload(encrypted_secrets, passphrase).map_err(|_| {
+            "The legacy snapshot contains encrypted secrets that cannot be verified with this sync password, so it will not be replaced or deleted."
+                .to_string()
+        })?;
+        snapshot.encrypted_secrets = Some(encrypt_sensitive_payload(&secrets, passphrase)?);
+    }
+    Ok(snapshot)
+}
+
+fn snapshot_for_snippet_upload<'a>(
+    local_snapshot: &'a SyncSnapshot,
+    legacy_snapshot: Option<&'a SyncSnapshot>,
+) -> &'a SyncSnapshot {
+    legacy_snapshot.unwrap_or(local_snapshot)
+}
+
 fn encrypt_text_with_secret(value: &str, secret: &str) -> Result<EncryptedSecretsBlob, String> {
     encrypt_bytes_with_secret(value.as_bytes(), secret)
 }
@@ -947,6 +1136,18 @@ fn normalized_passphrase(passphrase: Option<&str>) -> Option<&str> {
 
 fn normalized_snippet_id(snippet_id: Option<&str>) -> Option<&str> {
     snippet_id.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn required_sync_passphrase(passphrase: Option<&str>) -> Result<&str, String> {
+    normalized_passphrase(passphrase)
+        .ok_or_else(|| "A sync password is required for GitHub and Gitee snippet sync.".to_string())
+}
+
+fn snippet_provider_storage_key(provider: SnippetProvider) -> &'static str {
+    match provider {
+        SnippetProvider::GitHub => "github",
+        SnippetProvider::Gitee => "gitee",
+    }
 }
 
 fn snippet_token_account(provider: SnippetProvider) -> String {
@@ -1062,10 +1263,13 @@ fn parent_collection_paths(remote_path: &str) -> Vec<String> {
 mod tests {
     use super::{
         apply_sensitive_payload, apply_sync_snapshot, build_sync_snapshot, build_sync_snapshot_with_saved_secrets,
-        decrypt_sensitive_payload, encrypt_sensitive_payload, forget_webdav_sync_secrets_passphrase,
-        gitee_snippet_payload, normalized_remote_path, parent_collection_paths, resolve_webdav_sync_secrets_passphrase,
-        save_webdav_sync_secrets_preference, scrub_connection_secrets, snippet_file_content, snippet_response_id,
-        webdav_sync_secrets_status, ApplySnapshotOptions, ConnectionSecretSnapshot, SensitiveSyncPayload,
+        decrypt_sensitive_payload, encrypt_sensitive_payload, encrypt_snippet_snapshot,
+        forget_webdav_sync_secrets_passphrase, gitee_snippet_payload, is_legacy_dbx_snapshot, normalized_remote_path,
+        parent_collection_paths, parse_legacy_dbx_snapshot, parse_snippet_snapshot, prepare_legacy_snippet_snapshot,
+        resolve_webdav_sync_secrets_passphrase, save_snippet_sync_id, save_webdav_sync_secrets_preference,
+        scrub_connection_secrets, snapshot_for_snippet_upload, snippet_file_content, snippet_response_id,
+        snippet_sync_settings, webdav_sync_secrets_status, ApplySnapshotOptions, ConnectionSecretSnapshot,
+        SensitiveSyncPayload, SnippetProvider, SnippetSyncConfig,
     };
     use crate::ai::{AiApiStyle, AiAuthMethod, AiConfig, AiConfigItem};
     use crate::connection_secrets::NACOS_AUTH_PASSWORD_KEY;
@@ -1411,6 +1615,95 @@ mod tests {
         };
         let encrypted = encrypt_sensitive_payload(&payload, "sync-pass").unwrap();
         assert!(decrypt_sensitive_payload(&encrypted, "wrong-pass").is_err());
+    }
+
+    #[tokio::test]
+    async fn encrypted_snippet_snapshot_hides_and_restores_the_full_snapshot() {
+        let storage = Storage::open(&temp_db_path("encrypted-snippet-snapshot")).await.unwrap();
+        storage.save_connections(&[postgres_connection("pg", "db-secret")]).await.unwrap();
+        let snapshot = build_sync_snapshot(&storage, "test-version", None, Some("sync-pass")).await.unwrap();
+
+        let encrypted = encrypt_snippet_snapshot(&snapshot, "sync-pass").unwrap();
+        let content = serde_json::to_string(&encrypted).unwrap();
+        assert!(!content.contains("127.0.0.1"));
+        assert!(!content.contains("app_db"));
+        assert!(!content.contains("db-secret"));
+
+        let restored = parse_snippet_snapshot(&content, Some("sync-pass")).unwrap();
+        assert_eq!(restored.connections[0].database.as_deref(), Some("app_db"));
+        assert!(parse_snippet_snapshot(&content, Some("wrong-pass")).is_err());
+        assert!(parse_snippet_snapshot(&content, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_snippet_migration_preserves_remote_snapshot() {
+        let storage = Storage::open(&temp_db_path("legacy-snippet-migration-guard")).await.unwrap();
+        let local_snapshot = build_sync_snapshot(&storage, "local-version", None, None).await.unwrap();
+        let remote_snapshot = build_sync_snapshot(&storage, "remote-version", None, None).await.unwrap();
+        let mut legacy = serde_json::to_value(remote_snapshot).unwrap();
+        // This field did not exist in snapshots written by older DBX versions.
+        legacy.as_object_mut().unwrap().remove("tunnelProfiles");
+
+        let content = serde_json::to_string(&legacy).unwrap();
+        assert!(is_legacy_dbx_snapshot(&content));
+        let parsed_legacy = parse_legacy_dbx_snapshot(&content).unwrap();
+        let selected = snapshot_for_snippet_upload(&local_snapshot, Some(&parsed_legacy));
+        assert_eq!(selected.app_version, "remote-version");
+
+        let encrypted = encrypt_snippet_snapshot(selected, "sync-pass").unwrap();
+        let restored = parse_snippet_snapshot(&serde_json::to_string(&encrypted).unwrap(), Some("sync-pass")).unwrap();
+        assert_eq!(restored.app_version, "remote-version");
+        assert!(!is_legacy_dbx_snapshot(r#"{"schemaVersion":1,"connections":[]}"#));
+        assert!(parse_legacy_dbx_snapshot(r#"{"schemaVersion":1,"connections":[]}"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_snippet_migration_refuses_unverifiable_encrypted_secrets() {
+        let storage = Storage::open(&temp_db_path("legacy-snippet-migration-secrets")).await.unwrap();
+        storage.save_connections(&[postgres_connection("pg", "db-secret")]).await.unwrap();
+        let remote_snapshot = build_sync_snapshot(&storage, "remote-version", None, Some("remote-pass")).await.unwrap();
+        let content = serde_json::to_string(&remote_snapshot).unwrap();
+
+        let legacy = parse_legacy_dbx_snapshot(&content).unwrap();
+        assert!(prepare_legacy_snippet_snapshot(legacy.clone(), "wrong-pass").is_err());
+        let prepared = prepare_legacy_snippet_snapshot(legacy, "remote-pass").unwrap();
+        let secrets = decrypt_sensitive_payload(prepared.encrypted_secrets.as_ref().unwrap(), "remote-pass").unwrap();
+        assert!(secrets.connection_secrets.iter().any(|secret| secret.secret == "db-secret"));
+    }
+
+    #[test]
+    fn legacy_snippet_sync_requests_default_to_no_remote_deletion() {
+        let config: SnippetSyncConfig = serde_json::from_value(serde_json::json!({
+            "provider": "github",
+            "token": "token",
+            "snippetId": "legacy-id"
+        }))
+        .unwrap();
+
+        assert!(!config.replace_legacy_snippet);
+    }
+
+    #[tokio::test]
+    async fn snippet_sync_id_is_persisted_per_provider() {
+        let storage = Storage::open(&temp_db_path("snippet-sync-id")).await.unwrap();
+
+        save_snippet_sync_id(&storage, SnippetProvider::GitHub, Some("github-id")).await.unwrap();
+        save_snippet_sync_id(&storage, SnippetProvider::Gitee, Some("gitee-id")).await.unwrap();
+        assert_eq!(
+            snippet_sync_settings(&storage, SnippetProvider::GitHub).await.unwrap().snippet_id.as_deref(),
+            Some("github-id")
+        );
+        assert_eq!(
+            snippet_sync_settings(&storage, SnippetProvider::Gitee).await.unwrap().snippet_id.as_deref(),
+            Some("gitee-id")
+        );
+
+        save_snippet_sync_id(&storage, SnippetProvider::GitHub, None).await.unwrap();
+        assert_eq!(snippet_sync_settings(&storage, SnippetProvider::GitHub).await.unwrap().snippet_id, None);
+        assert_eq!(
+            snippet_sync_settings(&storage, SnippetProvider::Gitee).await.unwrap().snippet_id.as_deref(),
+            Some("gitee-id")
+        );
     }
 
     #[test]

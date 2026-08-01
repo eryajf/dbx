@@ -71,7 +71,9 @@ import {
   saveWebdavSyncSecretsPreference,
   saveWebdavSavedPassword,
   saveSnippetSavedToken,
+  saveSnippetSyncId,
   snippetSyncDownload,
+  snippetSyncSettings,
   snippetSyncTest,
   snippetSyncUpload,
   snippetTokenStatus,
@@ -1670,22 +1672,26 @@ const webdavError = ref(false);
 const syncMethodTab = ref<"webdav" | "snippet">("webdav");
 
 const snippetProvider = ref<SnippetProvider>((localStorage.getItem("dbx-snippet-provider") as SnippetProvider) || "github");
-const snippetId = ref(localStorage.getItem(`dbx-snippet-id-${snippetProvider.value}`) || "");
+const snippetId = ref("");
 const snippetToken = ref("");
 const snippetRememberToken = ref(localStorage.getItem(`dbx-snippet-remember-token-${snippetProvider.value}`) === "true");
 const snippetHasSavedToken = ref(false);
-const snippetBusy = ref<"" | "test" | "upload" | "download">("");
+const snippetBusy = ref<"" | "test" | "upload" | "download" | "migrate">("");
 const snippetMessage = ref("");
 const snippetError = ref(false);
+const legacySnippetId = ref("");
+const snippetSyncSettingsLoading = ref(true);
 
 const webdavReady = computed(() => !!webdavEndpoint.value.trim() && !webdavBusy.value && (!webdavSyncSecrets.value || !!webdavSecretsPassphrase.value.trim() || webdavHasSavedSecretsPassphrase.value));
-const snippetReady = computed(() => !snippetBusy.value && (!!snippetToken.value.trim() || snippetHasSavedToken.value));
+const snippetReady = computed(() => !snippetSyncSettingsLoading.value && !snippetBusy.value && (!!snippetToken.value.trim() || snippetHasSavedToken.value));
+const snippetProtectedReady = computed(() => snippetReady.value && webdavSyncSecrets.value && (!!webdavSecretsPassphrase.value.trim() || webdavHasSavedSecretsPassphrase.value));
 
-function currentSnippetConfig(): SnippetSyncConfig {
+function currentSnippetConfig(replaceLegacySnippet = false): SnippetSyncConfig {
   return {
     provider: snippetProvider.value,
     token: snippetToken.value.trim() || undefined,
     snippetId: snippetId.value.trim() || undefined,
+    replaceLegacySnippet: replaceLegacySnippet || undefined,
   };
 }
 
@@ -1703,6 +1709,32 @@ async function refreshSnippetTokenStatus() {
   }
 }
 
+async function refreshSnippetSyncSettings(provider = snippetProvider.value) {
+  try {
+    const settings = await snippetSyncSettings(provider);
+    if (provider !== snippetProvider.value) return;
+    if (settings.snippetId) {
+      snippetId.value = settings.snippetId;
+      return;
+    }
+    const legacyId = localStorage.getItem(`dbx-snippet-id-${provider}`)?.trim();
+    if (legacyId) {
+      await saveSnippetSyncId(provider, legacyId);
+      localStorage.removeItem(`dbx-snippet-id-${provider}`);
+    }
+    if (provider !== snippetProvider.value) return;
+    snippetId.value = legacyId || "";
+  } catch {
+    if (provider === snippetProvider.value) snippetId.value = "";
+  } finally {
+    if (provider === snippetProvider.value) snippetSyncSettingsLoading.value = false;
+  }
+}
+
+async function persistSnippetSyncId() {
+  await saveSnippetSyncId(snippetProvider.value, snippetId.value.trim() || undefined);
+}
+
 async function applySnippetTokenPreference() {
   const token = snippetToken.value.trim();
   if (snippetRememberToken.value && token) {
@@ -1716,19 +1748,22 @@ async function applySnippetTokenPreference() {
   }
 }
 
-async function runSnippetAction(kind: "test" | "upload" | "download", action: () => Promise<string>) {
+async function runSnippetAction(kind: "test" | "upload" | "download" | "migrate", action: () => Promise<string>, persistCurrentSnippetId = true) {
   snippetBusy.value = kind;
   snippetMessage.value = "";
   snippetError.value = false;
   try {
     localStorage.setItem("dbx-snippet-provider", snippetProvider.value);
-    localStorage.setItem(`dbx-snippet-id-${snippetProvider.value}`, snippetId.value.trim());
     localStorage.setItem(`dbx-snippet-remember-token-${snippetProvider.value}`, String(snippetRememberToken.value));
+    if (persistCurrentSnippetId) await persistSnippetSyncId();
     await applySnippetTokenPreference();
     await applyWebDavSyncSecretsPreference();
     snippetMessage.value = await action();
   } catch (e: any) {
     snippetMessage.value = e?.message || String(e);
+    if (kind === "upload" && snippetMessage.value.includes("legacy unencrypted DBX snapshot")) {
+      legacySnippetId.value = snippetId.value.trim();
+    }
     snippetError.value = true;
   } finally {
     snippetBusy.value = "";
@@ -1743,15 +1778,41 @@ async function testSnippetSync() {
 }
 
 async function uploadSnippetSnapshot() {
+  if (legacySnippetId.value) {
+    snippetMessage.value = t("settings.syncSnippetMigrateLegacyRequired");
+    snippetError.value = true;
+    return;
+  }
   await runSnippetAction("upload", async () => {
     const summary = await snippetSyncUpload(currentSnippetConfig(), settingsStore.editorSettings, webdavSyncSecrets.value ? webdavSecretsPassphrase.value : undefined);
     snippetId.value = summary.snippetId;
-    localStorage.setItem(`dbx-snippet-id-${snippetProvider.value}`, summary.snippetId);
+    await persistSnippetSyncId();
     return t("settings.syncSnippetUploadSuccess", {
       bytes: summary.bytes,
       id: summary.snippetId,
     });
   });
+}
+
+async function migrateLegacySnippet() {
+  const id = legacySnippetId.value;
+  if (!id || !window.confirm(t("settings.syncSnippetMigrateLegacyConfirm", { id }))) return;
+  await runSnippetAction(
+    "migrate",
+    async () => {
+      const config = currentSnippetConfig(true);
+      config.snippetId = id;
+      const summary = await snippetSyncUpload(config, settingsStore.editorSettings, webdavSyncSecrets.value ? webdavSecretsPassphrase.value : undefined);
+      snippetId.value = summary.snippetId;
+      await persistSnippetSyncId();
+      legacySnippetId.value = "";
+      if (!summary.legacyCleanupRequiredId) {
+        return t("settings.syncSnippetMigrateLegacySuccess", { id: summary.snippetId });
+      }
+      return `${t("settings.syncSnippetMigrateLegacyCreated", { id: summary.snippetId })} ${t("settings.syncSnippetMigrateLegacyCleanupRequired", { id: summary.legacyCleanupRequiredId })}`;
+    },
+    false,
+  );
 }
 
 async function downloadSnippetSnapshot() {
@@ -1952,6 +2013,7 @@ watch(
   () => settingsVisible.value,
   async (open) => {
     if (open) {
+      snippetSyncSettingsLoading.value = true;
       mcpPolicyLoading.value = true;
       mcpPolicyLoadError.value = "";
       aiConfigListMode.value = "list";
@@ -1999,6 +2061,7 @@ watch(
       await refreshWebDavPasswordStatus();
       await refreshWebDavSyncSecretsStatus();
       await refreshSnippetTokenStatus();
+      await refreshSnippetSyncSettings();
       syncAiEditState();
       if (!isWeb && activeSettingsTab.value === "mcp") void refreshMcpStatus();
       if (!isWeb && activeSettingsTab.value === "ai" && aiIsCliProvider.value) void ensureCliMcpStatus();
@@ -2037,10 +2100,13 @@ watch([webdavAutoUploadEnabled, webdavAutoUploadIntervalMinutes], () => {
 });
 watch(snippetProvider, (provider) => {
   localStorage.setItem("dbx-snippet-provider", provider);
-  snippetId.value = localStorage.getItem(`dbx-snippet-id-${provider}`) || "";
+  snippetId.value = "";
   snippetRememberToken.value = localStorage.getItem(`dbx-snippet-remember-token-${provider}`) === "true";
   snippetToken.value = "";
+  legacySnippetId.value = "";
+  snippetSyncSettingsLoading.value = true;
   void refreshSnippetTokenStatus();
+  void refreshSnippetSyncSettings(provider);
 });
 
 watch(activeSettingsTab, async (tab) => {
@@ -4879,7 +4945,7 @@ onUnmounted(cleanupPreviewEditor);
                   <div class="grid gap-4 rounded-md border p-4 md:grid-cols-2">
                     <div class="space-y-2">
                       <Label>{{ t("settings.syncSnippetProvider") }}</Label>
-                      <Select v-model="snippetProvider">
+                      <Select v-model="snippetProvider" :disabled="!!snippetBusy">
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="github">GitHub Gist</SelectItem>
@@ -4889,7 +4955,7 @@ onUnmounted(cleanupPreviewEditor);
                     </div>
                     <div class="space-y-2">
                       <Label for="snippet-sync-id">{{ t("settings.syncSnippetId") }}</Label>
-                      <Input id="snippet-sync-id" v-model="snippetId" autocomplete="off" :placeholder="t('settings.syncSnippetIdPlaceholder')" />
+                      <Input id="snippet-sync-id" v-model="snippetId" autocomplete="off" :disabled="snippetSyncSettingsLoading || !!snippetBusy" :placeholder="t('settings.syncSnippetIdPlaceholder')" @blur="persistSnippetSyncId" />
                     </div>
                     <div class="space-y-2 md:col-span-2">
                       <Label for="snippet-sync-token">{{ t("settings.syncSnippetToken") }}</Label>
@@ -4933,10 +4999,14 @@ onUnmounted(cleanupPreviewEditor);
                           <Download v-else class="mr-1 h-3 w-3" />
                           {{ t("settings.syncDownload") }}
                         </Button>
-                        <Button size="sm" :disabled="!snippetReady" @click="uploadSnippetSnapshot">
+                        <Button size="sm" :disabled="!snippetProtectedReady" @click="uploadSnippetSnapshot">
                           <Loader2 v-if="snippetBusy === 'upload'" class="mr-1 h-3 w-3 animate-spin" />
                           <Upload v-else class="mr-1 h-3 w-3" />
                           {{ t("settings.syncUpload") }}
+                        </Button>
+                        <Button v-if="legacySnippetId" variant="destructive" size="sm" :disabled="!snippetProtectedReady" @click="migrateLegacySnippet">
+                          <Loader2 v-if="snippetBusy === 'migrate'" class="mr-1 h-3 w-3 animate-spin" />
+                          {{ t("settings.syncSnippetMigrateLegacy") }}
                         </Button>
                       </div>
                     </div>

@@ -1796,6 +1796,34 @@ impl Storage {
         self.save_app_settings_json(&settings).await
     }
 
+    pub async fn save_snippet_sync_id(&self, provider: &str, snippet_id: Option<&str>) -> Result<(), String> {
+        let mut settings = self.load_app_settings_json().await?;
+        let mut ids =
+            settings.remove("snippet_sync_ids").and_then(|value| value.as_object().cloned()).unwrap_or_default();
+        match snippet_id.map(str::trim).filter(|id| !id.is_empty()) {
+            Some(id) => {
+                ids.insert(provider.to_string(), serde_json::Value::String(id.to_string()));
+            }
+            None => {
+                ids.remove(provider);
+            }
+        }
+        settings.insert("snippet_sync_ids".to_string(), serde_json::Value::Object(ids));
+        self.save_app_settings_json(&settings).await
+    }
+
+    pub async fn load_snippet_sync_id(&self, provider: &str) -> Result<Option<String>, String> {
+        let settings = self.load_app_settings_json().await?;
+        Ok(settings
+            .get("snippet_sync_ids")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|ids| ids.get(provider))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string))
+    }
+
     pub async fn save_max_agent_turns(&self, max_agent_turns: u32) -> Result<(), String> {
         let mut settings = self.load_app_settings_json().await?;
         settings.insert(

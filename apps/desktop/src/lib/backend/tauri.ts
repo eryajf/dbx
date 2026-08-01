@@ -237,6 +237,11 @@ export interface SnippetSyncConfig {
   provider: SnippetProvider;
   token?: string;
   snippetId?: string;
+  replaceLegacySnippet?: boolean;
+}
+
+export interface SnippetSyncSettings {
+  snippetId?: string;
 }
 
 export interface SnippetSyncSummary {
@@ -245,6 +250,7 @@ export interface SnippetSyncSummary {
   bytes: number;
   exportedAt?: string;
   appVersion?: string;
+  legacyCleanupRequiredId?: string;
 }
 
 export interface SnippetDownloadResult {
@@ -674,6 +680,14 @@ export async function saveSnippetSavedToken(config: SnippetSyncConfig, token: st
 
 export async function forgetSnippetSavedToken(config: SnippetSyncConfig): Promise<void> {
   return invoke("forget_snippet_saved_token", { config });
+}
+
+export async function snippetSyncSettings(provider: SnippetProvider): Promise<SnippetSyncSettings> {
+  return invoke("snippet_sync_settings", { provider });
+}
+
+export async function saveSnippetSyncId(provider: SnippetProvider, snippetId?: string): Promise<void> {
+  return invoke("save_snippet_sync_id", { provider, snippetId });
 }
 
 export async function snippetSyncUpload(config: SnippetSyncConfig, editorSettings?: unknown, secretsPassphrase?: string): Promise<SnippetSyncSummary> {
