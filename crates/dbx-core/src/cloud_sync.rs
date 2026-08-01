@@ -670,9 +670,7 @@ impl SnippetSyncClient {
     }
 
     async fn load_snippet_content(&self, snippet_id: &str) -> Result<String, String> {
-        let url = match self.config.provider {
-            _ => format!("{}/gists/{snippet_id}", self.api_base),
-        };
+        let url = format!("{}/gists/{snippet_id}", self.api_base);
         let response = self.request(Method::GET, &url)?.send().await.map_err(|e| e.to_string())?;
         let status = response.status();
         let response_body = response.text().await.map_err(|e| e.to_string())?;
