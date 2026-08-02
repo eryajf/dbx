@@ -106,6 +106,11 @@ export interface AiRequestInput {
   confirmedSchema?: string;
 }
 
+export interface AiNamespaceSelection {
+  kind: "database" | "schema";
+  value: string;
+}
+
 export interface CustomPromptContext {
   globalInstructions?: string;
   activeTemplates?: PromptTemplate[];
@@ -628,6 +633,19 @@ function aiDatabaseNamespace(tab: QueryTab, connection: ConnectionConfig): strin
   return resolveAiDatabaseTarget(tab, connection).database;
 }
 
+export function resolveAiNamespaceSelection(tab: QueryTab, connection: ConnectionConfig): AiNamespaceSelection {
+  if (connection.db_type === "dameng") {
+    return { kind: "schema", value: tab.schema?.trim() || "" };
+  }
+  return { kind: "database", value: tab.database || "" };
+}
+
+export function resolveDefaultAiSchema(connection: ConnectionConfig, schemaOptions: string[]): string | undefined {
+  if (connection.db_type !== "dameng") return undefined;
+  const username = connection.username.trim().toLowerCase();
+  return schemaOptions.find((schema) => schema.trim().toLowerCase() === username) ?? schemaOptions[0];
+}
+
 /**
  * Resolve the namespace used by an AI request without treating a Dameng schema
  * selection as a connection database override. Dameng connections stay bound to
@@ -638,8 +656,8 @@ export function resolveAiDatabaseTarget(tab: QueryTab, connection: ConnectionCon
   const database = tab.database || connection.database || "main";
   if (connection.db_type === "dameng") {
     return {
-      database: connection.database || "main",
-      schema: tab.database?.trim() || undefined,
+      database,
+      schema: resolveAiNamespaceSelection(tab, connection).value || undefined,
     };
   }
   return { database: connection.db_type === "sqlite" ? normalizeSqliteNamespace(database, connection) : database };

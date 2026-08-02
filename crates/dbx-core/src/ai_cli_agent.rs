@@ -88,10 +88,10 @@ mod scope_env_tests {
     #[test]
     fn confirmed_write_sql_is_passed_to_the_scoped_mcp_subprocess() {
         let options = CliAgentRunOptions {
-            connection_id: "connection-1".to_string(),
-            connection_name: "staging".to_string(),
-            database: "app".to_string(),
-            schema: Some("reporting".to_string()),
+            connection_id: "dameng-1".to_string(),
+            connection_name: "Dameng".to_string(),
+            database: "APPDB".to_string(),
+            schema: Some("REPORTING".to_string()),
             agent_mode: true,
             allow_writes: true,
             allow_dangerous: true,
@@ -103,7 +103,8 @@ mod scope_env_tests {
         assert!(env.contains(&("DBX_MCP_CONFIRMED_WRITE_SQL", "DELETE FROM sessions WHERE id = 7".to_string())));
         assert!(env.contains(&("DBX_MCP_ALLOW_WRITES", "1".to_string())));
         assert!(env.contains(&("DBX_MCP_ALLOW_DANGEROUS_SQL", "1".to_string())));
-        assert!(env.contains(&("DBX_MCP_SCOPE_SCHEMA", "reporting".to_string())));
+        assert!(env.contains(&("DBX_MCP_SCOPE_DATABASE", "APPDB".to_string())));
+        assert!(env.contains(&("DBX_MCP_SCOPE_SCHEMA", "REPORTING".to_string())));
     }
 }
 

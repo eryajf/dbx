@@ -1415,12 +1415,18 @@ mod tests {
 
     #[test]
     fn schema_scope_is_a_hard_bound() {
+        let dameng = connection("dameng-1", "Dameng", "dameng", "APPDB");
         let server = DbxMcpServer::with_runtime_options(
             Arc::new(FakeBackend::default()),
-            McpScope { schema: Some("REPORTING".to_string()), ..Default::default() },
+            McpScope {
+                database: Some("APPDB".to_string()),
+                schema: Some("REPORTING".to_string()),
+                ..Default::default()
+            },
             false,
         );
 
+        assert_eq!(server.resolve_database(None, &dameng).unwrap(), "APPDB");
         assert_eq!(server.resolve_schema(None).unwrap(), "REPORTING");
         assert_eq!(server.resolve_schema(Some("REPORTING".to_string())).unwrap(), "REPORTING");
         let error = server.resolve_schema(Some("APP_USER".to_string())).unwrap_err();

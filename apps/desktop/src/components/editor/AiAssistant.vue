@@ -55,7 +55,7 @@ import ConnectionGroupBadge from "@/components/connection/ConnectionGroupBadge.v
 import { useQueryStore } from "@/stores/queryStore";
 import { useToast } from "@/composables/useToast";
 import { useNavigationTargets } from "@/composables/useNavigationTargets";
-import { buildAiContext, resolveAiDatabaseTarget, runAgentStream, isVectorDbType, isValidActionForMode, defaultActionForMode, type AiAction, type AiAssistantMode, type AiSqlFileContext, type CustomPromptContext } from "@/lib/ai/ai";
+import { buildAiContext, resolveAiDatabaseTarget, resolveAiNamespaceSelection, resolveDefaultAiSchema, runAgentStream, isVectorDbType, isValidActionForMode, defaultActionForMode, type AiAction, type AiAssistantMode, type AiSqlFileContext, type CustomPromptContext } from "@/lib/ai/ai";
 import { isAiConfigModelCandidate } from "@/lib/ai/aiConfigCandidates";
 import { orderAiConfigsForDisplay } from "@/lib/ai/aiConfigOrdering";
 import { effortSelectionEquals, runtimeEffortFromPreference } from "@/lib/ai/aiEffortPreference";
@@ -839,12 +839,14 @@ const dbSelectOptions = computed(() => {
   }));
 });
 
-const selectedDatabaseSelectValue = computed(() => (props.connection ? encodeSelectableDatabaseValue(props.connection.db_type, props.tab?.database || "") : ""));
+const selectedNamespace = computed(() => (props.connection && props.tab ? resolveAiNamespaceSelection(props.tab, props.connection).value : ""));
+
+const selectedDatabaseSelectValue = computed(() => (props.connection ? encodeSelectableDatabaseValue(props.connection.db_type, selectedNamespace.value) : ""));
 
 const selectedDatabaseLabel = computed(() => {
   if (!props.connection) return t("editor.selectDatabase");
   if (!props.tab) return t("editor.selectDatabase");
-  return formatDatabaseLabel(props.connection, props.tab.database || "", {
+  return formatDatabaseLabel(props.connection, selectedNamespace.value, {
     defaultDatabase: t("editor.defaultDatabase"),
     noDatabase: t("editor.noDatabase"),
   });
@@ -867,16 +869,16 @@ async function changeConnection(connectionId: string) {
   if (!conn) return;
   connectionStore.activeConnectionId = connectionId;
   const tab = props.tab;
+  const tabId = tab ? tab.id : queryStore.createTab(connectionId, resolveDefaultDatabase(conn, []));
   if (tab) {
     queryStore.updateConnection(tab.id, connectionId, resolveDefaultDatabase(conn, []));
-  } else {
-    queryStore.createTab(connectionId, resolveDefaultDatabase(conn, []));
   }
   try {
     const options = await loadDatabases(conn);
-    const database = resolveDefaultDatabase(conn, options);
-    if (tab) {
-      queryStore.updateDatabase(tab.id, database);
+    if (conn.db_type === "dameng") {
+      queryStore.updateSchema(tabId, resolveDefaultAiSchema(conn, options));
+    } else {
+      queryStore.updateDatabase(tabId, resolveDefaultDatabase(conn, options));
     }
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
@@ -884,11 +886,16 @@ async function changeConnection(connectionId: string) {
   }
 }
 
-function changeDatabase(value: string) {
+function changeNamespace(value: string) {
   const tab = props.tab;
   const connection = props.connection;
   if (!tab || !connection) return;
-  queryStore.updateDatabase(tab.id, decodeSelectableDatabaseValue(connection.db_type, value));
+  const namespace = decodeSelectableDatabaseValue(connection.db_type, value);
+  if (resolveAiNamespaceSelection(tab, connection).kind === "schema") {
+    queryStore.updateSchema(tab.id, namespace || undefined);
+  } else {
+    queryStore.updateDatabase(tab.id, namespace);
+  }
 }
 
 function flushAssistantDeltas() {
@@ -2426,7 +2433,7 @@ async function openExternalUrl(url: string) {
                   :model-value="selectedDatabaseSelectValue"
                   @update:model-value="
                     (v) => {
-                      if (typeof v === 'string') changeDatabase(v);
+                      if (typeof v === 'string') changeNamespace(v);
                     }
                   "
                   @update:open="
