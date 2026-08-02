@@ -1602,6 +1602,7 @@ pub fn run() {
             commands::cloud_sync::forget_snippet_saved_token,
             commands::cloud_sync::snippet_sync_settings,
             commands::cloud_sync::save_snippet_sync_id,
+            commands::cloud_sync::retry_snippet_legacy_cleanup,
             commands::cloud_sync::snippet_sync_upload,
             commands::cloud_sync::snippet_sync_download,
             commands::connection::test_connection,

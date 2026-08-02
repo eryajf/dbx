@@ -4901,6 +4901,8 @@ export default withEnglishFallback({
     syncSnippetMigrateLegacySuccess: "Se creó el fragmento cifrado {id} y se eliminó el fragmento heredado de texto sin cifrar.",
     syncSnippetMigrateLegacyCreated: "Se creó el fragmento cifrado {id}.",
     syncSnippetMigrateLegacyCleanupRequired: "Se creó el fragmento cifrado, pero no se pudo eliminar el fragmento heredado {id}. Elimínelo manualmente y rote las credenciales que podrían haberse expuesto.",
+    syncSnippetRetryLegacyCleanup: "Reintentar limpieza heredada",
+    syncSnippetLegacyCleanupSuccess: "Se eliminó el fragmento heredado de texto sin formato {id}.",
   },
   driverStore: {
     jreDirRemoveFailed: "No se pudo eliminar el directorio JRE antiguo: {path} (error original: {error})",

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use dbx_core::cloud_sync::{
-    apply_sync_snapshot, build_sync_snapshot, build_sync_snapshot_with_saved_secrets, forget_snippet_token,
-    forget_webdav_password, forget_webdav_sync_secrets_passphrase as core_forget_webdav_sync_secrets_passphrase,
-    resolve_snippet_token, resolve_webdav_password, resolve_webdav_sync_secrets_passphrase,
+    apply_sync_snapshot, build_sync_snapshot, build_sync_snapshot_with_saved_secrets, finalize_snippet_migration,
+    forget_snippet_token, forget_webdav_password,
+    forget_webdav_sync_secrets_passphrase as core_forget_webdav_sync_secrets_passphrase, resolve_snippet_token,
+    resolve_webdav_password, resolve_webdav_sync_secrets_passphrase, retry_pending_snippet_cleanup,
     save_snippet_sync_id as core_save_snippet_sync_id, save_snippet_token, save_webdav_password,
     save_webdav_sync_secrets_preference as core_save_webdav_sync_secrets_preference, snippet_saved_token_status,
     snippet_sync_settings as core_snippet_sync_settings, webdav_saved_password_status,
@@ -180,6 +181,17 @@ pub async fn save_snippet_sync_id(
 }
 
 #[tauri::command]
+pub async fn retry_snippet_legacy_cleanup(
+    state: State<'_, Arc<AppState>>,
+    mut config: SnippetSyncConfig,
+) -> Result<SnippetSyncSettings, String> {
+    resolve_snippet_token(&state.storage, &mut config).await?;
+    let provider = config.provider;
+    let client = SnippetSyncClient::new(config);
+    retry_pending_snippet_cleanup(&state.storage, provider, &client).await
+}
+
+#[tauri::command]
 pub async fn snippet_sync_upload(
     state: State<'_, Arc<AppState>>,
     mut config: SnippetSyncConfig,
@@ -202,17 +214,9 @@ pub async fn snippet_sync_upload(
     };
     let snapshot =
         build_sync_snapshot(&state.storage, env!("CARGO_PKG_VERSION"), editor_settings, secrets_passphrase).await?;
-    let provider = config.provider;
     let client = SnippetSyncClient::new(config);
     let mut summary = client.put_snapshot(&snapshot, snippet_passphrase.as_deref(), secrets_passphrase).await?;
-    if summary.legacy_cleanup_required_id.is_some() {
-        // Persist the new pointer before deleting the old plaintext remote.
-        // A persistence failure therefore leaves the legacy snippet intact.
-        core_save_snippet_sync_id(&state.storage, provider, Some(&summary.snippet_id)).await?;
-        if client.delete_legacy_snippet_if_unchanged(&summary).await.unwrap_or(false) {
-            summary.legacy_cleanup_required_id = None;
-        }
-    }
+    finalize_snippet_migration(&state.storage, &client, &mut summary).await?;
     Ok(summary)
 }
 
@@ -238,4 +242,37 @@ pub async fn snippet_sync_download(
         desktop_settings: snapshot.desktop_settings,
         apply_summary,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use dbx_core::cloud_sync::SnippetProvider;
+    use dbx_core::storage::Storage;
+    use tauri::Manager;
+
+    use super::AppState;
+
+    #[tokio::test]
+    async fn snippet_settings_surfaces_pending_cleanup_after_restart() {
+        let dir = std::env::temp_dir().join(format!("dbx-tauri-snippet-cleanup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("storage.db");
+        let storage = Storage::open(&db).await.unwrap();
+        storage.save_snippet_migration_state("github", "replacement-id", "legacy-id", "content-hash").await.unwrap();
+        drop(storage);
+
+        let storage = Storage::open(&db).await.unwrap();
+        let app_state = Arc::new(AppState::new_with_plugin_dir(storage, dir.join("plugins")));
+        let app = tauri::test::mock_app();
+        app.manage(app_state);
+        let state: tauri::State<'_, Arc<AppState>> = app.state();
+        let settings = super::snippet_sync_settings(state, SnippetProvider::GitHub).await.unwrap();
+
+        assert_eq!(settings.snippet_id.as_deref(), Some("replacement-id"));
+        assert_eq!(settings.legacy_cleanup_required_id.as_deref(), Some("legacy-id"));
+        drop(app);
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

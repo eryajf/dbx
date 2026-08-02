@@ -4367,6 +4367,8 @@ export default withEnglishFallback({
     syncSnippetMigrateLegacySuccess: "已建立加密程式碼片段 {id}，並刪除舊明文程式碼片段。",
     syncSnippetMigrateLegacyCreated: "已建立加密程式碼片段 {id}。",
     syncSnippetMigrateLegacyCleanupRequired: "已建立加密程式碼片段，但無法刪除舊程式碼片段 {id}。請手動刪除它，並輪換可能已暴露的憑據。",
+    syncSnippetRetryLegacyCleanup: "重試清理舊版程式碼片段",
+    syncSnippetLegacyCleanupSuccess: "已刪除舊版純文字程式碼片段 {id}。",
   },
   driverStore: {
     jreDirRemoveFailed: "無法刪除舊的 JRE 目錄：{path}（原始錯誤：{error}）",

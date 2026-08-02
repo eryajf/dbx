@@ -303,6 +303,7 @@ export const saveSnippetSavedToken = forward("saveSnippetSavedToken");
 export const forgetSnippetSavedToken = forward("forgetSnippetSavedToken");
 export const snippetSyncSettings = forward("snippetSyncSettings");
 export const saveSnippetSyncId = forward("saveSnippetSyncId");
+export const retrySnippetLegacyCleanup = forward("retrySnippetLegacyCleanup");
 export const snippetSyncUpload = forward("snippetSyncUpload");
 export const snippetSyncDownload = forward("snippetSyncDownload");
 export const saveAiConversation = forward("saveAiConversation");

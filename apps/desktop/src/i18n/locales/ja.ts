@@ -4953,6 +4953,8 @@ export default withEnglishFallback({
     syncSnippetMigrateLegacySuccess: "暗号化されたスニペット {id} を作成し、旧式の平文スニペットを削除しました。",
     syncSnippetMigrateLegacyCreated: "暗号化されたスニペット {id} を作成しました。",
     syncSnippetMigrateLegacyCleanupRequired: "暗号化されたスニペットは作成されましたが、旧スニペット {id} を削除できませんでした。手動で削除し、公開された可能性のある認証情報をローテーションしてください。",
+    syncSnippetRetryLegacyCleanup: "旧スニペットのクリーンアップを再試行",
+    syncSnippetLegacyCleanupSuccess: "旧プレーンテキストスニペット {id} を削除しました。",
     syncSnippetGuide: "設定ガイド",
     insertSpaceAfterCompletion: "補全後に自動でスペースを挿入",
     insertSpaceAfterCompletionDescription: "キーワード、テーブル名、列名の補全確定時、次の文字が許容する場合に自動でスペースを補填します",

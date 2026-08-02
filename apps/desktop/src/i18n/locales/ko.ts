@@ -4551,6 +4551,8 @@ export default withEnglishFallback({
     syncSnippetMigrateLegacySuccess: "암호화된 스니펫 {id}를 만들고 레거시 일반 텍스트 스니펫을 삭제했습니다.",
     syncSnippetMigrateLegacyCreated: "암호화된 스니펫 {id}를 만들었습니다.",
     syncSnippetMigrateLegacyCleanupRequired: "암호화된 스니펫은 만들었지만 레거시 스니펫 {id}를 삭제하지 못했습니다. 수동으로 삭제하고 노출되었을 수 있는 자격 증명을 교체하세요.",
+    syncSnippetRetryLegacyCleanup: "레거시 정리 다시 시도",
+    syncSnippetLegacyCleanupSuccess: "레거시 일반 텍스트 스니펫 {id}를 삭제했습니다.",
     syncSnippetGuide: "설정 가이드",
     apply: "적용",
     applyAndClose: "적용 후 닫기",

@@ -1613,6 +1613,7 @@ export interface SnippetSyncConfig {
 
 export interface SnippetSyncSettings {
   snippetId?: string;
+  legacyCleanupRequiredId?: string;
 }
 
 export interface SnippetSyncSummary {
@@ -1700,6 +1701,10 @@ export async function snippetSyncSettings(provider: SnippetProvider): Promise<Sn
 
 export async function saveSnippetSyncId(provider: SnippetProvider, snippetId?: string): Promise<void> {
   await post("/api/cloud-sync/snippet/save-id", { provider, snippetId });
+}
+
+export async function retrySnippetLegacyCleanup(config: SnippetSyncConfig): Promise<SnippetSyncSettings> {
+  return post("/api/cloud-sync/snippet/retry-legacy-cleanup", { config });
 }
 
 export async function snippetSyncUpload(config: SnippetSyncConfig, editorSettings?: unknown, snippetPassphrase?: string, includeSecrets = false, secretsPassphrase?: string): Promise<SnippetSyncSummary> {

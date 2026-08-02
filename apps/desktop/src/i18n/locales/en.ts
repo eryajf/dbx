@@ -4809,6 +4809,8 @@ export default {
     syncSnippetMigrateLegacySuccess: "Created encrypted snippet {id} and removed the legacy plaintext snippet.",
     syncSnippetMigrateLegacyCreated: "Created encrypted snippet {id}.",
     syncSnippetMigrateLegacyCleanupRequired: "The encrypted snippet was created, but legacy snippet {id} could not be deleted. Delete it manually and rotate any exposed credentials.",
+    syncSnippetRetryLegacyCleanup: "Retry legacy cleanup",
+    syncSnippetLegacyCleanupSuccess: "Removed legacy plaintext snippet {id}.",
     syncSnippetGuide: "Setup guide",
     apply: "Apply",
     applyAndClose: "Apply and Close",

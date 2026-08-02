@@ -3,9 +3,10 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::Json;
 use dbx_core::cloud_sync::{
-    apply_sync_snapshot, build_sync_snapshot, build_sync_snapshot_with_saved_secrets, forget_snippet_token,
-    forget_webdav_password, forget_webdav_sync_secrets_passphrase as core_forget_webdav_sync_secrets_passphrase,
-    resolve_snippet_token, resolve_webdav_password, resolve_webdav_sync_secrets_passphrase,
+    apply_sync_snapshot, build_sync_snapshot, build_sync_snapshot_with_saved_secrets, finalize_snippet_migration,
+    forget_snippet_token, forget_webdav_password,
+    forget_webdav_sync_secrets_passphrase as core_forget_webdav_sync_secrets_passphrase, resolve_snippet_token,
+    resolve_webdav_password, resolve_webdav_sync_secrets_passphrase, retry_pending_snippet_cleanup,
     save_snippet_sync_id as core_save_snippet_sync_id, save_snippet_token, save_webdav_password,
     save_webdav_sync_secrets_preference as core_save_webdav_sync_secrets_preference, snippet_saved_token_status,
     snippet_sync_settings as core_snippet_sync_settings, webdav_saved_password_status,
@@ -267,6 +268,16 @@ pub async fn save_snippet_sync_id(
     Ok(Json(()))
 }
 
+pub async fn retry_snippet_legacy_cleanup(
+    State(state): State<Arc<WebState>>,
+    Json(mut req): Json<SnippetConfigRequest>,
+) -> Result<Json<SnippetSyncSettings>, AppError> {
+    resolve_snippet_token(&state.app.storage, &mut req.config).await.map_err(AppError::from)?;
+    let provider = req.config.provider;
+    let client = SnippetSyncClient::new(req.config);
+    retry_pending_snippet_cleanup(&state.app.storage, provider, &client).await.map(Json).map_err(AppError::from)
+}
+
 pub async fn snippet_sync_upload(
     State(state): State<Arc<WebState>>,
     Json(mut req): Json<SnippetUploadRequest>,
@@ -287,21 +298,12 @@ pub async fn snippet_sync_upload(
         build_sync_snapshot(&state.app.storage, env!("CARGO_PKG_VERSION"), req.editor_settings, secrets_passphrase)
             .await
             .map_err(AppError::from)?;
-    let provider = req.config.provider;
     let client = SnippetSyncClient::new(req.config);
     let mut summary = client
         .put_snapshot(&snapshot, req.snippet_passphrase.as_deref(), secrets_passphrase)
         .await
         .map_err(AppError::from)?;
-    if summary.legacy_cleanup_required_id.is_some() {
-        // Keep the replacement id durable before the destructive cleanup.
-        core_save_snippet_sync_id(&state.app.storage, provider, Some(&summary.snippet_id))
-            .await
-            .map_err(AppError::from)?;
-        if client.delete_legacy_snippet_if_unchanged(&summary).await.unwrap_or(false) {
-            summary.legacy_cleanup_required_id = None;
-        }
-    }
+    finalize_snippet_migration(&state.app.storage, &client, &mut summary).await.map_err(AppError::from)?;
     Ok(Json(summary))
 }
 
@@ -330,4 +332,41 @@ pub async fn snippet_sync_download(
         desktop_settings: snapshot.desktop_settings,
         apply_summary,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::extract::State;
+    use axum::Json;
+    use dbx_core::cloud_sync::SnippetProvider;
+    use dbx_core::connection::AppState;
+    use dbx_core::storage::Storage;
+
+    use crate::state::WebState;
+
+    #[tokio::test]
+    async fn snippet_settings_surfaces_pending_cleanup_after_restart() {
+        let dir = std::env::temp_dir().join(format!("dbx-web-snippet-cleanup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("storage.db");
+        let storage = Storage::open(&db).await.unwrap();
+        storage.save_snippet_migration_state("github", "replacement-id", "legacy-id", "content-hash").await.unwrap();
+        drop(storage);
+
+        let storage = Storage::open(&db).await.unwrap();
+        let app = Arc::new(AppState::new_with_plugin_dir(storage, dir.join("plugins")));
+        let state = Arc::new(WebState::for_tests(app, dir.clone()));
+        let Json(settings) = super::snippet_sync_settings(
+            State(state),
+            Json(super::SnippetSyncSettingsRequest { provider: SnippetProvider::GitHub }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(settings.snippet_id.as_deref(), Some("replacement-id"));
+        assert_eq!(settings.legacy_cleanup_required_id.as_deref(), Some("legacy-id"));
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

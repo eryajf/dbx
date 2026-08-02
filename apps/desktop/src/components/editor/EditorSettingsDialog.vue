@@ -72,6 +72,7 @@ import {
   saveWebdavSavedPassword,
   saveSnippetSavedToken,
   saveSnippetSyncId,
+  retrySnippetLegacyCleanup,
   snippetSyncDownload,
   snippetSyncSettings,
   snippetSyncTest,
@@ -1680,10 +1681,11 @@ const snippetPassphrase = ref("");
 const snippetSecretsPassphrase = ref("");
 const snippetIncludeSecrets = ref(false);
 const snippetRestoreSecrets = ref(false);
-const snippetBusy = ref<"" | "test" | "upload" | "download" | "migrate">("");
+const snippetBusy = ref<"" | "test" | "upload" | "download" | "migrate" | "cleanup">("");
 const snippetMessage = ref("");
 const snippetError = ref(false);
 const legacySnippetId = ref("");
+const pendingLegacyCleanupId = ref("");
 const snippetSyncSettingsLoading = ref(true);
 
 const webdavReady = computed(() => !!webdavEndpoint.value.trim() && !webdavBusy.value && (!webdavSyncSecrets.value || !!webdavSecretsPassphrase.value.trim() || webdavHasSavedSecretsPassphrase.value));
@@ -1721,6 +1723,7 @@ async function refreshSnippetSyncSettings(provider = snippetProvider.value) {
   try {
     const settings = await snippetSyncSettings(provider);
     if (provider !== snippetProvider.value) return;
+    pendingLegacyCleanupId.value = settings.legacyCleanupRequiredId || "";
     if (settings.snippetId) {
       snippetId.value = settings.snippetId;
       return;
@@ -1733,7 +1736,10 @@ async function refreshSnippetSyncSettings(provider = snippetProvider.value) {
     if (provider !== snippetProvider.value) return;
     snippetId.value = legacyId || "";
   } catch {
-    if (provider === snippetProvider.value) snippetId.value = "";
+    if (provider === snippetProvider.value) {
+      snippetId.value = "";
+      pendingLegacyCleanupId.value = "";
+    }
   } finally {
     if (provider === snippetProvider.value) snippetSyncSettingsLoading.value = false;
   }
@@ -1756,7 +1762,7 @@ async function applySnippetTokenPreference() {
   }
 }
 
-async function runSnippetAction(kind: "test" | "upload" | "download" | "migrate", action: () => Promise<string>, persistCurrentSnippetId = true) {
+async function runSnippetAction(kind: "test" | "upload" | "download" | "migrate" | "cleanup", action: () => Promise<string>, persistCurrentSnippetId = true) {
   snippetBusy.value = kind;
   snippetMessage.value = "";
   snippetError.value = false;
@@ -1813,13 +1819,28 @@ async function migrateLegacySnippet() {
       snippetId.value = summary.snippetId;
       await persistSnippetSyncId();
       legacySnippetId.value = "";
+      pendingLegacyCleanupId.value = summary.legacyCleanupRequiredId || "";
       if (!summary.legacyCleanupRequiredId) {
         return t("settings.syncSnippetMigrateLegacySuccess", { id: summary.snippetId });
       }
-      return `${t("settings.syncSnippetMigrateLegacyCreated", { id: summary.snippetId })} ${t("settings.syncSnippetMigrateLegacyCleanupRequired", { id: summary.legacyCleanupRequiredId })}`;
+      throw new Error(`${t("settings.syncSnippetMigrateLegacyCreated", { id: summary.snippetId })} ${t("settings.syncSnippetMigrateLegacyCleanupRequired", { id: summary.legacyCleanupRequiredId })}`);
     },
     false,
   );
+}
+
+async function retryLegacySnippetCleanup() {
+  const id = pendingLegacyCleanupId.value;
+  if (!id) return;
+  await runSnippetAction("cleanup", async () => {
+    const settings = await retrySnippetLegacyCleanup(currentSnippetConfig());
+    if (settings.snippetId) snippetId.value = settings.snippetId;
+    pendingLegacyCleanupId.value = settings.legacyCleanupRequiredId || "";
+    if (settings.legacyCleanupRequiredId) {
+      throw new Error(t("settings.syncSnippetMigrateLegacyCleanupRequired", { id: settings.legacyCleanupRequiredId }));
+    }
+    return t("settings.syncSnippetLegacyCleanupSuccess", { id });
+  });
 }
 
 async function downloadSnippetSnapshot() {
@@ -2111,6 +2132,7 @@ watch(snippetProvider, (provider) => {
   snippetRememberToken.value = localStorage.getItem(`dbx-snippet-remember-token-${provider}`) === "true";
   snippetToken.value = "";
   legacySnippetId.value = "";
+  pendingLegacyCleanupId.value = "";
   snippetSyncSettingsLoading.value = true;
   void refreshSnippetTokenStatus();
   void refreshSnippetSyncSettings(provider);
@@ -5014,6 +5036,13 @@ onUnmounted(cleanupPreviewEditor);
                       <p class="text-xs text-muted-foreground">
                         {{ t("settings.syncSecretsPassphraseDescription") }}
                       </p>
+                    </div>
+                    <div v-if="pendingLegacyCleanupId" class="flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive md:col-span-2">
+                      <span>{{ t("settings.syncSnippetMigrateLegacyCleanupRequired", { id: pendingLegacyCleanupId }) }}</span>
+                      <Button variant="destructive" size="sm" :disabled="!snippetReady" @click="retryLegacySnippetCleanup">
+                        <Loader2 v-if="snippetBusy === 'cleanup'" class="mr-1 h-3 w-3 animate-spin" />
+                        {{ t("settings.syncSnippetRetryLegacyCleanup") }}
+                      </Button>
                     </div>
                     <div class="flex flex-wrap items-center justify-between gap-3 md:col-span-2">
                       <div v-if="snippetMessage" class="min-w-0 flex-1 text-xs" :class="snippetError ? 'text-destructive' : 'text-green-600 dark:text-green-400'">

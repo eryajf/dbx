@@ -16,7 +16,7 @@ use crate::connection_secrets::{
 };
 use crate::models::connection::{ConnectionConfig, DatabaseType, TransportLayerConfig};
 use crate::saved_sql::SavedSqlLibrary;
-use crate::storage::{DesktopSettings, Storage};
+use crate::storage::{DesktopSettings, SnippetPendingCleanup, Storage};
 
 const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 const ENCRYPTED_SNIPPET_SNAPSHOT_FORMAT: &str = "dbx-encrypted-sync-snapshot";
@@ -84,6 +84,8 @@ pub struct SnippetTokenStatus {
 #[serde(rename_all = "camelCase")]
 pub struct SnippetSyncSettings {
     pub snippet_id: Option<String>,
+    #[serde(default)]
+    pub legacy_cleanup_required_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -364,7 +366,11 @@ pub async fn snippet_sync_settings(
     storage: &Storage,
     provider: SnippetProvider,
 ) -> Result<SnippetSyncSettings, String> {
-    Ok(SnippetSyncSettings { snippet_id: storage.load_snippet_sync_id(snippet_provider_storage_key(provider)).await? })
+    let state = storage.load_snippet_sync_state(snippet_provider_storage_key(provider)).await?;
+    Ok(SnippetSyncSettings {
+        snippet_id: state.snippet_id,
+        legacy_cleanup_required_id: state.pending_cleanup.map(|cleanup| cleanup.snippet_id),
+    })
 }
 
 pub async fn save_snippet_sync_id(
@@ -373,6 +379,47 @@ pub async fn save_snippet_sync_id(
     snippet_id: Option<&str>,
 ) -> Result<(), String> {
     storage.save_snippet_sync_id(snippet_provider_storage_key(provider), snippet_id).await
+}
+
+pub async fn finalize_snippet_migration(
+    storage: &Storage,
+    client: &SnippetSyncClient,
+    summary: &mut SnippetSyncSummary,
+) -> Result<(), String> {
+    let Some(pending_cleanup) = snippet_pending_cleanup(summary)? else {
+        return Ok(());
+    };
+    let provider_key = snippet_provider_storage_key(summary.provider);
+    storage
+        .save_snippet_migration_state(
+            provider_key,
+            &summary.snippet_id,
+            &pending_cleanup.snippet_id,
+            &pending_cleanup.expected_content_hash,
+        )
+        .await?;
+    if client.delete_legacy_snippet_if_unchanged(&pending_cleanup).await.unwrap_or(false)
+        && storage.clear_snippet_pending_cleanup_if_matches(provider_key, &pending_cleanup).await?
+    {
+        summary.legacy_cleanup_required_id = None;
+        summary.legacy_cleanup_expected_content_hash = None;
+    }
+    Ok(())
+}
+
+pub async fn retry_pending_snippet_cleanup(
+    storage: &Storage,
+    provider: SnippetProvider,
+    client: &SnippetSyncClient,
+) -> Result<SnippetSyncSettings, String> {
+    let provider_key = snippet_provider_storage_key(provider);
+    let state = storage.load_snippet_sync_state(provider_key).await?;
+    if let Some(pending_cleanup) = state.pending_cleanup {
+        if client.delete_legacy_snippet_if_unchanged(&pending_cleanup).await? {
+            storage.clear_snippet_pending_cleanup_if_matches(provider_key, &pending_cleanup).await?;
+        }
+    }
+    snippet_sync_settings(storage, provider).await
 }
 
 pub async fn resolve_snippet_token(storage: &Storage, config: &mut SnippetSyncConfig) -> Result<(), String> {
@@ -689,20 +736,19 @@ impl SnippetSyncClient {
         Ok(content)
     }
 
-    pub async fn delete_legacy_snippet_if_unchanged(&self, summary: &SnippetSyncSummary) -> Result<bool, String> {
-        let Some(snippet_id) = summary.legacy_cleanup_required_id.as_deref() else {
-            return Ok(true);
-        };
-        let Some(expected_hash) = summary.legacy_cleanup_expected_content_hash.as_deref() else {
-            return Err("Legacy snippet cleanup is missing its content verification state.".to_string());
-        };
+    pub async fn delete_legacy_snippet_if_unchanged(
+        &self,
+        pending_cleanup: &SnippetPendingCleanup,
+    ) -> Result<bool, String> {
         // Neither provider documents a conditional DELETE for snippets. Read
         // again after creating the replacement and refuse cleanup when another
         // device has changed the legacy content in the meantime.
-        if content_hash(&self.load_snippet_content(snippet_id).await?) != expected_hash {
+        if content_hash(&self.load_snippet_content(&pending_cleanup.snippet_id).await?)
+            != pending_cleanup.expected_content_hash
+        {
             return Ok(false);
         }
-        let url = format!("{}/gists/{snippet_id}", self.api_base);
+        let url = format!("{}/gists/{}", self.api_base, pending_cleanup.snippet_id);
         let response = self.request(Method::DELETE, &url)?.send().await.map_err(|e| e.to_string())?;
         // If the provider reports that the old snippet is already absent, the
         // cleanup goal is satisfied and the newly created encrypted snippet is
@@ -1187,6 +1233,17 @@ fn content_hash(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn snippet_pending_cleanup(summary: &SnippetSyncSummary) -> Result<Option<SnippetPendingCleanup>, String> {
+    match (summary.legacy_cleanup_required_id.as_deref(), summary.legacy_cleanup_expected_content_hash.as_deref()) {
+        (None, None) => Ok(None),
+        (Some(snippet_id), Some(expected_content_hash)) => Ok(Some(SnippetPendingCleanup {
+            snippet_id: snippet_id.to_string(),
+            expected_content_hash: expected_content_hash.to_string(),
+        })),
+        _ => Err("Legacy snippet cleanup is missing its persisted verification state.".to_string()),
+    }
+}
+
 fn required_snippet_passphrase(passphrase: Option<&str>) -> Result<&str, String> {
     normalized_passphrase(passphrase)
         .ok_or_else(|| "A snippet encryption password is required for GitHub and Gitee sync.".to_string())
@@ -1317,13 +1374,14 @@ fn parent_collection_paths(remote_path: &str) -> Vec<String> {
 mod tests {
     use super::{
         apply_sensitive_payload, apply_sync_snapshot, build_sync_snapshot, build_sync_snapshot_with_saved_secrets,
-        decrypt_sensitive_payload, encrypt_sensitive_payload, encrypt_snippet_snapshot,
+        decrypt_sensitive_payload, encrypt_sensitive_payload, encrypt_snippet_snapshot, finalize_snippet_migration,
         forget_webdav_sync_secrets_passphrase, gitee_snippet_payload, is_legacy_dbx_snapshot, normalized_remote_path,
         parent_collection_paths, parse_legacy_dbx_snapshot, parse_snippet_snapshot, prepare_legacy_snippet_snapshot,
-        resolve_webdav_sync_secrets_passphrase, save_snippet_sync_id, save_webdav_sync_secrets_preference,
-        scrub_connection_secrets, snapshot_for_snippet_upload, snippet_file_content, snippet_response_id,
-        snippet_sync_settings, webdav_sync_secrets_status, ApplySnapshotOptions, ConnectionSecretSnapshot,
-        SensitiveSyncPayload, SnippetProvider, SnippetSyncClient, SnippetSyncConfig, DEFAULT_SNIPPET_FILE_NAME,
+        resolve_webdav_sync_secrets_passphrase, retry_pending_snippet_cleanup, save_snippet_sync_id,
+        save_webdav_sync_secrets_preference, scrub_connection_secrets, snapshot_for_snippet_upload,
+        snippet_file_content, snippet_response_id, snippet_sync_settings, webdav_sync_secrets_status,
+        ApplySnapshotOptions, ConnectionSecretSnapshot, SensitiveSyncPayload, SnippetProvider, SnippetSyncClient,
+        SnippetSyncConfig, DEFAULT_SNIPPET_FILE_NAME,
     };
     use crate::ai::{AiApiStyle, AiAuthMethod, AiConfig, AiConfigItem};
     use crate::connection_secrets::NACOS_AUTH_PASSWORD_KEY;
@@ -1843,13 +1901,69 @@ mod tests {
             base,
         );
 
-        let summary = client.put_snapshot(&snapshot, Some("snippet-password"), None).await.unwrap();
+        let mut summary = client.put_snapshot(&snapshot, Some("snippet-password"), None).await.unwrap();
         assert_eq!(summary.snippet_id, "new-id");
         assert_eq!(summary.legacy_cleanup_required_id.as_deref(), Some("legacy-id"));
-        assert!(!client.delete_legacy_snippet_if_unchanged(&summary).await.unwrap());
+        finalize_snippet_migration(&storage, &client, &mut summary).await.unwrap();
+        assert_eq!(summary.legacy_cleanup_required_id.as_deref(), Some("legacy-id"));
+        let settings = snippet_sync_settings(&storage, SnippetProvider::GitHub).await.unwrap();
+        assert_eq!(settings.snippet_id.as_deref(), Some("new-id"));
+        assert_eq!(settings.legacy_cleanup_required_id.as_deref(), Some("legacy-id"));
         assert_eq!(
             server.await.unwrap(),
             vec!["GET /gists/legacy-id HTTP/1.1", "POST /gists HTTP/1.1", "GET /gists/legacy-id HTTP/1.1",]
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_legacy_cleanup_survives_response_loss_and_retries_after_restart() {
+        let db = temp_db_path("legacy-snippet-cleanup-retry");
+        let storage = Storage::open(&db).await.unwrap();
+        let snapshot = build_sync_snapshot(&storage, "test-version", None, None).await.unwrap();
+        let legacy_content = serde_json::to_string(&snapshot).unwrap();
+        let (base, server) = spawn_snippet_server(vec![
+            github_snippet_response(&legacy_content),
+            serde_json::json!({ "id": "new-id" }).to_string(),
+        ])
+        .await;
+        let client = SnippetSyncClient::with_api_base(
+            SnippetSyncConfig {
+                provider: SnippetProvider::GitHub,
+                token: Some("test-token".to_string()),
+                snippet_id: Some("legacy-id".to_string()),
+                replace_legacy_snippet: true,
+            },
+            base,
+        );
+        let mut summary = client.put_snapshot(&snapshot, Some("snippet-password"), None).await.unwrap();
+
+        finalize_snippet_migration(&storage, &client, &mut summary).await.unwrap();
+        assert_eq!(summary.legacy_cleanup_required_id.as_deref(), Some("legacy-id"));
+        assert_eq!(server.await.unwrap(), vec!["GET /gists/legacy-id HTTP/1.1", "POST /gists HTTP/1.1"]);
+        drop(storage);
+
+        let storage = Storage::open(&db).await.unwrap();
+        let settings = snippet_sync_settings(&storage, SnippetProvider::GitHub).await.unwrap();
+        assert_eq!(settings.snippet_id.as_deref(), Some("new-id"));
+        assert_eq!(settings.legacy_cleanup_required_id.as_deref(), Some("legacy-id"));
+
+        let (retry_base, retry_server) =
+            spawn_snippet_server(vec![github_snippet_response(&legacy_content), "{}".to_string()]).await;
+        let retry_client = SnippetSyncClient::with_api_base(
+            SnippetSyncConfig {
+                provider: SnippetProvider::GitHub,
+                token: Some("test-token".to_string()),
+                snippet_id: Some("new-id".to_string()),
+                replace_legacy_snippet: false,
+            },
+            retry_base,
+        );
+        let settings = retry_pending_snippet_cleanup(&storage, SnippetProvider::GitHub, &retry_client).await.unwrap();
+        assert_eq!(settings.snippet_id.as_deref(), Some("new-id"));
+        assert_eq!(settings.legacy_cleanup_required_id, None);
+        assert_eq!(
+            retry_server.await.unwrap(),
+            vec!["GET /gists/legacy-id HTTP/1.1", "DELETE /gists/legacy-id HTTP/1.1"]
         );
     }
 
@@ -1910,6 +2024,10 @@ mod tests {
         assert_eq!(
             snippet_sync_settings(&storage, SnippetProvider::GitHub).await.unwrap().snippet_id.as_deref(),
             Some("github-id")
+        );
+        assert_eq!(
+            snippet_sync_settings(&storage, SnippetProvider::GitHub).await.unwrap().legacy_cleanup_required_id,
+            None
         );
         assert_eq!(
             snippet_sync_settings(&storage, SnippetProvider::Gitee).await.unwrap().snippet_id.as_deref(),

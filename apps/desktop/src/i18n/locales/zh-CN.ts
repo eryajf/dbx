@@ -4808,6 +4808,8 @@ export default withEnglishFallback({
     syncSnippetMigrateLegacySuccess: "已创建加密代码片段 {id}，并删除旧明文代码片段。",
     syncSnippetMigrateLegacyCreated: "已创建加密代码片段 {id}。",
     syncSnippetMigrateLegacyCleanupRequired: "已创建加密代码片段，但无法删除旧代码片段 {id}。请手动删除它，并轮换可能暴露的凭据。",
+    syncSnippetRetryLegacyCleanup: "重试清理旧版片段",
+    syncSnippetLegacyCleanupSuccess: "已删除旧版明文代码片段 {id}。",
     syncSnippetGuide: "配置指南",
     apply: "应用",
     applyAndClose: "应用并关闭",

@@ -4903,6 +4903,8 @@ export default withEnglishFallback({
     syncSnippetMigrateLegacySuccess: "O snippet criptografado {id} foi criado e o snippet legado em texto simples foi removido.",
     syncSnippetMigrateLegacyCreated: "O snippet criptografado {id} foi criado.",
     syncSnippetMigrateLegacyCleanupRequired: "O snippet criptografado foi criado, mas não foi possível excluir o snippet legado {id}. Exclua-o manualmente e altere as credenciais que possam ter sido expostas.",
+    syncSnippetRetryLegacyCleanup: "Tentar limpeza legada novamente",
+    syncSnippetLegacyCleanupSuccess: "O snippet legado em texto simples {id} foi removido.",
   },
   driverStore: {
     jreDirRemoveFailed: "Não foi possível remover o diretório JRE antigo: {path} (erro original: {error})",

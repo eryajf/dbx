@@ -4901,6 +4901,8 @@ export default withEnglishFallback({
     syncSnippetMigrateLegacySuccess: "Creato lo snippet crittografato {id} e rimosso lo snippet legacy in testo semplice.",
     syncSnippetMigrateLegacyCreated: "Creato lo snippet crittografato {id}.",
     syncSnippetMigrateLegacyCleanupRequired: "Lo snippet crittografato è stato creato, ma non è stato possibile eliminare lo snippet legacy {id}. Eliminalo manualmente e ruota le credenziali che potrebbero essere state esposte.",
+    syncSnippetRetryLegacyCleanup: "Riprova pulizia legacy",
+    syncSnippetLegacyCleanupSuccess: "Lo snippet legacy in testo semplice {id} è stato eliminato.",
   },
   driverStore: {
     jreDirRemoveFailed: "Impossibile rimuovere la vecchia directory JRE: {path} (errore originale: {error})",
