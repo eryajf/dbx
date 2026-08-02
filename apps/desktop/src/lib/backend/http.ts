@@ -1336,6 +1336,7 @@ export async function aiAgentStream(
   request: AiCompletionRequest,
   connectionId: string,
   database: string,
+  schema: string | undefined,
   dbType: string,
   onEvent: (event: import("@/lib/backend/tauri").AgentEvent) => void,
   mode?: string,
@@ -1343,6 +1344,7 @@ export async function aiAgentStream(
   confirmedWriteSql?: string,
   confirmedConnectionId?: string,
   confirmedDatabase?: string,
+  confirmedSchema?: string,
   signal?: AbortSignal,
 ): Promise<string> {
   const res = await fetch(apiUrl("/api/ai/agent-stream"), {
@@ -1353,12 +1355,14 @@ export async function aiAgentStream(
       request,
       connectionId,
       database,
+      schema,
       dbType,
       mode: mode || "ask",
       allowWriteSql,
       confirmedWriteSql,
       confirmedConnectionId,
       confirmedDatabase,
+      confirmedSchema,
     }),
     signal,
   });
@@ -1613,6 +1617,12 @@ export interface SnippetSyncConfig {
   provider: SnippetProvider;
   token?: string;
   snippetId?: string;
+  replaceLegacySnippet?: boolean;
+}
+
+export interface SnippetSyncSettings {
+  snippetId?: string;
+  legacyCleanupRequiredId?: string;
 }
 
 export interface SnippetSyncSummary {
@@ -1621,6 +1631,7 @@ export interface SnippetSyncSummary {
   bytes: number;
   exportedAt?: string;
   appVersion?: string;
+  legacyCleanupRequiredId?: string;
 }
 
 export interface SnippetDownloadResult {
@@ -1693,17 +1704,33 @@ export async function forgetSnippetSavedToken(config: SnippetSyncConfig): Promis
   await post("/api/cloud-sync/snippet/forget-token", { config });
 }
 
-export async function snippetSyncUpload(config: SnippetSyncConfig, editorSettings?: unknown, secretsPassphrase?: string): Promise<SnippetSyncSummary> {
+export async function snippetSyncSettings(provider: SnippetProvider): Promise<SnippetSyncSettings> {
+  return post("/api/cloud-sync/snippet/settings", { provider });
+}
+
+export async function saveSnippetSyncId(provider: SnippetProvider, snippetId?: string): Promise<void> {
+  await post("/api/cloud-sync/snippet/save-id", { provider, snippetId });
+}
+
+export async function retrySnippetLegacyCleanup(config: SnippetSyncConfig): Promise<SnippetSyncSettings> {
+  return post("/api/cloud-sync/snippet/retry-legacy-cleanup", { config });
+}
+
+export async function snippetSyncUpload(config: SnippetSyncConfig, editorSettings?: unknown, snippetPassphrase?: string, includeSecrets = false, secretsPassphrase?: string): Promise<SnippetSyncSummary> {
   return post("/api/cloud-sync/snippet/upload", {
     config,
     editorSettings,
+    snippetPassphrase,
+    includeSecrets,
     secretsPassphrase,
   });
 }
 
-export async function snippetSyncDownload(config: SnippetSyncConfig, secretsPassphrase?: string): Promise<SnippetDownloadResult> {
+export async function snippetSyncDownload(config: SnippetSyncConfig, snippetPassphrase?: string, restoreSecrets = false, secretsPassphrase?: string): Promise<SnippetDownloadResult> {
   return post("/api/cloud-sync/snippet/download", {
     config,
+    snippetPassphrase,
+    restoreSecrets,
     secretsPassphrase,
   });
 }
@@ -3130,13 +3157,14 @@ export async function mongoDeleteDocument(connectionId: string, database: string
   return documentDeleteDocument(connectionId, database, collection, id, routing);
 }
 
-export async function documentDeleteDocument(connectionId: string, database: string, collection: string, id: string, routing?: string): Promise<number> {
+export async function documentDeleteDocument(connectionId: string, database: string, collection: string, id: string, routing?: string, documentType?: string): Promise<number> {
   return post("/api/document-store/delete-document", {
     connectionId,
     database,
     collection,
     id,
     routing,
+    documentType,
   });
 }
 
