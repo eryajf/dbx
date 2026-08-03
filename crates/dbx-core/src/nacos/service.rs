@@ -152,6 +152,37 @@ pub async fn nacos_list_instances_core(
     admin.list_instances(query).await
 }
 
+pub async fn nacos_get_service_core(
+    state: &AppState,
+    conn_id: &str,
+    query: NacosServiceQuery,
+) -> Result<NacosServiceDetail, String> {
+    let admin = get_admin(state, conn_id).await?;
+    admin.get_service(query).await
+}
+
+pub async fn nacos_create_service_core(state: &AppState, conn_id: &str, req: NacosServiceUpsert) -> Result<(), String> {
+    ensure_connection_writable(state, conn_id, "Create Nacos service").await?;
+    let admin = get_admin(state, conn_id).await?;
+    admin.create_service(req).await
+}
+
+pub async fn nacos_update_service_core(state: &AppState, conn_id: &str, req: NacosServiceUpsert) -> Result<(), String> {
+    ensure_connection_writable(state, conn_id, "Update Nacos service").await?;
+    let admin = get_admin(state, conn_id).await?;
+    admin.update_service(req).await
+}
+
+pub async fn nacos_delete_service_core(
+    state: &AppState,
+    conn_id: &str,
+    query: NacosServiceQuery,
+) -> Result<(), String> {
+    ensure_connection_writable(state, conn_id, "Delete Nacos service").await?;
+    let admin = get_admin(state, conn_id).await?;
+    admin.delete_service(query).await
+}
+
 pub async fn nacos_update_instance_core(
     state: &AppState,
     conn_id: &str,
@@ -160,6 +191,26 @@ pub async fn nacos_update_instance_core(
     ensure_connection_writable(state, conn_id, "Update Nacos instance").await?;
     let admin = get_admin(state, conn_id).await?;
     admin.update_instance(req).await
+}
+
+pub async fn nacos_register_instance_core(
+    state: &AppState,
+    conn_id: &str,
+    req: NacosInstanceUpdate,
+) -> Result<(), String> {
+    ensure_connection_writable(state, conn_id, "Register Nacos instance").await?;
+    let admin = get_admin(state, conn_id).await?;
+    admin.register_instance(req).await
+}
+
+pub async fn nacos_deregister_instance_core(
+    state: &AppState,
+    conn_id: &str,
+    req: NacosInstanceDeregister,
+) -> Result<(), String> {
+    ensure_connection_writable(state, conn_id, "Deregister Nacos instance").await?;
+    let admin = get_admin(state, conn_id).await?;
+    admin.deregister_instance(req).await
 }
 
 pub async fn nacos_get_dashboard_core(

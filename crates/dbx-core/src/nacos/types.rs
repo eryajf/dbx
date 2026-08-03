@@ -10,6 +10,29 @@ pub struct NacosCapabilities {
     pub supports_service_management: bool,
     pub supports_instance_update: bool,
     pub supports_raw_api: bool,
+    pub service_management: NacosServiceCapabilities,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NacosServiceCapabilities {
+    pub list_services: bool,
+    pub list_instances: bool,
+    pub update_instances: bool,
+    pub manage_services: bool,
+    pub manage_instances: bool,
+}
+
+impl NacosServiceCapabilities {
+    pub fn read_only() -> Self {
+        Self {
+            list_services: true,
+            list_instances: true,
+            update_instances: false,
+            manage_services: false,
+            manage_instances: false,
+        }
+    }
 }
 
 impl Default for NacosCapabilities {
@@ -21,6 +44,13 @@ impl Default for NacosCapabilities {
             supports_service_management: true,
             supports_instance_update: true,
             supports_raw_api: true,
+            service_management: NacosServiceCapabilities {
+                list_services: true,
+                list_instances: true,
+                update_instances: true,
+                manage_services: true,
+                manage_instances: true,
+            },
         }
     }
 }
@@ -439,6 +469,40 @@ pub struct NacosServiceList {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct NacosServiceDetail {
+    pub service_name: String,
+    #[serde(default)]
+    pub group_name: Option<String>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+    #[serde(default)]
+    pub protect_threshold: Option<f64>,
+    #[serde(default)]
+    pub selector: Option<serde_json::Value>,
+    #[serde(default)]
+    pub ephemeral: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NacosServiceUpsert {
+    #[serde(default)]
+    pub namespace: Option<String>,
+    pub service_name: String,
+    #[serde(default)]
+    pub group_name: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    pub protect_threshold: Option<f64>,
+    #[serde(default)]
+    pub selector: Option<serde_json::Value>,
+    #[serde(default)]
+    pub ephemeral: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct NacosInstanceInfo {
     pub ip: String,
     pub port: u16,
@@ -494,6 +558,22 @@ pub struct NacosInstanceUpdate {
     pub weight: Option<f64>,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NacosInstanceDeregister {
+    #[serde(default)]
+    pub namespace: Option<String>,
+    pub service_name: String,
+    #[serde(default)]
+    pub group_name: Option<String>,
+    pub ip: String,
+    pub port: u16,
+    #[serde(default)]
+    pub cluster_name: Option<String>,
+    #[serde(default)]
+    pub ephemeral: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

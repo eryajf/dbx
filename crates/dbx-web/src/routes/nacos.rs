@@ -97,6 +97,20 @@ pub(crate) struct ServiceListReq {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ServiceQueryReq {
+    connection_id: String,
+    query: dbx_core::nacos::NacosServiceQuery,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServiceUpsertReq {
+    connection_id: String,
+    req: dbx_core::nacos::NacosServiceUpsert,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct InstanceListReq {
     connection_id: String,
     query: dbx_core::nacos::NacosInstanceQuery,
@@ -107,6 +121,13 @@ pub(crate) struct InstanceListReq {
 pub(crate) struct InstanceUpdateReq {
     connection_id: String,
     req: dbx_core::nacos::NacosInstanceUpdate,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InstanceDeregisterReq {
+    connection_id: String,
+    req: dbx_core::nacos::NacosInstanceDeregister,
 }
 
 #[derive(serde::Deserialize)]
@@ -319,11 +340,71 @@ pub async fn list_instances(
     Ok(Json(result))
 }
 
+pub async fn get_service(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ServiceQueryReq>,
+) -> Result<Json<dbx_core::nacos::NacosServiceDetail>, AppError> {
+    let result = dbx_core::nacos::service::nacos_get_service_core(&state.app, &req.connection_id, req.query)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Json(result))
+}
+
+pub async fn create_service(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ServiceUpsertReq>,
+) -> Result<Json<()>, AppError> {
+    dbx_core::nacos::service::nacos_create_service_core(&state.app, &req.connection_id, req.req)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn update_service(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ServiceUpsertReq>,
+) -> Result<Json<()>, AppError> {
+    dbx_core::nacos::service::nacos_update_service_core(&state.app, &req.connection_id, req.req)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn delete_service(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ServiceQueryReq>,
+) -> Result<Json<()>, AppError> {
+    dbx_core::nacos::service::nacos_delete_service_core(&state.app, &req.connection_id, req.query)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Json(()))
+}
+
 pub async fn update_instance(
     State(state): State<Arc<WebState>>,
     Json(req): Json<InstanceUpdateReq>,
 ) -> Result<Json<()>, AppError> {
     dbx_core::nacos::service::nacos_update_instance_core(&state.app, &req.connection_id, req.req)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn register_instance(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<InstanceUpdateReq>,
+) -> Result<Json<()>, AppError> {
+    dbx_core::nacos::service::nacos_register_instance_core(&state.app, &req.connection_id, req.req)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn deregister_instance(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<InstanceDeregisterReq>,
+) -> Result<Json<()>, AppError> {
+    dbx_core::nacos::service::nacos_deregister_instance_core(&state.app, &req.connection_id, req.req)
         .await
         .map_err(AppError::from)?;
     Ok(Json(()))

@@ -21,6 +21,7 @@ import type {
   NacosDashboardSnapshot,
   NacosRNacosConsoleCaptcha,
   NacosInstanceInfo,
+  NacosInstanceDeregister,
   NacosInstanceQuery,
   NacosInstanceUpdate,
   NacosNamespaceCreate,
@@ -29,7 +30,9 @@ import type {
   NacosRawRequest,
   NacosRawResponse,
   NacosServiceList,
+  NacosServiceDetail,
   NacosServiceQuery,
+  NacosServiceUpsert,
   NacosSearchProgress,
 } from "@/types/nacos";
 
@@ -121,12 +124,36 @@ export async function nacosListServices(connectionId: string, query: NacosServic
   return invoke("nacos_list_services", { connectionId, query });
 }
 
+export async function nacosGetService(connectionId: string, query: NacosServiceQuery): Promise<NacosServiceDetail> {
+  return invoke("nacos_get_service", { connectionId, query });
+}
+
+export async function nacosCreateService(connectionId: string, req: NacosServiceUpsert): Promise<void> {
+  return invoke("nacos_create_service", { connectionId, req });
+}
+
+export async function nacosUpdateService(connectionId: string, req: NacosServiceUpsert): Promise<void> {
+  return invoke("nacos_update_service", { connectionId, req });
+}
+
+export async function nacosDeleteService(connectionId: string, query: NacosServiceQuery): Promise<void> {
+  return invoke("nacos_delete_service", { connectionId, query });
+}
+
 export async function nacosListInstances(connectionId: string, query: NacosInstanceQuery): Promise<NacosInstanceInfo[]> {
   return invoke("nacos_list_instances", { connectionId, query });
 }
 
 export async function nacosUpdateInstance(connectionId: string, req: NacosInstanceUpdate): Promise<void> {
   return invoke("nacos_update_instance", { connectionId, req });
+}
+
+export async function nacosRegisterInstance(connectionId: string, req: NacosInstanceUpdate): Promise<void> {
+  return invoke("nacos_register_instance", { connectionId, req });
+}
+
+export async function nacosDeregisterInstance(connectionId: string, req: NacosInstanceDeregister): Promise<void> {
+  return invoke("nacos_deregister_instance", { connectionId, req });
 }
 
 export async function nacosGetDashboard(connectionId: string, query: NacosDashboardQuery): Promise<NacosDashboardSnapshot> {

@@ -61,10 +61,13 @@ import type {
   NacosContentSearchResult,
   NacosConflictPolicy,
   NacosInstanceInfo,
+  NacosInstanceRef,
   NacosNamespaceInfo,
   NacosNamespaceScope,
   NacosSearchProgress,
   NacosServiceInfo,
+  NacosServiceDetail,
+  NacosServiceUpsert,
 } from "@/types/nacos";
 import { Splitpanes, Pane } from "splitpanes";
 import "splitpanes/dist/splitpanes.css";
@@ -190,7 +193,26 @@ const instances = ref<NacosInstanceInfo[]>([]);
 const instancesLoading = ref(false);
 const instancesError = ref("");
 const updatingInstanceKey = ref("");
+const instanceWeightDrafts = ref<Record<string, string>>({});
 const pendingInstanceUpdate = ref<{ instance: NacosInstanceInfo; patch: Partial<NacosInstanceInfo> } | null>(null);
+const instanceEditorOpen = ref(false);
+const instanceEditorError = ref("");
+const instanceEditorTarget = ref<NacosInstanceInfo | null>(null);
+const instanceEditor = ref({ weight: "1", metadata: "{}" });
+const serviceEditorOpen = ref(false);
+const serviceEditorLoading = ref(false);
+const serviceEditorError = ref("");
+const serviceEditorMode = ref<"create" | "update">("create");
+const serviceEditor = ref({ serviceName: "", groupName: "", metadata: "{}", protectThreshold: "0", selector: "" });
+const pendingServiceDelete = ref<NacosServiceInfo | null>(null);
+const registeringInstance = ref(false);
+const registerInstanceOpen = ref(false);
+const registerInstanceError = ref("");
+const registerInstance = ref({ ip: "", port: "", clusterName: "DEFAULT", weight: "1", metadata: "{}" });
+const pendingInstanceDeregister = ref<NacosInstanceInfo | null>(null);
+const servicesRequestGuard = createNacosLatestRequestGuard();
+const instancesRequestGuard = createNacosLatestRequestGuard();
+let instanceUpdateSequence = 0;
 
 const NACOS_SPLIT_SIZE_KEY = "dbx-nacos-admin-split-size";
 const savedNacosSplitSize = Number(safeLocalStorageGet(NACOS_SPLIT_SIZE_KEY));
@@ -211,6 +233,10 @@ const batchTargetConnections = computed<NacosConfigTransferTarget[]>(() =>
     }),
 );
 const supportsConfigHistory = computed(() => connectionInfo.value?.capabilities.supportsConfigHistory !== false);
+const supportsServiceManagement = computed(() => connectionInfo.value?.capabilities.serviceManagement?.listServices ?? connectionInfo.value?.capabilities.supportsServiceManagement !== false);
+const supportsInstanceUpdate = computed(() => connectionInfo.value?.capabilities.serviceManagement?.updateInstances ?? connectionInfo.value?.capabilities.supportsInstanceUpdate !== false);
+const supportsServiceWrites = computed(() => connectionInfo.value?.capabilities.serviceManagement?.manageServices ?? supportsInstanceUpdate.value);
+const supportsInstanceWrites = computed(() => connectionInfo.value?.capabilities.serviceManagement?.manageInstances ?? supportsInstanceUpdate.value);
 const configHistoryUnavailableTitle = computed(() => {
   if (supportsConfigHistory.value) return undefined;
   const reason = connectionInfo.value?.capabilities.historyUnavailableReason;
@@ -1414,23 +1440,30 @@ async function deleteConfig() {
 }
 
 async function loadServices(page = servicePageNo.value) {
+  const requestId = servicesRequestGuard.begin();
+  const connectionId = props.connectionId;
+  const requestNamespace = namespace.value;
+  const requestGroup = serviceGroup.value.trim();
+  const requestName = serviceName.value.trim();
   servicesLoading.value = true;
   servicesError.value = "";
   servicePageNo.value = page;
   try {
-    const result = await api.nacosListServices(props.connectionId, {
-      namespace: namespace.value || undefined,
-      groupName: serviceGroup.value.trim() || undefined,
-      serviceName: serviceName.value.trim() || undefined,
-      pageNo: servicePageNo.value,
+    const result = await api.nacosListServices(connectionId, {
+      namespace: requestNamespace || undefined,
+      groupName: requestGroup || undefined,
+      serviceName: requestName || undefined,
+      pageNo: page,
       pageSize: servicePageSize.value,
     });
+    if (!servicesRequestGuard.isCurrent(requestId) || connectionId !== props.connectionId || requestNamespace !== namespace.value || requestGroup !== serviceGroup.value.trim() || requestName !== serviceName.value.trim()) return;
     services.value = result.items;
     serviceTotal.value = result.totalCount;
   } catch (error) {
+    if (!servicesRequestGuard.isCurrent(requestId)) return;
     servicesError.value = error instanceof Error ? error.message : String(error);
   } finally {
-    servicesLoading.value = false;
+    if (servicesRequestGuard.isCurrent(requestId)) servicesLoading.value = false;
   }
 }
 
@@ -1444,55 +1477,328 @@ async function loadServicesWithRetry(page = servicePageNo.value) {
 
 async function selectService(service: NacosServiceInfo) {
   selectedService.value = service;
+  instances.value = [];
+  instancesError.value = "";
   await loadInstances();
+}
+
+function serviceIdentity(service: NacosServiceInfo | null) {
+  return service ? `${service.groupName || serviceGroup.value || "DEFAULT_GROUP"}\u0000${service.serviceName}` : "";
+}
+
+function instanceRef(instance: NacosInstanceInfo, service = selectedService.value): NacosInstanceRef {
+  return {
+    namespace: namespace.value || undefined,
+    serviceName: service?.serviceName || instance.serviceName || "",
+    groupName: instance.groupName || service?.groupName || serviceGroup.value || undefined,
+    ip: instance.ip,
+    port: instance.port,
+    clusterName: instance.clusterName,
+    ephemeral: instance.ephemeral,
+  };
+}
+
+function instanceIdentity(instance: NacosInstanceInfo, service = selectedService.value) {
+  return instanceRefIdentity(instanceRef(instance, service));
+}
+
+function instanceRefIdentity(ref: NacosInstanceRef) {
+  return [ref.namespace || "public", ref.groupName || "DEFAULT_GROUP", ref.serviceName, ref.ip, ref.port, ref.clusterName || "DEFAULT", ref.ephemeral === true ? "ephemeral" : "persistent"].join("\u0000");
+}
+
+function instanceWeightDraft(instance: NacosInstanceInfo) {
+  return instanceWeightDrafts.value[instanceIdentity(instance)] ?? String(instance.weight ?? 1);
+}
+
+function updateInstanceWeightDraft(instance: NacosInstanceInfo, value: string | number) {
+  instanceWeightDrafts.value[instanceIdentity(instance)] = String(value);
+}
+
+function hasInstanceWeightDraft(instance: NacosInstanceInfo) {
+  const value = instanceWeightDraft(instance).trim();
+  return value !== "" && Number.isFinite(Number(value)) && Number(value) !== (instance.weight ?? 1);
+}
+
+function resetInstanceWeightDraft(instance: NacosInstanceInfo) {
+  delete instanceWeightDrafts.value[instanceIdentity(instance)];
+}
+
+function requestInstanceWeightUpdate(instance: NacosInstanceInfo) {
+  const value = instanceWeightDraft(instance).trim();
+  const weight = Number(value);
+  if (!value || !Number.isFinite(weight) || weight < 0) {
+    instancesError.value = "实例权重必须是大于或等于 0 的有限数字。";
+    return;
+  }
+  requestUpdateInstance(instance, { weight });
+}
+
+function openInstanceEditor(instance: NacosInstanceInfo) {
+  instanceEditorTarget.value = instance;
+  instanceEditor.value = {
+    weight: String(instance.weight ?? 1),
+    metadata: JSON.stringify(instance.metadata ?? {}, null, 2),
+  };
+  instanceEditorError.value = "";
+  instanceEditorOpen.value = true;
+}
+
+function submitInstanceEditor() {
+  const instance = instanceEditorTarget.value;
+  const weight = Number(instanceEditor.value.weight);
+  if (!instance || !Number.isFinite(weight) || weight < 0) {
+    instanceEditorError.value = "请输入大于或等于 0 的有限权重。";
+    return;
+  }
+  try {
+    const metadata = parseJsonObject(instanceEditor.value.metadata, "元数据");
+    instanceEditorOpen.value = false;
+    requestUpdateInstance(instance, { weight, metadata });
+  } catch (error) {
+    instanceEditorError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+function instanceMatchesPatch(instance: NacosInstanceInfo, patch: Partial<NacosInstanceInfo>) {
+  return (patch.enabled == null || instance.enabled === patch.enabled) && (patch.healthy == null || instance.healthy === patch.healthy) && (patch.weight == null || instance.weight === patch.weight);
 }
 
 async function loadInstances() {
   if (!selectedService.value) return;
+  const requestId = instancesRequestGuard.begin();
+  const connectionId = props.connectionId;
+  const requestNamespace = namespace.value;
+  const service = { ...selectedService.value };
+  const selectedIdentity = serviceIdentity(service);
+  const clusters = serviceCluster.value.trim();
   instancesLoading.value = true;
   instancesError.value = "";
   try {
-    instances.value = await api.nacosListInstances(props.connectionId, {
-      namespace: namespace.value || undefined,
-      serviceName: selectedService.value.serviceName,
-      groupName: selectedService.value.groupName || serviceGroup.value || undefined,
-      clusters: serviceCluster.value.trim() || undefined,
+    const result = await api.nacosListInstances(connectionId, {
+      namespace: requestNamespace || undefined,
+      serviceName: service.serviceName,
+      groupName: service.groupName || serviceGroup.value || undefined,
+      clusters: clusters || undefined,
     });
+    if (!instancesRequestGuard.isCurrent(requestId) || connectionId !== props.connectionId || requestNamespace !== namespace.value || selectedIdentity !== serviceIdentity(selectedService.value) || clusters !== serviceCluster.value.trim()) return;
+    instances.value = result;
   } catch (error) {
+    if (!instancesRequestGuard.isCurrent(requestId)) return;
     instancesError.value = error instanceof Error ? error.message : String(error);
   } finally {
-    instancesLoading.value = false;
+    if (instancesRequestGuard.isCurrent(requestId)) instancesLoading.value = false;
   }
 }
 
 function requestUpdateInstance(instance: NacosInstanceInfo, patch: Partial<NacosInstanceInfo>) {
-  if (!selectedService.value || props.readOnly) return;
+  if (!selectedService.value || props.readOnly || !supportsInstanceUpdate.value) return;
+  if (patch.weight != null && (!Number.isFinite(patch.weight) || patch.weight < 0)) {
+    instancesError.value = "实例权重必须是大于或等于 0 的有限数字。";
+    return;
+  }
   pendingInstanceUpdate.value = { instance, patch };
 }
 
+async function reconcileInstanceUpdate(ref: NacosInstanceRef, patch: Partial<NacosInstanceInfo>, updateId: number) {
+  const currentService = selectedService.value;
+  if (!currentService || serviceIdentity(currentService) !== `${ref.groupName || "DEFAULT_GROUP"}\u0000${ref.serviceName}`) return;
+  for (const retryDelay of [0, 250, 750]) {
+    if (retryDelay) await delay(retryDelay);
+    if (updateId !== instanceUpdateSequence || serviceIdentity(selectedService.value) !== serviceIdentity(currentService)) return;
+    try {
+      const result = await api.nacosListInstances(props.connectionId, {
+        namespace: ref.namespace,
+        serviceName: ref.serviceName,
+        groupName: ref.groupName,
+        clusters: serviceCluster.value.trim() || undefined,
+      });
+      if (updateId !== instanceUpdateSequence || serviceIdentity(selectedService.value) !== serviceIdentity(currentService)) return;
+      const actual = result.find((candidate) => instanceIdentity(candidate, currentService) === instanceRefIdentity(ref));
+      if (actual && instanceMatchesPatch(actual, patch)) {
+        instances.value = result;
+        void loadServices(servicePageNo.value);
+        return;
+      }
+    } catch {
+      // Keep the optimistic result visible. The final warning gives the user a
+      // deliberate refresh path instead of silently replacing it with stale data.
+    }
+  }
+  if (updateId === instanceUpdateSequence) instancesError.value = "实例更新已提交，但 Nacos 尚未返回新状态。请刷新后查看服务端状态。";
+}
+
 async function updateInstance(instance: NacosInstanceInfo, patch: Partial<NacosInstanceInfo>) {
-  if (!selectedService.value || props.readOnly) return;
-  updatingInstanceKey.value = `${instance.ip}:${instance.port}`;
+  if (!selectedService.value || props.readOnly || !supportsInstanceUpdate.value) return;
+  const ref = instanceRef(instance);
+  const key = instanceIdentity(instance);
+  const updateId = ++instanceUpdateSequence;
+  updatingInstanceKey.value = key;
   try {
     await api.nacosUpdateInstance(props.connectionId, {
-      namespace: namespace.value || undefined,
-      serviceName: selectedService.value.serviceName,
-      groupName: instance.groupName || selectedService.value.groupName || serviceGroup.value || undefined,
-      clusterName: instance.clusterName,
-      ip: instance.ip,
-      port: instance.port,
-      healthy: patch.healthy ?? instance.healthy,
-      enabled: patch.enabled ?? instance.enabled,
-      ephemeral: patch.ephemeral ?? instance.ephemeral,
-      weight: patch.weight ?? instance.weight,
-      metadata: instance.metadata,
+      namespace: ref.namespace,
+      serviceName: ref.serviceName,
+      groupName: ref.groupName,
+      ip: ref.ip,
+      port: ref.port,
+      clusterName: ref.clusterName,
+      healthy: patch.healthy,
+      enabled: patch.enabled,
+      weight: patch.weight,
+      metadata: patch.metadata,
     });
+    if (updateId !== instanceUpdateSequence) return;
+    instances.value = instances.value.map((candidate) => (instanceIdentity(candidate) === key ? { ...candidate, ...patch } : candidate));
+    if (patch.weight != null) delete instanceWeightDrafts.value[key];
     pendingInstanceUpdate.value = null;
-    await loadInstances();
+    void reconcileInstanceUpdate(ref, patch, updateId);
+  } catch (error) {
+    if (updateId === instanceUpdateSequence) instancesError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    if (updateId === instanceUpdateSequence) updatingInstanceKey.value = "";
+  }
+}
+
+function parseJsonObject(value: string, label: string): Record<string, unknown> {
+  const parsed = JSON.parse(value || "{}") as unknown;
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error(`${label}必须是 JSON 对象。`);
+  return parsed as Record<string, unknown>;
+}
+
+function parseOptionalJsonObject(value: string, label: string): Record<string, unknown> | undefined {
+  const trimmed = value.trim();
+  // Nacos rejects an empty selector object because it has no selector type.
+  // Treat an empty editor or `{}` as the absence of a selector instead.
+  if (!trimmed || trimmed === "{}") return undefined;
+  return parseJsonObject(trimmed, label);
+}
+
+function openCreateService() {
+  serviceEditorMode.value = "create";
+  serviceEditor.value = { serviceName: "", groupName: serviceGroup.value || "DEFAULT_GROUP", metadata: "{}", protectThreshold: "0", selector: "" };
+  serviceEditorError.value = "";
+  serviceEditorOpen.value = true;
+}
+
+async function openUpdateService(service: NacosServiceInfo) {
+  serviceEditorLoading.value = true;
+  serviceEditorError.value = "";
+  try {
+    const detail: NacosServiceDetail = await api.nacosGetService(props.connectionId, { namespace: namespace.value || undefined, serviceName: service.serviceName, groupName: service.groupName });
+    serviceEditorMode.value = "update";
+    serviceEditor.value = {
+      serviceName: detail.serviceName,
+      groupName: detail.groupName || service.groupName || "DEFAULT_GROUP",
+      metadata: JSON.stringify(detail.metadata ?? {}, null, 2),
+      protectThreshold: String(detail.protectThreshold ?? 0),
+      selector: detail.selector && typeof detail.selector === "object" && !Array.isArray(detail.selector) && Object.keys(detail.selector).length > 0 ? JSON.stringify(detail.selector, null, 2) : "",
+    };
+    serviceEditorOpen.value = true;
   } catch (error) {
     instancesError.value = error instanceof Error ? error.message : String(error);
   } finally {
-    updatingInstanceKey.value = "";
+    serviceEditorLoading.value = false;
+  }
+}
+
+async function submitServiceEditor() {
+  const threshold = Number(serviceEditor.value.protectThreshold);
+  if (!serviceEditor.value.serviceName.trim() || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+    serviceEditorError.value = "服务名称不能为空，保护阈值必须在 0 到 1 之间。";
+    return;
+  }
+  serviceEditorLoading.value = true;
+  serviceEditorError.value = "";
+  try {
+    const req: NacosServiceUpsert = {
+      namespace: namespace.value || undefined,
+      serviceName: serviceEditor.value.serviceName.trim(),
+      groupName: serviceEditor.value.groupName.trim() || undefined,
+      metadata: parseJsonObject(serviceEditor.value.metadata, "元数据"),
+      protectThreshold: threshold,
+      selector: parseOptionalJsonObject(serviceEditor.value.selector, "选择器"),
+    };
+    const isCreating = serviceEditorMode.value === "create";
+    if (isCreating) await api.nacosCreateService(props.connectionId, req);
+    else await api.nacosUpdateService(props.connectionId, req);
+    serviceEditorOpen.value = false;
+    // Nacos v2's list API only returns services from the requested group.
+    // Keep the new service visible immediately after a successful creation.
+    if (isCreating && req.groupName) serviceGroup.value = req.groupName;
+    await loadServicesWithRetry(1);
+  } catch (error) {
+    serviceEditorError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    serviceEditorLoading.value = false;
+  }
+}
+
+async function requestDeleteService(service: NacosServiceInfo) {
+  try {
+    const existing = await api.nacosListInstances(props.connectionId, { namespace: namespace.value || undefined, serviceName: service.serviceName, groupName: service.groupName });
+    if (existing.length) {
+      instancesError.value = "服务仍包含实例，无法删除。";
+      return;
+    }
+    pendingServiceDelete.value = service;
+  } catch (error) {
+    instancesError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function deleteService(service: NacosServiceInfo) {
+  try {
+    await api.nacosDeleteService(props.connectionId, { namespace: namespace.value || undefined, serviceName: service.serviceName, groupName: service.groupName });
+    pendingServiceDelete.value = null;
+    if (serviceIdentity(selectedService.value) === serviceIdentity(service)) {
+      selectedService.value = null;
+      instances.value = [];
+    }
+    await loadServicesWithRetry(1);
+  } catch (error) {
+    instancesError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function submitInstanceRegistration() {
+  if (!selectedService.value) return;
+  const port = Number(registerInstance.value.port);
+  const weight = Number(registerInstance.value.weight);
+  if (!registerInstance.value.ip.trim() || !Number.isInteger(port) || port < 1 || port > 65535 || !Number.isFinite(weight) || weight < 0) {
+    registerInstanceError.value = "请输入有效的 IP、端口和非负权重。";
+    return;
+  }
+  registeringInstance.value = true;
+  registerInstanceError.value = "";
+  try {
+    await api.nacosRegisterInstance(props.connectionId, {
+      namespace: namespace.value || undefined,
+      serviceName: selectedService.value.serviceName,
+      groupName: selectedService.value.groupName || serviceGroup.value || undefined,
+      ip: registerInstance.value.ip.trim(),
+      port,
+      clusterName: registerInstance.value.clusterName.trim() || undefined,
+      weight,
+      metadata: parseJsonObject(registerInstance.value.metadata, "元数据"),
+      ephemeral: false,
+    });
+    registerInstanceOpen.value = false;
+    await loadInstances();
+  } catch (error) {
+    registerInstanceError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    registeringInstance.value = false;
+  }
+}
+
+async function deregisterInstance(instance: NacosInstanceInfo) {
+  if (!selectedService.value) return;
+  try {
+    await api.nacosDeregisterInstance(props.connectionId, instanceRef(instance));
+    pendingInstanceDeregister.value = null;
+    instances.value = instances.value.filter((candidate) => instanceIdentity(candidate) !== instanceIdentity(instance));
+    void loadServices(servicePageNo.value);
+  } catch (error) {
+    instancesError.value = error instanceof Error ? error.message : String(error);
   }
 }
 
@@ -1551,6 +1857,11 @@ watch(
     originalConfigContent.value = "";
     destroyConfigEditor();
     selectedService.value = null;
+    servicesRequestGuard.invalidate();
+    instancesRequestGuard.invalidate();
+    instanceUpdateSequence += 1;
+    instances.value = [];
+    instancesError.value = "";
     selectedConfigKeys.value = [];
     try {
       await connectionStore.ensureConnected(props.connectionId);
@@ -1576,6 +1887,9 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   configDetailRequestGuard.invalidate();
+  servicesRequestGuard.invalidate();
+  instancesRequestGuard.invalidate();
+  instanceUpdateSequence += 1;
   configEditorSessionId += 1;
   latestConfigSaveRequestId += 1;
   batchNamespacesRequestGuard.invalidate();
@@ -1632,7 +1946,7 @@ onBeforeUnmount(() => {
 
     <div class="flex shrink-0 items-center gap-1 border-b px-3 py-1.5">
       <button class="rounded px-3 py-1.5 text-sm" :class="activeTab === 'configs' ? 'bg-accent font-medium' : 'text-muted-foreground hover:bg-accent/60'" @click="activeTab = 'configs'">{{ t("nacos.configs") }}</button>
-      <button class="rounded px-3 py-1.5 text-sm" :class="activeTab === 'services' ? 'bg-accent font-medium' : 'text-muted-foreground hover:bg-accent/60'" @click="activeTab = 'services'">{{ t("nacos.services") }}</button>
+      <button class="rounded px-3 py-1.5 text-sm" :class="activeTab === 'services' ? 'bg-accent font-medium' : 'text-muted-foreground hover:bg-accent/60'" :disabled="!supportsServiceManagement" @click="activeTab = 'services'">{{ t("nacos.services") }}</button>
     </div>
 
     <Splitpanes v-if="activeTab === 'configs'" class="nacos-admin-splitpanes min-h-0 flex-1" @resized="handleNacosSplitResized">
@@ -1899,10 +2213,13 @@ onBeforeUnmount(() => {
     <Splitpanes v-else-if="activeTab === 'services'" class="nacos-admin-splitpanes min-h-0 flex-1" @resized="handleNacosSplitResized">
       <Pane :size="nacosSplitSize" min-size="24">
         <div class="flex h-full min-h-0 flex-col">
-          <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 border-b p-2">
+          <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 border-b p-2">
             <Input v-model="serviceName" class="h-8 min-w-0" :placeholder="t('nacos.service')" @keyup.enter="loadServicesWithRetry(1)" />
             <Input v-model="serviceGroup" class="h-8 min-w-0" :placeholder="t('nacos.allGroups')" @keyup.enter="loadServicesWithRetry(1)" />
-            <Input v-model="serviceCluster" class="h-8 min-w-0" :placeholder="t('nacos.cluster')" @keyup.enter="loadInstances" />
+            <Button v-if="supportsServiceWrites" size="sm" variant="outline" class="h-8 gap-1.5" :disabled="readOnly" @click="openCreateService">
+              <Plus class="h-3.5 w-3.5" />
+              服务
+            </Button>
             <Button size="sm" variant="outline" class="h-8 gap-1.5" :disabled="servicesLoading" @click="loadServicesWithRetry(1)">
               <Loader2 v-if="servicesLoading" class="h-3.5 w-3.5 animate-spin" />
               <RefreshCw v-else class="h-3.5 w-3.5" />
@@ -1920,10 +2237,13 @@ onBeforeUnmount(() => {
               @click="selectService(service)"
             >
               <span class="truncate font-medium">{{ service.serviceName }}</span>
-              <span class="flex items-center gap-2 text-xs text-muted-foreground">
+              <span class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <Server class="h-3.5 w-3.5" />
                 {{ service.groupName || serviceGroup }}
                 <span v-if="service.ipCount != null">· {{ t("nacos.instanceCount", { count: service.ipCount }) }}</span>
+                <span v-if="service.healthyInstanceCount != null">· {{ t("nacos.healthy") }} {{ service.healthyInstanceCount }}</span>
+                <span v-if="service.clusterCount != null">· {{ t("nacos.cluster") }} {{ service.clusterCount }}</span>
+                <Badge v-if="service.triggerFlag === 'true'" variant="outline" class="h-5 border-amber-500 text-amber-700">保护模式已触发</Badge>
               </span>
             </button>
             <div v-if="!servicesLoading && services.length === 0" class="flex h-full items-center justify-center text-sm text-muted-foreground">{{ t("nacos.noServices") }}</div>
@@ -1941,65 +2261,99 @@ onBeforeUnmount(() => {
 
       <Pane :size="100 - nacosSplitSize" min-size="20">
         <div class="flex h-full min-h-0 flex-col">
-          <div class="flex shrink-0 items-center justify-between border-b px-3 py-2">
-            <div class="truncate text-sm font-medium">{{ selectedService?.serviceName || t("nacos.instances") }}</div>
-            <Button size="sm" variant="outline" class="h-8 gap-1.5" :disabled="!selectedService || instancesLoading" @click="loadInstances">
-              <Loader2 v-if="instancesLoading" class="h-3.5 w-3.5 animate-spin" />
-              <RefreshCw v-else class="h-3.5 w-3.5" />
-              {{ t("nacos.refresh") }}
-            </Button>
+          <div class="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+            <div class="min-w-0">
+              <div class="truncate text-sm font-medium">{{ selectedService?.serviceName || t("nacos.instances") }}</div>
+              <div v-if="selectedService" class="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                <span>{{ selectedService.groupName || "DEFAULT_GROUP" }}</span>
+                <span>· {{ instances.length }} 个已加载实例</span>
+                <Badge v-if="selectedService.triggerFlag === 'true'" variant="outline" class="h-5 border-amber-500 text-amber-700">保护模式已触发</Badge>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center justify-end gap-1.5">
+              <div v-if="selectedService" class="flex items-center gap-1">
+                <Input v-model="serviceCluster" class="h-8 w-32" placeholder="筛选实例集群" @keyup.enter="loadInstances" />
+                <Button size="sm" variant="outline" class="h-8" :disabled="instancesLoading" @click="loadInstances">筛选</Button>
+                <Button
+                  v-if="serviceCluster"
+                  size="sm"
+                  variant="ghost"
+                  class="h-8 px-2"
+                  :disabled="instancesLoading"
+                  @click="
+                    serviceCluster = '';
+                    loadInstances();
+                  "
+                  >清除</Button
+                >
+              </div>
+              <Button v-if="selectedService && supportsServiceWrites" size="sm" variant="outline" class="h-8" :disabled="readOnly || serviceEditorLoading" @click="openUpdateService(selectedService)">编辑服务</Button>
+              <Button v-if="selectedService && supportsServiceWrites" size="sm" variant="outline" class="h-8 text-destructive" :disabled="readOnly" @click="requestDeleteService(selectedService)">删除服务</Button>
+              <Button v-if="selectedService && supportsInstanceWrites" size="sm" variant="outline" class="h-8" :disabled="readOnly" @click="registerInstanceOpen = true">注册实例</Button>
+              <Button size="sm" variant="outline" class="h-8 gap-1.5" :disabled="!selectedService || instancesLoading" @click="loadInstances">
+                <Loader2 v-if="instancesLoading" class="h-3.5 w-3.5 animate-spin" />
+                <RefreshCw v-else class="h-3.5 w-3.5" />
+                {{ t("nacos.refresh") }}
+              </Button>
+            </div>
+          </div>
+          <div v-if="selectedService?.triggerFlag === 'true'" class="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+            保护模式已触发：健康实例比例低于服务设置的保护阈值。为避免客户端拿到空实例列表，Nacos 仍可能返回不健康实例。
           </div>
           <div v-if="instancesError" class="border-b px-3 py-2 text-xs text-destructive">{{ instancesError }}</div>
-          <div class="min-h-0 flex-1 overflow-auto">
-            <table v-if="instances.length" class="w-full text-left text-sm">
-              <thead class="sticky top-0 bg-muted/80 text-xs text-muted-foreground">
-                <tr>
-                  <th class="px-3 py-2 font-medium">{{ t("nacos.address") }}</th>
-                  <th class="px-3 py-2 font-medium">{{ t("nacos.cluster") }}</th>
-                  <th class="px-3 py-2 font-medium">{{ t("nacos.weight") }}</th>
-                  <th class="px-3 py-2 font-medium">metadata</th>
-                  <th class="px-3 py-2 font-medium">{{ t("nacos.state") }}</th>
-                  <th class="px-3 py-2 text-right font-medium">{{ t("nacos.actions") }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="instance in instances" :key="`${instance.ip}:${instance.port}`" class="border-b">
-                  <td class="px-3 py-2 font-mono text-xs">{{ instance.ip }}:{{ instance.port }}</td>
-                  <td class="px-3 py-2">{{ instance.clusterName || "-" }}</td>
-                  <td class="px-3 py-2">
-                    <Input
-                      :model-value="instance.weight ?? 1"
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      class="h-7 w-20 text-xs"
-                      :disabled="readOnly || updatingInstanceKey === `${instance.ip}:${instance.port}`"
-                      @change="(event: Event) => requestUpdateInstance(instance, { weight: Number((event.target as HTMLInputElement).value) })"
-                    />
-                  </td>
-                  <td class="max-w-56 truncate px-3 py-2 font-mono text-xs" :title="JSON.stringify(instance.metadata ?? null)">{{ JSON.stringify(instance.metadata ?? null) }}</td>
-                  <td class="px-3 py-2">
-                    <div class="flex flex-wrap gap-1">
-                      <Badge :variant="instance.healthy === false ? 'outline' : 'secondary'">{{ instance.healthy === false ? t("nacos.unhealthy") : t("nacos.healthy") }}</Badge>
-                      <Badge :variant="instance.enabled === false ? 'outline' : 'secondary'">{{ instance.enabled === false ? t("nacos.offline") : t("nacos.enabled") }}</Badge>
+          <div class="min-h-0 flex-1 overflow-auto bg-muted/20 p-3">
+            <div v-if="instances.length" class="space-y-2">
+              <article v-for="instance in instances" :key="instanceIdentity(instance)" class="rounded-lg border bg-background p-3 shadow-sm">
+                <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                  <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="font-mono text-sm font-medium">{{ instance.ip }}:{{ instance.port }}</span>
+                      <Badge variant="outline">{{ instance.clusterName || "DEFAULT" }}</Badge>
+                      <Badge :variant="instance.healthy === false ? 'outline' : 'secondary'" :class="instance.healthy === false ? 'border-destructive/50 text-destructive' : ''">{{ instance.healthy === false ? t("nacos.unhealthy") : t("nacos.healthy") }}</Badge>
+                      <Badge :variant="instance.enabled === false ? 'outline' : 'secondary'" :class="instance.enabled === false ? 'border-muted-foreground/50 text-muted-foreground' : ''">{{ instance.enabled === false ? t("nacos.offline") : t("nacos.enabled") }}</Badge>
                       <Badge v-if="instance.ephemeral != null" variant="outline">{{ instance.ephemeral ? t("nacos.ephemeral") : t("nacos.persistent") }}</Badge>
                     </div>
-                  </td>
-                  <td class="px-3 py-2 text-right">
-                    <div class="inline-flex gap-2">
-                      <Button size="sm" variant="outline" class="h-7 gap-1" :disabled="readOnly || updatingInstanceKey === `${instance.ip}:${instance.port}`" @click="requestUpdateInstance(instance, { enabled: !instance.enabled })">
-                        <Loader2 v-if="updatingInstanceKey === `${instance.ip}:${instance.port}`" class="h-3 w-3 animate-spin" />
-                        {{ instance.enabled === false ? t("nacos.enable") : t("nacos.disable") }}
-                      </Button>
-                      <Button size="sm" variant="outline" class="h-7" :disabled="readOnly || updatingInstanceKey === `${instance.ip}:${instance.port}`" @click="requestUpdateInstance(instance, { healthy: !instance.healthy })">
-                        {{ instance.healthy === false ? t("nacos.markHealthy") : t("nacos.markUnhealthy") }}
-                      </Button>
+                    <div class="mt-3 grid gap-x-5 gap-y-3 text-xs sm:grid-cols-[auto_minmax(0,1fr)]">
+                      <div class="flex items-end gap-1 self-start">
+                        <label class="grid gap-1 text-muted-foreground">
+                          <span>权重</span>
+                          <Input
+                            :model-value="instanceWeightDraft(instance)"
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            class="h-7 w-24 text-xs text-foreground"
+                            :disabled="readOnly || !supportsInstanceUpdate || updatingInstanceKey === instanceIdentity(instance)"
+                            @update:model-value="(value: string | number) => updateInstanceWeightDraft(instance, value)"
+                          />
+                        </label>
+                        <div v-if="hasInstanceWeightDraft(instance)" class="flex items-end gap-1">
+                          <Button size="sm" class="h-7" :disabled="readOnly || !supportsInstanceUpdate || updatingInstanceKey === instanceIdentity(instance)" @click="requestInstanceWeightUpdate(instance)">保存</Button>
+                          <Button size="sm" variant="ghost" class="h-7 px-2" :disabled="updatingInstanceKey === instanceIdentity(instance)" @click="resetInstanceWeightDraft(instance)">还原</Button>
+                        </div>
+                      </div>
+                      <details v-if="instance.metadata && Object.keys(instance.metadata).length" class="min-w-0 self-start text-muted-foreground">
+                        <summary class="cursor-pointer select-none hover:text-foreground">查看元数据（{{ Object.keys(instance.metadata).length }} 项）</summary>
+                        <pre class="mt-1 max-h-32 max-w-full overflow-auto rounded bg-muted p-2 font-mono text-[11px] text-foreground">{{ JSON.stringify(instance.metadata, null, 2) }}</pre>
+                      </details>
+                      <span v-else class="self-start text-muted-foreground">无元数据</span>
                     </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-else class="flex h-full items-center justify-center text-sm text-muted-foreground">{{ t("nacos.selectService") }}</div>
+                  </div>
+                  <div class="flex shrink-0 flex-wrap items-center gap-2 xl:justify-end">
+                    <Button size="sm" variant="outline" class="h-7" :disabled="readOnly || !supportsInstanceUpdate || updatingInstanceKey === instanceIdentity(instance)" @click="openInstanceEditor(instance)">编辑</Button>
+                    <Button size="sm" variant="outline" class="h-7 gap-1" :disabled="readOnly || !supportsInstanceUpdate || updatingInstanceKey === instanceIdentity(instance)" @click="requestUpdateInstance(instance, { enabled: !instance.enabled })">
+                      <Loader2 v-if="updatingInstanceKey === instanceIdentity(instance)" class="h-3 w-3 animate-spin" />
+                      {{ instance.enabled === false ? t("nacos.enable") : t("nacos.disable") }}
+                    </Button>
+                    <Button size="sm" variant="outline" class="h-7" :disabled="readOnly || !supportsInstanceUpdate || updatingInstanceKey === instanceIdentity(instance)" @click="requestUpdateInstance(instance, { healthy: !instance.healthy })">
+                      {{ instance.healthy === false ? t("nacos.markHealthy") : t("nacos.markUnhealthy") }}
+                    </Button>
+                    <Button v-if="supportsInstanceWrites" size="sm" variant="outline" class="h-7 text-destructive" :disabled="readOnly || updatingInstanceKey === instanceIdentity(instance)" @click="pendingInstanceDeregister = instance">注销</Button>
+                  </div>
+                </div>
+              </article>
+            </div>
+            <div v-else class="flex h-full items-center justify-center text-sm text-muted-foreground">{{ selectedService ? "暂无实例" : t("nacos.selectService") }}</div>
           </div>
         </div>
       </Pane>
@@ -2103,6 +2457,67 @@ onBeforeUnmount(() => {
       @confirm="requestRollbackComparedHistory"
     />
 
+    <Dialog v-model:open="serviceEditorOpen">
+      <DialogContent class="sm:max-w-xl" @pointer-down-outside.prevent @interact-outside.prevent @escape-key-down.prevent>
+        <DialogHeader>
+          <DialogTitle>{{ serviceEditorMode === "create" ? "创建 Nacos 服务" : "编辑 Nacos 服务" }}</DialogTitle>
+          <DialogDescription>管理服务元数据和保护阈值。</DialogDescription>
+        </DialogHeader>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="space-y-1.5"><Label>服务名称</Label><Input v-model="serviceEditor.serviceName" :disabled="serviceEditorMode === 'update'" /></div>
+          <div class="space-y-1.5"><Label>分组</Label><Input v-model="serviceEditor.groupName" /></div>
+          <div class="space-y-1.5"><Label>保护阈值</Label><Input v-model="serviceEditor.protectThreshold" inputmode="decimal" placeholder="例如 0.5" /></div>
+          <div class="space-y-1.5"><Label>元数据（JSON 对象）</Label><textarea v-model="serviceEditor.metadata" class="min-h-24 w-full rounded-md border bg-background p-2 font-mono text-xs" /></div>
+          <div class="space-y-1.5 sm:col-span-2"><Label>选择器（JSON 对象，可选）</Label><textarea v-model="serviceEditor.selector" class="min-h-20 w-full rounded-md border bg-background p-2 font-mono text-xs" /></div>
+          <p v-if="serviceEditorError" class="text-xs text-destructive sm:col-span-2">{{ serviceEditorError }}</p>
+        </div>
+        <DialogFooter
+          ><Button variant="outline" :disabled="serviceEditorLoading" @click="serviceEditorOpen = false">取消</Button><Button :disabled="serviceEditorLoading" @click="submitServiceEditor"><Loader2 v-if="serviceEditorLoading" class="mr-2 h-4 w-4 animate-spin" />保存</Button></DialogFooter
+        >
+      </DialogContent>
+    </Dialog>
+
+    <Dialog v-model:open="registerInstanceOpen">
+      <DialogContent class="sm:max-w-lg" @pointer-down-outside.prevent @interact-outside.prevent @escape-key-down.prevent>
+        <DialogHeader><DialogTitle>注册持久实例</DialogTitle><DialogDescription>DBX 不注册临时实例，因为无法为其提供心跳维持。</DialogDescription></DialogHeader>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="space-y-1.5"><Label>IP 地址</Label><Input v-model="registerInstance.ip" /></div>
+          <div class="space-y-1.5"><Label>端口</Label><Input v-model="registerInstance.port" type="number" min="1" max="65535" /></div>
+          <div class="space-y-1.5"><Label>集群</Label><Input v-model="registerInstance.clusterName" /></div>
+          <div class="space-y-1.5"><Label>权重</Label><Input v-model="registerInstance.weight" type="number" min="0" step="0.1" /></div>
+          <div class="space-y-1.5 sm:col-span-2"><Label>元数据（JSON 对象）</Label><textarea v-model="registerInstance.metadata" class="min-h-20 w-full rounded-md border bg-background p-2 font-mono text-xs" /></div>
+          <p v-if="registerInstanceError" class="text-xs text-destructive sm:col-span-2">{{ registerInstanceError }}</p>
+        </div>
+        <DialogFooter
+          ><Button variant="outline" :disabled="registeringInstance" @click="registerInstanceOpen = false">取消</Button><Button :disabled="registeringInstance" @click="submitInstanceRegistration"><Loader2 v-if="registeringInstance" class="mr-2 h-4 w-4 animate-spin" />注册</Button></DialogFooter
+        >
+      </DialogContent>
+    </Dialog>
+
+    <Dialog v-model:open="instanceEditorOpen">
+      <DialogContent class="sm:max-w-lg" @pointer-down-outside.prevent @interact-outside.prevent @escape-key-down.prevent>
+        <DialogHeader>
+          <DialogTitle>编辑实例</DialogTitle>
+          <DialogDescription>{{ instanceEditorTarget ? `${instanceEditorTarget.ip}:${instanceEditorTarget.port} · ${instanceEditorTarget.clusterName || "DEFAULT"}` : "" }}</DialogDescription>
+        </DialogHeader>
+        <div class="grid gap-3">
+          <div class="space-y-1.5">
+            <Label>权重</Label>
+            <Input v-model="instanceEditor.weight" type="number" min="0" step="0.1" />
+          </div>
+          <div class="space-y-1.5">
+            <Label>元数据（JSON 对象）</Label>
+            <textarea v-model="instanceEditor.metadata" class="min-h-36 w-full rounded-md border bg-background p-2 font-mono text-xs" />
+          </div>
+          <p v-if="instanceEditorError" class="text-xs text-destructive">{{ instanceEditorError }}</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" @click="instanceEditorOpen = false">取消</Button>
+          <Button @click="submitInstanceEditor">保存</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
     <DangerConfirmDialog
       :open="!!pendingDeleteConfig"
       :title="t('nacos.confirmDeleteTitle')"
@@ -2149,6 +2564,36 @@ onBeforeUnmount(() => {
         }
       "
       @confirm="pendingInstanceUpdate && updateInstance(pendingInstanceUpdate.instance, pendingInstanceUpdate.patch)"
+    />
+
+    <DangerConfirmDialog
+      :open="!!pendingServiceDelete"
+      title="删除 Nacos 服务"
+      message="确认删除这个空服务吗？此操作不可撤销。"
+      :details="pendingServiceDelete ? `${pendingServiceDelete.groupName || 'DEFAULT_GROUP'}@@${pendingServiceDelete.serviceName}` : ''"
+      confirm-label="删除"
+      :close-on-confirm="false"
+      @update:open="
+        (value: boolean) => {
+          if (!value) pendingServiceDelete = null;
+        }
+      "
+      @confirm="pendingServiceDelete && deleteService(pendingServiceDelete)"
+    />
+
+    <DangerConfirmDialog
+      :open="!!pendingInstanceDeregister"
+      title="注销 Nacos 实例"
+      message="确认从当前服务中注销这个实例吗？"
+      :details="pendingInstanceDeregister ? instanceIdentity(pendingInstanceDeregister) : ''"
+      confirm-label="注销"
+      :close-on-confirm="false"
+      @update:open="
+        (value: boolean) => {
+          if (!value) pendingInstanceDeregister = null;
+        }
+      "
+      @confirm="pendingInstanceDeregister && deregisterInstance(pendingInstanceDeregister)"
     />
   </div>
 </template>

@@ -29,8 +29,14 @@ pub trait NacosAdmin: Send + Sync {
     async fn get_rnacos_console_captcha(&self) -> Result<NacosRNacosConsoleCaptcha, String>;
     async fn login_rnacos_console(&self, captcha: Option<String>) -> Result<(), String>;
     async fn list_services(&self, query: NacosServiceQuery) -> Result<NacosServiceList, String>;
+    async fn get_service(&self, query: NacosServiceQuery) -> Result<NacosServiceDetail, String>;
+    async fn create_service(&self, req: NacosServiceUpsert) -> Result<(), String>;
+    async fn update_service(&self, req: NacosServiceUpsert) -> Result<(), String>;
+    async fn delete_service(&self, query: NacosServiceQuery) -> Result<(), String>;
     async fn list_instances(&self, query: NacosInstanceQuery) -> Result<Vec<NacosInstanceInfo>, String>;
     async fn update_instance(&self, req: NacosInstanceUpdate) -> Result<(), String>;
+    async fn register_instance(&self, req: NacosInstanceUpdate) -> Result<(), String>;
+    async fn deregister_instance(&self, req: NacosInstanceDeregister) -> Result<(), String>;
     async fn get_dashboard(&self, query: NacosDashboardQuery) -> Result<NacosDashboardSnapshot, String>;
     async fn raw_request(&self, req: NacosRawRequest) -> Result<NacosRawResponse, String>;
 }

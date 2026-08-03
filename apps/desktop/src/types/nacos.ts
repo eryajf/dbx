@@ -5,6 +5,17 @@ export interface NacosCapabilities {
   supportsServiceManagement: boolean;
   supportsInstanceUpdate: boolean;
   supportsRawApi: boolean;
+  /** Naming capabilities are intentionally granular: servers such as r-nacos
+   * can expose discovery reads without supporting the official write APIs. */
+  serviceManagement?: NacosServiceCapabilities;
+}
+
+export interface NacosServiceCapabilities {
+  listServices: boolean;
+  listInstances: boolean;
+  updateInstances: boolean;
+  manageServices: boolean;
+  manageInstances: boolean;
 }
 
 export interface NacosConnectionInfo {
@@ -313,6 +324,25 @@ export interface NacosServiceList {
   items: NacosServiceInfo[];
 }
 
+export interface NacosServiceDetail {
+  serviceName: string;
+  groupName?: string;
+  metadata?: unknown;
+  protectThreshold?: number;
+  selector?: unknown;
+  ephemeral?: boolean;
+}
+
+export interface NacosServiceUpsert {
+  namespace?: string;
+  serviceName: string;
+  groupName?: string;
+  metadata?: unknown;
+  protectThreshold?: number;
+  selector?: unknown;
+  ephemeral?: boolean;
+}
+
 export interface NacosInstanceQuery {
   namespace?: string;
   serviceName: string;
@@ -346,6 +376,18 @@ export interface NacosInstanceUpdate {
   weight?: number;
   metadata?: unknown;
 }
+
+export interface NacosInstanceRef {
+  namespace?: string;
+  serviceName: string;
+  groupName?: string;
+  ip: string;
+  port: number;
+  clusterName?: string;
+  ephemeral?: boolean;
+}
+
+export interface NacosInstanceDeregister extends NacosInstanceRef {}
 
 export interface NacosDashboardQuery {
   namespace?: string;
