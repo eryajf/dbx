@@ -3199,6 +3199,7 @@ export default withEnglishFallback({
     fieldRequired: "필드 이름을 입력하세요",
     valueRequired: "값을 입력하세요",
     memberRequired: "멤버를 입력하세요",
+    updateAppliedRefreshFailed: "변경 사항은 저장되었지만 값을 새로 고치지 못했습니다: {message}",
     ttlInvalid: "초 단위의 올바른 TTL을 입력하세요 (만료 없음은 -1)",
     member: "멤버",
     memberDetail: "멤버 상세",

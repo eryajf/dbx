@@ -3585,6 +3585,7 @@ export default {
     fieldRequired: "Enter a field name",
     valueRequired: "Enter a value",
     memberRequired: "Enter a member",
+    updateAppliedRefreshFailed: "The change was saved, but the value could not be refreshed: {message}",
     ttlInvalid: "Enter a valid TTL in seconds (-1 for no expiry)",
     member: "Member",
     memberDetail: "Member detail",

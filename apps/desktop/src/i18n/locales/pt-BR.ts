@@ -3436,6 +3436,7 @@ export default withEnglishFallback({
     fieldRequired: "Insira um nome de campo",
     valueRequired: "Insira um valor",
     memberRequired: "Insira um membro",
+    updateAppliedRefreshFailed: "A alteração foi salva, mas não foi possível atualizar o valor: {message}",
     ttlInvalid: "Insira um TTL válido em segundos (-1 para sem expiração)",
     member: "Membro",
     memberDetail: "Detalhe do membro",
