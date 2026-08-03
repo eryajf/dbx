@@ -48,7 +48,9 @@ test("matches custom shortcut settings for SQL execution", () => {
 });
 
 test("records custom shortcuts from keydown events", () => {
-  assert.equal(eventToShortcut({ key: "r", metaKey: true, shiftKey: true } as any), "Shift+Mod+R");
+  assert.equal(eventToShortcut({ key: "r", metaKey: true, shiftKey: true } as any, "MacIntel"), "Shift+Mod+R");
+  assert.equal(eventToShortcut({ key: "r", ctrlKey: true, shiftKey: true } as any, "MacIntel"), "Shift+Ctrl+R");
+  assert.equal(eventToShortcut({ key: "r", ctrlKey: true, shiftKey: true } as any, "Win32"), "Shift+Mod+R");
   assert.equal(eventToShortcut({ key: "F2" } as any), "F2");
   assert.equal(eventToShortcut({ key: "Control", ctrlKey: true } as any), null);
 });
