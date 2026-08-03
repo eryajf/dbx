@@ -176,4 +176,5 @@ test("RabbitMQ native tar.zst packages appear in the native catalog", () => {
       filename: "dbx-agent-rabbitmq-0.1.1-windows-x64.tar.zst",
     },
   ]);
+  assert.equal(entries[0]?.label, "RabbitMQ");
 });

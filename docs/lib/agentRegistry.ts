@@ -131,6 +131,7 @@ const driverLabels: Record<string, string> = {
   neo4j: "Neo4j",
   "oceanbase-oracle": "OceanBase Oracle Mode",
   oracle: "Oracle",
+  rabbitmq: "RabbitMQ",
   saphana: "SAP HANA",
   snowflake: "Snowflake",
   sundb: "SunDB",
