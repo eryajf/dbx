@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { eventToModifierOnlyShortcut, eventToShortcut, isExecuteSqlInNewResultTabShortcut, matchesModifierOnlyShortcut, matchesShortcut } from "@/lib/editor/keyboardShortcuts";
+import { formatShortcutDisplay } from "@/lib/editor/shortcutDisplay";
 
 describe("keyboard shortcut matching", () => {
   it("records modifier-only mouse shortcut settings", () => {
@@ -23,8 +24,28 @@ describe("keyboard shortcut matching", () => {
   });
 
   it("records the plus key without losing it to the separator", () => {
-    expect(eventToShortcut({ key: "+", ctrlKey: true })).toBe("Mod+Plus");
-    expect(eventToShortcut({ key: "+", ctrlKey: true, shiftKey: true })).toBe("Shift+Mod+Plus");
+    expect(eventToShortcut({ key: "+", ctrlKey: true }, "Win32")).toBe("Mod+Plus");
+    expect(eventToShortcut({ key: "+", ctrlKey: true, shiftKey: true }, "Win32")).toBe("Shift+Mod+Plus");
+  });
+
+  it("keeps Control distinct from Command when recording macOS shortcuts", () => {
+    const controlShortcut = eventToShortcut({ key: "b", ctrlKey: true }, "MacIntel");
+
+    expect(controlShortcut).toBe("Ctrl+B");
+    expect(formatShortcutDisplay(controlShortcut!, "MacIntel")).toBe("⌃ B");
+    expect(matchesShortcut({ key: "b", ctrlKey: true }, controlShortcut!, "MacIntel")).toBe(true);
+    expect(matchesShortcut({ key: "b", metaKey: true }, controlShortcut!, "MacIntel")).toBe(false);
+    expect(eventToShortcut({ key: "b", metaKey: true }, "MacIntel")).toBe("Mod+B");
+  });
+
+  it("keeps Ctrl as the platform modifier outside macOS and preserves combined modifiers", () => {
+    expect(eventToShortcut({ key: "b", ctrlKey: true }, "Win32")).toBe("Mod+B");
+    const combinedShortcut = eventToShortcut({ key: "b", ctrlKey: true, metaKey: true, shiftKey: true, altKey: true }, "MacIntel");
+
+    expect(combinedShortcut).toBe("Shift+Ctrl+Mod+Alt+B");
+    expect(matchesShortcut({ key: "b", ctrlKey: true, metaKey: true, shiftKey: true, altKey: true }, combinedShortcut!, "MacIntel")).toBe(true);
+    expect(matchesShortcut({ key: "b", ctrlKey: true, shiftKey: true, altKey: true }, combinedShortcut!, "MacIntel")).toBe(false);
+    expect(matchesShortcut({ key: "b", metaKey: true, shiftKey: true, altKey: true }, combinedShortcut!, "MacIntel")).toBe(false);
   });
 
   it("matches canonical plus-key shortcuts", () => {
