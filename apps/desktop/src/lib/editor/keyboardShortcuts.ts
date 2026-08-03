@@ -49,11 +49,14 @@ export function eventToShortcut(event: ShortcutLikeEvent, platform = globalThis.
   const isMac = isMacShortcutPlatform(platform);
   const parts: string[] = [];
   if (event.shiftKey) parts.push("Shift");
-  // macOS exposes Control and Command as separate modifiers. Keep Control
-  // explicit so recording Ctrl+B does not become the platform Mod (⌘) key.
-  if (isMac && event.ctrlKey) parts.push("Ctrl");
-  if (event.metaKey) parts.push(isMac ? "Mod" : "Meta");
-  if (!isMac && event.ctrlKey) parts.push("Mod");
+  if (isMac) {
+    if (event.ctrlKey) parts.push("Ctrl");
+    if (event.metaKey) parts.push("Mod");
+  } else if (event.ctrlKey && event.metaKey) {
+    parts.push("Mod", "Meta");
+  } else if (event.ctrlKey || event.metaKey) {
+    parts.push("Mod");
+  }
   if (event.altKey) parts.push("Alt");
   parts.push(key);
   return parts.join("+");
@@ -92,13 +95,13 @@ export function matchesShortcut(event: ShortcutLikeEvent, shortcut: string, plat
   const usesCtrl = modifiers.has("Ctrl");
 
   if (usesMod) {
-    if (!event.metaKey && !event.ctrlKey) return false;
-    // A recorded Ctrl+Cmd (macOS) or Ctrl+Meta (other platforms) shortcut
-    // contains both the generic and explicit modifiers, so require each key.
-    if (usesCtrl && !event.ctrlKey) return false;
-    if (usesMeta && !event.metaKey) return false;
-    if (usesCtrl && isMacShortcutPlatform(platform) && !event.metaKey) return false;
-    if (usesMeta && !isMacShortcutPlatform(platform) && !event.ctrlKey) return false;
+    if (isMacShortcutPlatform(platform)) {
+      if (!event.metaKey || !!event.ctrlKey !== usesCtrl) return false;
+    } else {
+      if (!event.metaKey && !event.ctrlKey) return false;
+      if (usesCtrl && (!event.ctrlKey || !event.metaKey)) return false;
+      if (usesMeta && (!event.metaKey || !event.ctrlKey)) return false;
+    }
   } else {
     if (!!event.metaKey !== usesMeta) return false;
     if (!!event.ctrlKey !== usesCtrl) return false;
