@@ -2974,8 +2974,10 @@ where
     let result = match result {
         Ok(result) => result,
         Err(error) if is_zset_update_acl_compatibility_error(&error) => {
-            zset_update_acl_compatibility(con, key, original_member, member, score).await?;
-            return Ok(true);
+            return Err(
+                "Atomic ZSet updates require the Redis EVAL and ZSCORE permissions. Ask an administrator to grant them."
+                    .to_string(),
+            );
         }
         Err(error) => return Err(error.to_string()),
     };
@@ -2996,63 +2998,6 @@ fn is_zset_update_acl_compatibility_error(error: &redis::RedisError) -> bool {
 
     let detail = error.detail().unwrap_or_default().to_ascii_lowercase();
     detail.contains("eval") || detail.contains("zscore")
-}
-
-async fn zset_update_acl_compatibility<C>(
-    con: &mut C,
-    key: &[u8],
-    original_member: &str,
-    member: &str,
-    score: &str,
-) -> Result<(), String>
-where
-    C: ConnectionLike + Send + Sync + Unpin,
-{
-    if original_member == member {
-        // XX avoids recreating a member that disappeared after it was loaded.
-        // Redis does not expose an exact-score CAS using only ZADD/ZREM, so a
-        // zero result is intentionally accepted for both unchanged and missing
-        // members in this permission-compatible path.
-        redis::cmd("ZADD")
-            .arg(key)
-            .arg("XX")
-            .arg(score)
-            .arg(member)
-            .query_async::<i64>(con)
-            .await
-            .map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
-    // Add the replacement first so a failed write never deletes the original.
-    // NX also preserves an existing target member instead of overwriting it.
-    let added = redis::cmd("ZADD")
-        .arg(key)
-        .arg("NX")
-        .arg(score)
-        .arg(member)
-        .query_async::<i64>(con)
-        .await
-        .map_err(|e| e.to_string())?;
-    if added == 0 {
-        return Err("A ZSet member with the new value already exists.".to_string());
-    }
-
-    let removed =
-        redis::cmd("ZREM").arg(key).arg(original_member).query_async::<i64>(con).await.map_err(|e| e.to_string())?;
-    if removed > 0 {
-        return Ok(());
-    }
-
-    // The source disappeared between the two compatibility commands. Remove
-    // the replacement we just added so the failed rename does not create data.
-    redis::cmd("ZREM")
-        .arg(key)
-        .arg(member)
-        .query_async::<i64>(con)
-        .await
-        .map_err(|e| format!("The ZSet member no longer exists, and the compatibility rollback failed: {e}"))?;
-    Err("The ZSet member no longer exists. Refresh and try again.".to_string())
 }
 
 pub async fn stream_add<C>(
@@ -4754,36 +4699,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zset_update_falls_back_to_zadd_for_restricted_acl_score_edits() {
-        let mut con = FakeRedisConnection::with_results(vec![Err(noperm("eval")), Ok(RedisRawValue::Int(0))]);
+    async fn zset_update_rejects_a_second_writer_renaming_a_member_with_a_stale_score() {
+        let mut con = FakeRedisConnection::new(vec![RedisRawValue::Int(-2)]);
 
-        let used_acl_compatibility =
-            super::zset_update(&mut con, b"scores", "alice", "10", "alice", "20").await.unwrap();
+        let error = super::zset_update(&mut con, b"scores", "alice", "10", "alicia", "20").await.unwrap_err();
 
-        assert!(used_acl_compatibility);
+        assert!(error.contains("score changed"));
         assert_eq!(con.command_count("EVAL"), 1);
-        assert_eq!(con.command_count("ZADD"), 1);
+        assert_eq!(con.command_count("ZADD"), 0);
         assert_eq!(con.command_count("ZREM"), 0);
-        assert!(con.commands[1].contains("\r\nXX\r\n"));
+        assert_eq!(con.commands.len(), 1);
     }
 
     #[tokio::test]
-    async fn zset_update_falls_back_to_zadd_and_zrem_for_restricted_acl_renames() {
-        let mut con = FakeRedisConnection::with_results(vec![
-            Err(noperm("eval")),
-            Ok(RedisRawValue::Int(1)),
-            Ok(RedisRawValue::Int(1)),
-        ]);
+    async fn zset_update_rejects_restricted_acl_score_edits_without_writing() {
+        let mut con = FakeRedisConnection::with_results(vec![Err(noperm("eval"))]);
 
-        let used_acl_compatibility =
-            super::zset_update(&mut con, b"scores", "alice", "10", "alicia", "20").await.unwrap();
+        let error = super::zset_update(&mut con, b"scores", "alice", "10", "alice", "20").await.unwrap_err();
 
-        assert!(used_acl_compatibility);
+        assert!(error.contains("EVAL and ZSCORE permissions"));
         assert_eq!(con.command_count("EVAL"), 1);
-        assert_eq!(con.command_count("ZADD"), 1);
-        assert_eq!(con.command_count("ZREM"), 1);
-        assert!(con.commands[1].contains("\r\nNX\r\n"));
-        assert!(con.commands[2].contains("\r\nalice\r\n"));
+        assert_eq!(con.command_count("ZADD"), 0);
+        assert_eq!(con.command_count("ZREM"), 0);
+        assert_eq!(con.commands.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn zset_update_rejects_restricted_acl_renames_without_writing() {
+        let mut con = FakeRedisConnection::with_results(vec![Err(noperm("zscore"))]);
+
+        let error = super::zset_update(&mut con, b"scores", "alice", "10", "alicia", "20").await.unwrap_err();
+
+        assert!(error.contains("EVAL and ZSCORE permissions"));
+        assert_eq!(con.command_count("EVAL"), 1);
+        assert_eq!(con.command_count("ZADD"), 0);
+        assert_eq!(con.command_count("ZREM"), 0);
+        assert_eq!(con.commands.len(), 1);
     }
 
     #[tokio::test]
