@@ -693,9 +693,10 @@ pub async fn redis_zset_update_in_db_core(
     db: u32,
     key_raw: &str,
     original_member: &str,
+    expected_score: &str,
     member: &str,
     score: &str,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     ensure_redis_pool(state, connection_id).await?;
     let connections = state.connections.read().await;
     match connections.get(connection_id).ok_or("Not found")? {
@@ -705,12 +706,12 @@ pub async fn redis_zset_update_in_db_core(
                 RedisConnection::Direct(con) => {
                     let mut con = con.lock().await;
                     redis_driver::select_db(&mut *con, db).await?;
-                    redis_driver::zset_update(&mut *con, &key, original_member, member, score).await
+                    redis_driver::zset_update(&mut *con, &key, original_member, expected_score, member, score).await
                 }
                 RedisConnection::Cluster(cluster) => {
                     redis_driver::ensure_cluster_db(db)?;
                     let mut con = redis_driver::cluster_key_connection(cluster, &key).await?;
-                    redis_driver::zset_update(&mut con, &key, original_member, member, score).await
+                    redis_driver::zset_update(&mut con, &key, original_member, expected_score, member, score).await
                 }
             }
         }

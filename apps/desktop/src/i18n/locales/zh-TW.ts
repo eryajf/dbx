@@ -2905,6 +2905,7 @@ export default withEnglishFallback({
     valueRequired: "請輸入值",
     memberRequired: "請輸入成員",
     updateAppliedRefreshFailed: "變更已儲存，但重新整理值失敗：{message}",
+    zsetAclCompatibilityWarning: "變更已透過 ACL 相容模式儲存，無法驗證並行的分數變更。",
     ttlInvalid: "請輸入有效的 TTL（秒數，-1 表示永不過期）",
     member: "成員",
     memberDetail: "成員詳情",

@@ -3586,6 +3586,7 @@ export default {
     valueRequired: "Enter a value",
     memberRequired: "Enter a member",
     updateAppliedRefreshFailed: "The change was saved, but the value could not be refreshed: {message}",
+    zsetAclCompatibilityWarning: "The change was saved using ACL compatibility mode; concurrent score changes could not be checked.",
     ttlInvalid: "Enter a valid TTL in seconds (-1 for no expiry)",
     member: "Member",
     memberDetail: "Member detail",

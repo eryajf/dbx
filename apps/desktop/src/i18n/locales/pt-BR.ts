@@ -3437,6 +3437,7 @@ export default withEnglishFallback({
     valueRequired: "Insira um valor",
     memberRequired: "Insira um membro",
     updateAppliedRefreshFailed: "A alteração foi salva, mas não foi possível atualizar o valor: {message}",
+    zsetAclCompatibilityWarning: "A alteração foi salva no modo de compatibilidade ACL; não foi possível verificar alterações simultâneas na pontuação.",
     ttlInvalid: "Insira um TTL válido em segundos (-1 para sem expiração)",
     member: "Membro",
     memberDetail: "Detalhe do membro",

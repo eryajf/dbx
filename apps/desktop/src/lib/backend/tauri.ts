@@ -2231,8 +2231,8 @@ export async function redisZrem(connectionId: string, db: number, keyRaw: string
   return invoke("redis_zrem", { connectionId, db, keyRaw, member });
 }
 
-export async function redisZsetUpdate(connectionId: string, db: number, keyRaw: string, originalMember: string, member: string, score: string): Promise<void> {
-  return invoke("redis_zset_update", { connectionId, db, keyRaw, originalMember, member, score });
+export async function redisZsetUpdate(connectionId: string, db: number, keyRaw: string, originalMember: string, expectedScore: string, member: string, score: string): Promise<boolean> {
+  return invoke("redis_zset_update", { connectionId, db, keyRaw, originalMember, expectedScore, member, score });
 }
 
 export async function redisStreamAdd(connectionId: string, db: number, keyRaw: string, entryId: string, fields: [string, string][], ttl?: number): Promise<void> {

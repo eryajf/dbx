@@ -297,9 +297,10 @@ pub async fn redis_zset_update(
     db: u32,
     key_raw: String,
     original_member: String,
+    expected_score: String,
     member: String,
     score: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     ensure_connection_writable(&state, &connection_id, "ZADD/ZREM").await?;
     dbx_core::redis_ops::redis_zset_update_in_db_core(
         &state,
@@ -307,6 +308,7 @@ pub async fn redis_zset_update(
         db,
         &key_raw,
         &original_member,
+        &expected_score,
         &member,
         &score,
     )

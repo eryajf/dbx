@@ -504,7 +504,7 @@ const hashGridStyle = computed(() => ({
   gridTemplateColumns: `${hashFieldWidth.value}px minmax(12rem, 1fr) 84px`,
 }));
 const zsetGridStyle = computed(() => ({
-  gridTemplateColumns: `60px ${zsetScoreWidth.value}px minmax(0, 1fr) 84px`,
+  gridTemplateColumns: `60px ${zsetScoreWidth.value}px minmax(0, 1fr) 104px`,
 }));
 const metadataSizeLabel = computed(() => {
   const metadata = props.metadata;
@@ -1590,7 +1590,7 @@ function startResizeHashColumns(event: PointerEvent) {
 function clampZsetScoreWidth(width: number) {
   const containerWidth = zsetTableRef.value?.clientWidth ?? 900;
   const min = 120;
-  const max = Math.max(min, containerWidth - 280);
+  const max = Math.max(min, containerWidth - 300);
   return Math.min(max, Math.max(min, width));
 }
 
@@ -1659,7 +1659,8 @@ async function saveZsetInlineEdit(item: RedisZsetItem) {
   savingZsetMember.value = true;
   try {
     try {
-      await api.redisZsetUpdate(props.connectionId, props.db, props.keyRaw, originalMember, zsetInlineMember.value, scoreText);
+      const usedAclCompatibility = await api.redisZsetUpdate(props.connectionId, props.db, props.keyRaw, originalMember, item.score, zsetInlineMember.value, scoreText);
+      if (usedAclCompatibility) toast(t("redis.zsetAclCompatibilityWarning"), 5000);
     } catch (error) {
       toast(errorMessage(error), 3000);
       return;
@@ -1727,7 +1728,8 @@ async function saveMemberEdit() {
     } else if (context.kind === "zset") {
       if (!context.member) return;
       try {
-        await api.redisZsetUpdate(props.connectionId, props.db, props.keyRaw, context.member, writeValue, context.score);
+        const usedAclCompatibility = await api.redisZsetUpdate(props.connectionId, props.db, props.keyRaw, context.member, context.score, writeValue, context.score);
+        if (usedAclCompatibility) toast(t("redis.zsetAclCompatibilityWarning"), 5000);
       } catch (error) {
         toast(errorMessage(error), 3000);
         return;
@@ -2660,6 +2662,15 @@ defineExpose({ focusSearch });
                   <Button variant="ghost" size="icon" class="h-5 w-5" :disabled="savingZsetMember" :title="t('grid.discard')" @click="cancelZsetInlineEdit"><X class="h-3 w-3" /></Button>
                 </template>
                 <template v-else>
+                  <Button
+                    data-redis-zset-view-member
+                    variant="ghost"
+                    size="icon"
+                    class="h-5 w-5 opacity-0 group-hover:opacity-100"
+                    :title="t('redis.viewMember')"
+                    @click.stop="viewMember(row.value.score, row.value.member, { kind: 'zset', member: redisBlobText(row.value.member), score: row.value.score, canEdit: redisBlobText(row.value.member) != null && canEditRedisMemberDetail('zset', row.value.member) })"
+                    ><Eye class="w-3 h-3"
+                  /></Button>
                   <Button
                     variant="ghost"
                     size="icon"

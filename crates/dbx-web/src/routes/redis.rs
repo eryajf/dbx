@@ -157,6 +157,7 @@ pub struct RedisZsetUpdateRequest {
     pub db: u32,
     pub key_raw: String,
     pub original_member: String,
+    pub expected_score: String,
     pub member: String,
     pub score: String,
 }
@@ -586,20 +587,21 @@ pub async fn zadd(State(state): State<Arc<WebState>>, Json(req): Json<RedisZaddR
 pub async fn zset_update(
     State(state): State<Arc<WebState>>,
     Json(req): Json<RedisZsetUpdateRequest>,
-) -> Result<Json<()>, AppError> {
+) -> Result<Json<bool>, AppError> {
     ensure_writable(&state.app, &req.connection_id, "ZADD/ZREM").await?;
-    dbx_core::redis_ops::redis_zset_update_in_db_core(
+    let used_acl_compatibility = dbx_core::redis_ops::redis_zset_update_in_db_core(
         &state.app,
         &req.connection_id,
         req.db,
         &req.key_raw,
         &req.original_member,
+        &req.expected_score,
         &req.member,
         &req.score,
     )
     .await
     .map_err(AppError::from)?;
-    Ok(Json(()))
+    Ok(Json(used_acl_compatibility))
 }
 
 pub async fn stream_add(
