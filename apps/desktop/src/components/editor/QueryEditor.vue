@@ -1932,7 +1932,9 @@ async function expandSelectStar(target = selectStarExpansionTarget.value) {
   const originalDocument = currentView.state.doc.toString();
   try {
     await ensureColumnsForTable(target.reference, target.reference);
-  } catch {}
+  } catch (error) {
+    console.warn("expandSelectStar: failed to load columns", error);
+  }
 
   if (view.value !== currentView || currentView.state.doc.toString() !== originalDocument || currentView.state.sliceDoc(target.from, target.to) !== "*") return;
   const columns = cachedColumnsByTable.get(completionCacheKey(target.reference));

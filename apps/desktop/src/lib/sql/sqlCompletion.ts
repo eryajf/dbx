@@ -3187,7 +3187,10 @@ export function selectStarResultColumnsMatch(options: { currentSql: string; targ
   const hasSourceTo = typeof options.sourceTo === "number";
   if (hasSourceFrom !== hasSourceTo) return false;
   if (!hasSourceFrom || !hasSourceTo) return options.statementSql === options.sourceStatement;
-  return options.targetFrom >= options.sourceFrom! && options.targetTo <= options.sourceTo! && options.currentSql.slice(options.sourceFrom, options.sourceTo) === options.sourceStatement;
+  // 词边界检查：已执行语句可能是当前内容的真前缀（如 `FROM users` → `FROM users_backup`），
+  // 此时 slice 仍与 sourceStatement 相等，会用旧表列回退到新表。要求 sourceTo 落在标识符边界。
+  const sourceToAtBoundary = !/[\w$]/.test(options.currentSql[options.sourceTo!] ?? "");
+  return options.targetFrom >= options.sourceFrom! && options.targetTo <= options.sourceTo! && sourceToAtBoundary && options.currentSql.slice(options.sourceFrom, options.sourceTo) === options.sourceStatement;
 }
 
 export function buildSelectStarExpansion(context: SqlCompletionContext, columnsByTable: Map<string, SqlCompletionColumn[]>, dialect?: "mysql" | "postgres" | "sqlserver", qualifierSql = context.qualifier, databaseType?: DatabaseType): string | null {
