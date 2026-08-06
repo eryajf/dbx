@@ -389,6 +389,7 @@ function buildConfigSelector(scope: NacosConfigSelectionScope): NacosConfigSelec
         ? {
             namespace: namespace.value || undefined,
             group: configGroup.value.trim() || undefined,
+            groupContains: true,
             dataId: configDataId.value.trim() || undefined,
             appName: configAppName.value.trim() || undefined,
           }
@@ -664,6 +665,7 @@ async function loadConfigs(page = configPageNo.value) {
     const result = await api.nacosListConfigs(props.connectionId, {
       namespace: namespace.value || undefined,
       group: configGroup.value.trim() || undefined,
+      groupContains: true,
       dataId: configDataId.value.trim() || undefined,
       appName: configAppName.value.trim() || undefined,
       pageNo: configPageNo.value,
@@ -684,6 +686,13 @@ async function loadConfigsWithRetry(page = configPageNo.value) {
     if (!isConnectionNotFoundError(configError.value) || attempt >= CONNECTION_NOT_FOUND_RETRY_DELAYS_MS.length) return;
     await delay(CONNECTION_NOT_FOUND_RETRY_DELAYS_MS[attempt]);
   }
+}
+
+function clearConfigFilter(filter: "dataId" | "group" | "appName") {
+  if (filter === "dataId") configDataId.value = "";
+  else if (filter === "group") configGroup.value = "";
+  else configAppName.value = "";
+  void loadConfigsWithRetry(1);
 }
 
 function closePendingConfigMutationConfirmations() {
@@ -1552,6 +1561,12 @@ async function loadServicesWithRetry(page = servicePageNo.value) {
   }
 }
 
+function clearServiceFilter(filter: "name" | "group") {
+  if (filter === "name") serviceName.value = "";
+  else serviceGroup.value = "";
+  void loadServicesWithRetry(1);
+}
+
 async function selectService(service: NacosServiceInfo) {
   serviceMutationSequence += 1;
   instanceUpdateSequence += 1;
@@ -2212,19 +2227,40 @@ onBeforeUnmount(() => {
           <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 border-b p-2">
             <div class="relative min-w-0">
               <Input v-model="configDataId" class="h-8 min-w-0 pr-8" placeholder="dataId" @keyup.enter="loadConfigsWithRetry(1)" />
-              <button v-if="configDataId" type="button" class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" :title="t('nacos.clear')" :aria-label="t('nacos.clear')" @click="configDataId = ''">
+              <button
+                v-if="configDataId"
+                type="button"
+                class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                :title="t('nacos.clear')"
+                :aria-label="t('nacos.clear')"
+                @click="clearConfigFilter('dataId')"
+              >
                 <X class="h-3.5 w-3.5" />
               </button>
             </div>
             <div class="relative min-w-0">
               <Input v-model="configGroup" class="h-8 min-w-0 pr-8" :placeholder="t('nacos.allGroups')" @keyup.enter="loadConfigsWithRetry(1)" />
-              <button v-if="configGroup" type="button" class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" :title="t('nacos.clear')" :aria-label="t('nacos.clear')" @click="configGroup = ''">
+              <button
+                v-if="configGroup"
+                type="button"
+                class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                :title="t('nacos.clear')"
+                :aria-label="t('nacos.clear')"
+                @click="clearConfigFilter('group')"
+              >
                 <X class="h-3.5 w-3.5" />
               </button>
             </div>
             <div class="relative min-w-0">
               <Input v-model="configAppName" class="h-8 min-w-0 pr-8" :placeholder="t('nacos.application')" @keyup.enter="loadConfigsWithRetry(1)" />
-              <button v-if="configAppName" type="button" class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" :title="t('nacos.clear')" :aria-label="t('nacos.clear')" @click="configAppName = ''">
+              <button
+                v-if="configAppName"
+                type="button"
+                class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                :title="t('nacos.clear')"
+                :aria-label="t('nacos.clear')"
+                @click="clearConfigFilter('appName')"
+              >
                 <X class="h-3.5 w-3.5" />
               </button>
             </div>
@@ -2488,13 +2524,27 @@ onBeforeUnmount(() => {
           <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 border-b p-2">
             <div class="relative min-w-0">
               <Input v-model="serviceName" class="h-8 min-w-0 pr-8" :placeholder="t('nacos.service')" @keyup.enter="loadServicesWithRetry(1)" />
-              <button v-if="serviceName" type="button" class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" :title="t('nacos.clear')" :aria-label="t('nacos.clear')" @click="serviceName = ''">
+              <button
+                v-if="serviceName"
+                type="button"
+                class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                :title="t('nacos.clear')"
+                :aria-label="t('nacos.clear')"
+                @click="clearServiceFilter('name')"
+              >
                 <X class="h-3.5 w-3.5" />
               </button>
             </div>
             <div class="relative min-w-0">
               <Input v-model="serviceGroup" class="h-8 min-w-0 pr-8" :placeholder="t('nacos.allGroups')" @keyup.enter="loadServicesWithRetry(1)" />
-              <button v-if="serviceGroup" type="button" class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" :title="t('nacos.clear')" :aria-label="t('nacos.clear')" @click="serviceGroup = ''">
+              <button
+                v-if="serviceGroup"
+                type="button"
+                class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                :title="t('nacos.clear')"
+                :aria-label="t('nacos.clear')"
+                @click="clearServiceFilter('group')"
+              >
                 <X class="h-3.5 w-3.5" />
               </button>
             </div>

@@ -1411,13 +1411,31 @@ impl NacosAdmin for NacosOpenApiAdmin {
             .filter(|value| !value.is_empty());
         let search = data_id_filter.clone().unwrap_or_default();
         let group_filter = query.group.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+        let group_contains = query.group_contains;
         let group = group_filter.clone().unwrap_or_default();
         let app_name_filter = query.app_name.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
         let app_name = app_name_filter.clone().unwrap_or_default();
+
+        // Nacos v2, v3, and r-nacos do not agree on whether a group filter is
+        // exact or fuzzy. Scan without that server-side constraint so the UI
+        // always provides the same case-insensitive contains semantics.
+        if group_contains && group_filter.is_some() {
+            return self
+                .list_configs_by_client_filters(
+                    namespace,
+                    data_id_filter,
+                    group_filter,
+                    app_name_filter,
+                    page_no,
+                    page_size,
+                )
+                .await;
+        }
+
         let value = self.get_config_list_value(&namespace, &search, &group, &app_name, page_no, page_size).await?;
         let parsed =
             self.enrich_missing_config_formats(parse_config_list(value, namespace.clone(), page_no, page_size)).await;
-        if (data_id_filter.is_some() || group_filter.is_some()) && parsed.items.is_empty() {
+        if data_id_filter.is_some() && parsed.items.is_empty() {
             let fallback = self
                 .list_configs_by_client_filters(
                     namespace,
@@ -2132,6 +2150,7 @@ impl NacosAdmin for NacosOpenApiAdmin {
         let configs_future = self.list_configs(NacosConfigQuery {
             namespace: Some(namespace.clone()),
             group: None,
+            group_contains: false,
             data_id: None,
             app_name: None,
             search: None,
@@ -3268,25 +3287,23 @@ mod tests {
         server.await.unwrap();
     }
 
-    #[tokio::test]
-    async fn group_filter_falls_back_to_client_side_contains_match() {
+    async fn assert_group_filter_uses_client_side_contains_match(
+        implementation: Option<NacosImplementation>,
+        version_mode: Option<NacosVersionMode>,
+        expected_path: &str,
+        group_param: &str,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let expected_path = expected_path.to_string();
+        let group_param = group_param.to_string();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let target = read_request_target(&mut socket).await;
             let url = reqwest::Url::parse(&format!("http://localhost{target}")).unwrap();
             let params = url.query_pairs().collect::<HashMap<_, _>>();
-            assert_eq!(url.path(), "/nacos/v1/cs/configs");
-            assert_eq!(params.get("group").map(|value| value.as_ref()), Some("sensitive"));
-            write_json_response(&mut socket, r#"{"totalCount":0,"pageItems":[]}"#).await;
-
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let target = read_request_target(&mut socket).await;
-            let url = reqwest::Url::parse(&format!("http://localhost{target}")).unwrap();
-            let params = url.query_pairs().collect::<HashMap<_, _>>();
-            assert_eq!(url.path(), "/nacos/v1/cs/configs");
-            assert_eq!(params.get("group").map(|value| value.as_ref()), Some(""));
+            assert_eq!(url.path(), expected_path);
+            assert_eq!(params.get(group_param.as_str()).map(|value| value.as_ref()), Some(""));
             write_json_response(
                 &mut socket,
                 r#"{"totalCount":2,"pageItems":[{"dataId":"service.yaml","group":"SENSITIVE_GROUP","tenant":"ops","type":"yaml"},{"dataId":"other.yaml","group":"DEFAULT_GROUP","tenant":"ops","type":"yaml"}]}"#,
@@ -3295,14 +3312,84 @@ mod tests {
         });
         let mut config = test_admin_config(format!("http://{address}"));
         config.context_path = "/nacos".to_string();
-        config.version_mode = Some(NacosVersionMode::V2);
+        config.implementation = implementation;
+        config.version_mode = version_mode;
         let admin = NacosOpenApiAdmin::new(config).unwrap();
 
         let list = admin
             .list_configs(NacosConfigQuery {
                 namespace: Some("ops".to_string()),
                 group: Some("sensitive".to_string()),
+                group_contains: true,
                 data_id: None,
+                app_name: None,
+                search: None,
+                page_no: Some(1),
+                page_size: Some(20),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(list.total_count, 1);
+        assert_eq!(list.items.len(), 1);
+        assert_eq!(list.items[0].group, "SENSITIVE_GROUP");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn group_filter_uses_consistent_client_side_contains_matching() {
+        assert_group_filter_uses_client_side_contains_match(
+            None,
+            Some(NacosVersionMode::V2),
+            "/nacos/v1/cs/configs",
+            "group",
+        )
+        .await;
+        assert_group_filter_uses_client_side_contains_match(
+            None,
+            Some(NacosVersionMode::V3),
+            "/nacos/v3/admin/cs/config/list",
+            "groupName",
+        )
+        .await;
+        assert_group_filter_uses_client_side_contains_match(
+            Some(NacosImplementation::RNacos),
+            None,
+            "/nacos/v1/cs/configs",
+            "group",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn exact_group_filter_keeps_server_side_matching() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let target = read_request_target(&mut socket).await;
+            let url = reqwest::Url::parse(&format!("http://localhost{target}")).unwrap();
+            let params = url.query_pairs().collect::<HashMap<_, _>>();
+            assert_eq!(url.path(), "/nacos/v3/admin/cs/config/list");
+            assert_eq!(params.get("groupName").map(|value| value.as_ref()), Some("SENSITIVE_GROUP"));
+            assert_eq!(params.get("dataId").map(|value| value.as_ref()), Some("service.yaml"));
+            write_json_response(
+                &mut socket,
+                r#"{"code":0,"data":{"totalCount":1,"pageItems":[{"dataId":"service.yaml","groupName":"SENSITIVE_GROUP","namespaceId":"ops","type":"yaml"}]}}"#,
+            )
+            .await;
+        });
+        let mut config = test_admin_config(format!("http://{address}"));
+        config.context_path = "/nacos".to_string();
+        config.version_mode = Some(NacosVersionMode::V3);
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+
+        let list = admin
+            .list_configs(NacosConfigQuery {
+                namespace: Some("ops".to_string()),
+                group: Some("SENSITIVE_GROUP".to_string()),
+                group_contains: false,
+                data_id: Some("service.yaml".to_string()),
                 app_name: None,
                 search: None,
                 page_no: Some(1),
@@ -4347,6 +4434,7 @@ mod tests {
             .list_configs(NacosConfigQuery {
                 namespace: Some("ops".to_string()),
                 group: None,
+                group_contains: false,
                 data_id: None,
                 app_name: None,
                 search: None,
@@ -4397,6 +4485,7 @@ mod tests {
             .list_configs(NacosConfigQuery {
                 namespace: Some("ops".to_string()),
                 group: None,
+                group_contains: false,
                 data_id: None,
                 app_name: None,
                 search: None,

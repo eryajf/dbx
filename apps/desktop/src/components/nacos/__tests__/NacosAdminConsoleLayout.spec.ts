@@ -85,10 +85,19 @@ describe("NacosAdminConsole config workbench layout", () => {
   });
 
   it("adds icon-only clear controls to populated configuration and service filters", () => {
-    for (const filter of ["configDataId", "configGroup", "configAppName", "serviceName", "serviceGroup"]) {
+    for (const [filter, clear] of [
+      ["configDataId", "clearConfigFilter('dataId')"],
+      ["configGroup", "clearConfigFilter('group')"],
+      ["configAppName", "clearConfigFilter('appName')"],
+      ["serviceName", "clearServiceFilter('name')"],
+      ["serviceGroup", "clearServiceFilter('group')"],
+    ]) {
       expect(source).toContain(`v-if="${filter}"`);
-      expect(source).toContain(`@click="${filter} = ''"`);
+      expect(source).toContain(`@click="${clear}"`);
     }
+    expect(source).toContain("void loadConfigsWithRetry(1);");
+    expect(source).toContain("void loadServicesWithRetry(1);");
+    expect(source.match(/groupContains: true/g)?.length).toBeGreaterThanOrEqual(2);
     expect(source.match(/:aria-label="t\('nacos\.clear'\)"/g)?.length).toBeGreaterThanOrEqual(5);
   });
 
