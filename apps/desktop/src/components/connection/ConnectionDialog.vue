@@ -16,7 +16,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Switch } from "@/components/ui/switch";
 import type { ConnectionConfig, ConnectionTestResult, DatabaseConnectionInfo, DatabaseType, HttpTunnelConfig, IdentifierCase, JdbcDriverInfo, JdbcLocalBundleInfo, JdbcMavenBundleInfo, ProxyTunnelConfig, SshConfigHostEntry, SshTunnelConfig, TransportLayerConfig } from "@/types/database";
 import type { InfluxDbExternalConfig, InfluxDbVersion } from "@/types/influxdb";
+import type { VictoriaMetricsExternalConfig } from "@/types/victoriametrics";
 import type { MqAdminConfig, MqAuth, MqSystemKind } from "@/types/mq";
+import type { MqttConnectionConfig } from "@/types/mqtt";
 import type { NacosAdminConfig, NacosAuthConfig, NacosImplementation, NacosMetricsMode, NacosNamespaceInfo, NacosRNacosConsoleAuth, NacosVersionMode } from "@/types/nacos";
 import { CONNECTION_ATTEMPT_CANCELLED_MESSAGE, useConnectionStore } from "@/stores/connectionStore";
 import { useTunnelProfileStore } from "@/stores/tunnelProfileStore";
@@ -33,6 +35,7 @@ import { applyParsedConnectionUrl, normalizeMongoConnectionString, parseConnecti
 import { buildOracleTnsConnectionString, normalizeOracleTnsAdminPath, parseOracleTnsConnectionString } from "@/lib/connection/oracleTnsConnection";
 import { parseConnectionDeepLink, type ConnectionDeepLinkDraft } from "@/lib/connection/connectionDeepLink";
 import { connectionUrlPlaceholder as getUrlPlaceholder } from "@/lib/connection/connectionPresentation";
+import { parseGaussdbHosts, serializeGaussdbHosts, type GaussdbHostEntry } from "@/lib/connection/gaussdbHosts";
 import { h2ConnectionModeForConfig, h2FileJdbcUrlWithPath, h2FilePathFromJdbcUrl, isH2SplitJdbcUrl, type H2ConnectionMode } from "@/lib/database/h2Connection";
 import { firstZooKeeperEndpoint, normalizeZooKeeperConnectString } from "@/lib/zookeeper/zookeeperConnection";
 import { setZooKeeperAuthScheme, zooKeeperAuthScheme as resolveZooKeeperAuthScheme, type ZooKeeperAuthScheme } from "@/lib/zookeeper/zookeeperConnectionOptions";
@@ -51,6 +54,7 @@ import { JDBCX_DEFAULT_URL, JDBCX_DRIVER_PROFILE, JDBCX_JDBC_DRIVER_CLASS, ensur
 import { SQLITE_DATABASE_FILE_EXTENSIONS } from "@/lib/database/databaseFileDetection";
 import { connectionAttemptOriginalErrorMessage, connectionAttemptTimeoutMessage, connectionAttemptTimeoutMs } from "@/lib/connection/connectionAttemptTimeout";
 import { appendConnectionErrorHints, isJdbcMissingRuntimeDependencyError } from "@/lib/connection/connectionErrorHints";
+import { preventDialogDocumentSelectAll } from "@/lib/connection/dialogTextSelection";
 import { postgresTlsModeForForm } from "@/lib/connection/postgresTlsMode";
 import { buildMqKafkaConnectionExtra, mqKafkaConnectionTarget, resolveMqKafkaConnectionSource, type MqKafkaConnectionSource } from "@/lib/connection/mqKafkaConnection";
 import { assertCompleteDatabaseCategories, databaseSelectionForCategory } from "@/lib/connection/databaseCategoryOptions";
@@ -320,6 +324,7 @@ function defaultSshTunnel(): SshTunnelConfig {
     use_ssh_agent: false,
     ssh_agent_sock_path: "",
     auth_method: "password",
+    allow_exec_channel_proxy: false,
   };
 }
 
@@ -353,6 +358,7 @@ function normalizeSshTunnel(hop: Partial<SshTunnelConfig>): SshTunnelConfig {
     use_ssh_agent: !!hop.use_ssh_agent,
     ssh_agent_sock_path: hop.ssh_agent_sock_path || "",
     auth_method: hop.auth_method || inferSshAuthMethod(hop),
+    allow_exec_channel_proxy: !!hop.allow_exec_channel_proxy,
     profile_id: hop.profile_id || undefined,
   };
 }
@@ -483,6 +489,36 @@ const gaussdbQuoteStyle = computed<GaussdbIdentifierQuoteStyle>({
     resetTestState();
   },
 });
+
+const gaussdbHostEntries = ref<GaussdbHostEntry[]>(parseGaussdbHosts(form.value.host, form.value.port));
+
+watch(
+  () => form.value.db_type,
+  (dbType) => {
+    if (dbType === "gaussdb") {
+      gaussdbHostEntries.value = parseGaussdbHosts(form.value.host, form.value.port);
+    }
+  },
+);
+
+watch(
+  () => [form.value.host, form.value.port] as const,
+  ([host, port]) => {
+    if (form.value.db_type === "gaussdb") {
+      gaussdbHostEntries.value = parseGaussdbHosts(host, port);
+    }
+  },
+);
+
+function addGaussdbHostEntry() {
+  const lastPort = gaussdbHostEntries.value.length > 0 ? gaussdbHostEntries.value[gaussdbHostEntries.value.length - 1].port : 5432;
+  gaussdbHostEntries.value.push({ host: "", port: lastPort });
+}
+
+function removeGaussdbHostEntry(idx: number) {
+  if (gaussdbHostEntries.value.length <= 1) return;
+  gaussdbHostEntries.value.splice(idx, 1);
+}
 
 function resizeNoteTextarea() {
   const textarea = noteTextareaRef.value;
@@ -666,6 +702,22 @@ const nacosTlsSkipVerify = ref(false);
 const nacosMetricsMode = ref<NacosMetricsMode>("auto");
 const nacosMetricsUrl = ref("");
 const nacosPageSize = ref(20);
+
+// --- MQTT-specific form fields ---
+const mqttHost = ref("127.0.0.1");
+const mqttPort = ref(1883);
+const mqttClientId = ref("");
+const mqttProtocolVersion = ref<"v3" | "v4" | "v5">("v5");
+const mqttTransportMode = ref<"tcp" | "websocket">("tcp");
+const mqttWsPath = ref("/mqtt");
+const mqttAuthKind = ref<"none" | "password">("none");
+const mqttUsername = ref("");
+const mqttPassword = ref("");
+const mqttTls = ref(false);
+const mqttTlsSkipVerify = ref(false);
+const mqttKeepAliveSecs = ref(60);
+const mqttConnectTimeoutSecs = ref(30);
+const mqttMaxPacketSizeBytes = ref(16 * 1024 * 1024);
 const nacosPrimaryAddressPlaceholder = computed(() => {
   return "http://127.0.0.1:8848/nacos";
 });
@@ -851,7 +903,7 @@ const driverProfiles: Record<
     label: "OceanBase Oracle Mode",
     icon: "oceanbase",
   },
-  goldendb: { type: "goldendb", port: 3306, user: "root", label: "GoldenDB", icon: "goldendb" },
+  goldendb: { type: "goldendb", port: 3306, user: "root", label: "金篆 GoldenDB", icon: "goldendb" },
   databend: { type: "databend", port: 8000, user: "databend", label: "Databend", icon: "databend" },
   tdsql: { type: "mysql", port: 3306, user: "root", label: "TDSQL", icon: "tdsql" },
   polardb: { type: "mysql", port: 3306, user: "root", label: "PolarDB", icon: "polardb" },
@@ -862,9 +914,9 @@ const driverProfiles: Record<
   vertica: { type: "vertica", port: 5433, user: "dbadmin", label: "Vertica", icon: "vertica" },
   firebird: { type: "firebird", port: 3050, user: "SYSDBA", label: "Firebird", icon: "firebird" },
   exasol: { type: "exasol", port: 8563, user: "sys", label: "Exasol", icon: "exasol" },
-  gbase: { type: "gbase", port: 5258, user: "gbasedbt", label: "GBase 8a", icon: "gbase" },
-  gbase8a: { type: "gbase", port: 5258, user: "gbasedbt", label: "GBase 8a", icon: "gbase" },
-  gbase8s: { type: "gbase", port: 9088, user: "gbasedbt", label: "GBase 8s", icon: "gbase" },
+  gbase: { type: "gbase", port: 5258, user: "gbasedbt", label: "南大通用 GBase 8a", icon: "gbase" },
+  gbase8a: { type: "gbase", port: 5258, user: "gbasedbt", label: "南大通用 GBase 8a", icon: "gbase" },
+  gbase8s: { type: "gbase", port: 9088, user: "gbasedbt", label: "南大通用 GBase 8s", icon: "gbase" },
   opengauss: {
     type: "opengauss",
     port: 5432,
@@ -875,11 +927,11 @@ const driverProfiles: Record<
   gaussdb: { type: "gaussdb", port: 5432, user: "gaussdb", label: "GaussDB", icon: "gaussdb" },
   kwdb: { type: "kwdb", port: 26257, user: "root", label: "KWDB", icon: "kwdb" },
   questdb: { type: "questdb", port: 8812, user: "questdb", label: "QuestDB", icon: "questdb" },
-  kingbase: { type: "kingbase", port: 54321, user: "system", label: "KingBase", icon: "kingbase" },
+  kingbase: { type: "kingbase", port: 54321, user: "system", label: "人大金仓 KingbaseES", icon: "kingbase" },
   highgo: { type: "highgo", port: 5866, user: "highgo", label: "瀚高 HighGo", icon: "highgo" },
   uxdb: { type: "uxdb", port: 52025, user: "uxdb", label: "优炫 UXDB", icon: "uxdb" },
   yashandb: { type: "yashandb", port: 1688, user: "sys", label: "崖山 YashanDB", icon: "yashandb" },
-  vastbase: { type: "vastbase", port: 5432, user: "vastbase", label: "Vastbase", icon: "vastbase" },
+  vastbase: { type: "vastbase", port: 5432, user: "vastbase", label: "海量 Vastbase", icon: "vastbase" },
   doris: { type: "mysql", port: 9030, user: "root", label: "Doris", icon: "doris", urlParams: "" },
   selectdb: {
     type: "mysql",
@@ -936,7 +988,7 @@ const driverProfiles: Record<
     host: "https://www.googleapis.com/bigquery/v2",
   },
   kylin: { type: "kylin", port: 7070, user: "ADMIN", label: "Apache Kylin", icon: "kylin" },
-  sundb: { type: "sundb", port: 22000, user: "root", label: "SunDB", icon: "sundb" },
+  sundb: { type: "sundb", port: 22000, user: "root", label: "科蓝 SUNDB", icon: "sundb" },
   oscar: { type: "oscar", port: 2003, user: "SYSDBA", label: "神通 OSCAR", icon: "oscar" },
   jdbc: { type: "jdbc", port: 0, user: "", label: "JDBC", icon: "jdbc" },
   tdengine: { type: "tdengine", port: 6041, user: "root", label: "TDengine", icon: "tdengine" },
@@ -949,8 +1001,10 @@ const driverProfiles: Record<
   rocketmq: { type: "mq", port: 9876, user: "", label: "Apache RocketMQ", icon: "rocketmq", host: "127.0.0.1" },
   rabbitmq: { type: "mq", port: 5672, user: "", label: "RabbitMQ", icon: "rabbitmq", host: "127.0.0.1" },
   nacos: { type: "nacos", port: 8848, user: "nacos", label: "Nacos", icon: "nacos", host: "127.0.0.1" },
+  mqtt: { type: "mqtt", port: 1883, user: "", label: "MQTT", icon: "mqtt", host: "127.0.0.1" },
   iris: { type: "iris", port: 1972, user: "_SYSTEM", label: "IRIS", icon: "iris" },
   influxdb: { type: "influxdb", port: 8086, user: "", label: "InfluxDB", icon: "InfluxDB" },
+  victoriametrics: { type: "victoriametrics", port: 8428, user: "", label: "VictoriaMetrics", icon: "victoriametrics" },
   custom_mysql: {
     type: "mysql",
     port: 3306,
@@ -1165,8 +1219,61 @@ function hydrateNacosFields(value: unknown) {
   resetNacosFields(value as Partial<NacosAdminConfig>);
 }
 
+function resetMqttFields(config?: Partial<MqttConnectionConfig>) {
+  mqttHost.value = config?.host?.trim() || "127.0.0.1";
+  mqttPort.value = config?.port || 1883;
+  mqttClientId.value = config?.clientId || "";
+  mqttProtocolVersion.value = config?.protocolVersion || "v5";
+  mqttTransportMode.value = config?.transport || "tcp";
+  mqttWsPath.value = config?.wsPath || "/mqtt";
+  mqttTls.value = config?.tls || false;
+  mqttTlsSkipVerify.value = config?.tlsSkipVerify || false;
+  mqttKeepAliveSecs.value = Math.max(1, config?.keepAliveSecs || 60);
+  mqttConnectTimeoutSecs.value = Math.max(1, config?.connectTimeoutSecs || 30);
+  mqttMaxPacketSizeBytes.value = Math.min(268435455, Math.max(1024, config?.maxPacketSizeBytes || 16 * 1024 * 1024));
+  const auth = config?.auth;
+  if (auth && auth.kind === "password") {
+    mqttAuthKind.value = "password";
+    mqttUsername.value = auth.username || "";
+    mqttPassword.value = auth.password || "";
+  } else {
+    mqttAuthKind.value = "none";
+    mqttUsername.value = "";
+    mqttPassword.value = "";
+  }
+}
+
+function hydrateMqttFields(value: unknown) {
+  if (!value || typeof value !== "object") {
+    resetMqttFields();
+    return;
+  }
+  resetMqttFields(value as Partial<MqttConnectionConfig>);
+}
+
+function buildMqttExternalConfig(): MqttConnectionConfig {
+  const auth: MqttConnectionConfig["auth"] = mqttAuthKind.value === "password" ? { kind: "password", username: mqttUsername.value, password: mqttPassword.value } : { kind: "none" };
+
+  return {
+    host: mqttHost.value.trim(),
+    port: mqttPort.value,
+    clientId: mqttClientId.value.trim() || `dbx-${Math.random().toString(36).slice(2, 10)}`,
+    protocolVersion: mqttProtocolVersion.value,
+    transport: mqttTransportMode.value,
+    tls: mqttTls.value,
+    tlsSkipVerify: mqttTlsSkipVerify.value,
+    auth,
+    keepAliveSecs: Math.max(1, mqttKeepAliveSecs.value),
+    connectTimeoutSecs: Math.max(1, mqttConnectTimeoutSecs.value),
+    maxPacketSizeBytes: Math.min(268435455, Math.max(1024, mqttMaxPacketSizeBytes.value)),
+    wsPath: mqttTransportMode.value === "websocket" ? mqttWsPath.value || "/mqtt" : undefined,
+  };
+}
+
 const influxDbVersion = ref<InfluxDbVersion>("1");
 const influxDbOrg = ref("");
+const victoriaMetricsApiPath = ref("/prometheus");
+const victoriaMetricsLookback = ref("1h");
 
 function resetInfluxDbFields(config?: Partial<InfluxDbExternalConfig>) {
   influxDbVersion.value = config?.version === "2" ? "2" : "1";
@@ -1202,6 +1309,33 @@ function buildInfluxDbExternalConfig(): InfluxDbExternalConfig {
   if (!form.value.password.trim()) throw new Error("InfluxDB 2.x token is required");
   if (!form.value.database?.trim()) throw new Error("InfluxDB 2.x bucket is required");
   return { version: "2", org };
+}
+
+function resetVictoriaMetricsFields(config?: Partial<VictoriaMetricsExternalConfig>) {
+  victoriaMetricsApiPath.value = config?.apiPath?.trim() || "/prometheus";
+  victoriaMetricsLookback.value = config?.lookback?.trim() || "1h";
+}
+
+function hydrateVictoriaMetricsFields(value: unknown) {
+  if (!value || typeof value !== "object") {
+    resetVictoriaMetricsFields();
+    return;
+  }
+  const config = value as Partial<VictoriaMetricsExternalConfig> & { api_path?: string };
+  resetVictoriaMetricsFields({
+    apiPath: config.apiPath || config.api_path,
+    lookback: config.lookback,
+  });
+}
+
+function buildVictoriaMetricsExternalConfig(): VictoriaMetricsExternalConfig {
+  const apiPath = victoriaMetricsApiPath.value.trim().replace(/\/+$/, "");
+  if (apiPath && !apiPath.startsWith("/")) throw new Error(t("connection.victoriametricsInvalidApiPath"));
+  const lookback = victoriaMetricsLookback.value.trim();
+  if (!/^\d+(?:ms|[smhdwy])$/.test(lookback) || lookback.startsWith("0")) {
+    throw new Error(t("connection.victoriametricsInvalidLookback"));
+  }
+  return { apiPath, lookback };
 }
 
 watch(influxDbVersion, (version) => {
@@ -1891,11 +2025,24 @@ function applyProfile(val: string, preserveConnectionFields = false) {
       form.value.connection_string = undefined;
       form.value.url_params = "";
     }
+    if (profile.type === "mqtt") {
+      resetMqttFields();
+      form.value.database = undefined;
+      form.value.connection_string = undefined;
+      form.value.url_params = "";
+    }
     if (profile.type === "influxdb") {
       resetInfluxDbFields();
       form.value.database = undefined;
       form.value.password = "";
       form.value.connection_string = undefined;
+    }
+    if (profile.type === "victoriametrics") {
+      resetVictoriaMetricsFields();
+      form.value.database = "metrics";
+      form.value.password = "";
+      form.value.connection_string = undefined;
+      form.value.url_params = "";
     }
     resetHiveKerberosFields(profile.type === "hive" ? form.value : undefined);
   }
@@ -1994,10 +2141,20 @@ watch(
       } else {
         resetNacosFields();
       }
+      if (config.db_type === "mqtt") {
+        hydrateMqttFields(config.external_config);
+      } else {
+        resetMqttFields();
+      }
       if (config.db_type === "influxdb") {
         hydrateInfluxDbFields(config.external_config);
       } else {
         resetInfluxDbFields();
+      }
+      if (config.db_type === "victoriametrics") {
+        hydrateVictoriaMetricsFields(config.external_config);
+      } else {
+        resetVictoriaMetricsFields();
       }
       resetElasticsearchProxyFields(config.db_type === "elasticsearch" ? config.external_config : undefined);
       resetHiveKerberosFields(config.db_type === "hive" ? config : undefined);
@@ -2238,6 +2395,7 @@ const iconTypeMap: Record<string, string> = {
   rocketmq: "rocketmq",
   rabbitmq: "rabbitmq",
   nacos: "nacos",
+  mqtt: "mqtt",
   dm: "dm",
   h2: "h2",
   snowflake: "snowflake",
@@ -2257,6 +2415,7 @@ const iconTypeMap: Record<string, string> = {
   sundb: "sundb",
   oscar: "oscar",
   influxdb: "influxdb",
+  victoriametrics: "victoriametrics",
   jdbc: "jdbc",
   custom_mysql: "mysql",
   custom_postgres: "postgres",
@@ -2292,7 +2451,7 @@ const dbOptions: DbOption[] = [
   { value: "questdb", label: "QuestDB" },
   { value: "tidb", label: "TiDB" },
   { value: "oceanbase", label: "OceanBase" },
-  { value: "goldendb", label: "GoldenDB" },
+  { value: "goldendb", label: "金篆 GoldenDB" },
   { value: "databend", label: "Databend" },
   { value: "tdsql", label: "TDSQL" },
   { value: "polardb", label: "PolarDB" },
@@ -2307,12 +2466,12 @@ const dbOptions: DbOption[] = [
   { value: "vertica", label: "Vertica" },
   { value: "firebird", label: "Firebird" },
   { value: "exasol", label: "Exasol" },
-  { value: "gbase", label: "GBase" },
-  { value: "kingbase", label: "KingBase" },
+  { value: "gbase", label: "南大通用 GBase" },
+  { value: "kingbase", label: "人大金仓 KingbaseES" },
   { value: "highgo", label: "瀚高 HighGo" },
   { value: "uxdb", label: "优炫 UXDB" },
   { value: "yashandb", label: "崖山 YashanDB" },
-  { value: "vastbase", label: "Vastbase" },
+  { value: "vastbase", label: "海量 Vastbase" },
   { value: "redshift", label: "Redshift" },
   { value: "cockroachdb", label: "CockroachDB" },
   { value: "h2", label: "H2" },
@@ -2327,7 +2486,7 @@ const dbOptions: DbOption[] = [
   { value: "cassandra", label: "Cassandra" },
   { value: "bigquery", label: "BigQuery" },
   { value: "kylin", label: "Kylin" },
-  { value: "sundb", label: "SunDB" },
+  { value: "sundb", label: "科蓝 SUNDB" },
   { value: "oscar", label: "神通 OSCAR" },
   { value: "xugu", label: "虚谷 XuguDB" },
   { value: "iotdb", label: "Apache IoTDB" },
@@ -2337,8 +2496,10 @@ const dbOptions: DbOption[] = [
   { value: "kafka", label: "Apache Kafka" },
   { value: "rocketmq", label: "Apache RocketMQ" },
   { value: "rabbitmq", label: "RabbitMQ" },
+  { value: "mqtt", label: "MQTT" },
   { value: "nacos", label: "Nacos" },
   { value: "influxdb", label: "InfluxDB" },
+  { value: "victoriametrics", label: "VictoriaMetrics" },
   { value: "iris", label: "IRIS" },
   { value: "jdbcx", label: "JDBCX" },
   { value: "manticoresearch", label: "Manticore Search" },
@@ -2385,12 +2546,12 @@ const dbCategoryDefinitions: Array<{
   {
     key: "timeseries",
     titleKey: "connection.databaseCategoryTimeseries",
-    optionValues: ["questdb", "tdengine", "iotdb", "influxdb"],
+    optionValues: ["questdb", "tdengine", "iotdb", "influxdb", "victoriametrics"],
   },
   {
     key: "mq",
     titleKey: "connection.databaseCategoryMq",
-    optionValues: ["mq", "kafka", "rocketmq", "rabbitmq"],
+    optionValues: ["mq", "kafka", "rocketmq", "rabbitmq", "mqtt"],
   },
   {
     key: "registry_config",
@@ -2490,9 +2651,31 @@ const sqliteExtensionPaths = computed({
     form.value.url_params = setSqliteExtensionPaths(form.value.url_params, value);
   },
 });
-const tlsCapableDatabaseTypes = new Set<DatabaseType>(["mysql", "starrocks", "postgres", "redshift", "gaussdb", "kwdb", "opengauss", "questdb", "dameng", "redis", "etcd", "clickhouse", "elasticsearch", "easysearch", "hbase", "qdrant", "milvus", "weaviate", "chromadb", "influxdb"]);
+const tlsCapableDatabaseTypes = new Set<DatabaseType>([
+  "mysql",
+  "starrocks",
+  "postgres",
+  "redshift",
+  "gaussdb",
+  "kwdb",
+  "opengauss",
+  "questdb",
+  "dameng",
+  "redis",
+  "etcd",
+  "clickhouse",
+  "elasticsearch",
+  "easysearch",
+  "hbase",
+  "qdrant",
+  "milvus",
+  "weaviate",
+  "chromadb",
+  "influxdb",
+  "victoriametrics",
+]);
 const supportsTlsToggle = computed(() => tlsCapableDatabaseTypes.has(form.value.db_type));
-const supportsCaCertificatePath = computed(() => form.value.db_type === "clickhouse");
+const supportsCaCertificatePath = computed(() => form.value.db_type === "clickhouse" || form.value.db_type === "victoriametrics");
 const supportsGenericUrlParams = computed(() => form.value.db_type !== "manticoresearch" && form.value.db_type !== "hbase");
 const bareMysqlProfiles = new Set(["doris", "selectdb", "oceanbase"]);
 const supportsMysqlTlsOptions = computed(() => form.value.db_type === "starrocks" || (form.value.db_type === "mysql" && !bareMysqlProfiles.has(selectedType.value)));
@@ -2660,12 +2843,13 @@ const productionDatabaseSummary = computed(() => {
   return t("production.databasesSelectedCount", { selected, total: productionDatabaseNames.value.length });
 });
 const productionScope = computed<ProductionScope>({
-  get: () => (isSingleDatabase(form.value.db_type) || form.value.is_production ? "connection" : "databases"),
+  get: () => (isSingleDatabase(form.value.db_type) || form.value.db_type === "mq" || form.value.db_type === "mqtt" || form.value.is_production ? "connection" : "databases"),
   set: (scope) => {
-    form.value.is_production = isSingleDatabase(form.value.db_type) || scope === "connection";
+    form.value.is_production = isSingleDatabase(form.value.db_type) || form.value.db_type === "mq" || form.value.db_type === "mqtt" || scope === "connection";
   },
 });
-const canSelectProductionDatabases = computed(() => !isSingleDatabase(form.value.db_type));
+// MQ/MQTT have no database list — production protection is always connection-scoped.
+const canSelectProductionDatabases = computed(() => !isSingleDatabase(form.value.db_type) && form.value.db_type !== "mq" && form.value.db_type !== "mqtt");
 
 function setProductionProtectionEnabled(enabled: boolean) {
   productionProtectionEnabled.value = enabled;
@@ -2809,6 +2993,7 @@ const hasRequiredConnectionTarget = computed(() => {
     return !!mqAdminUrl.value.trim();
   }
   if (form.value.db_type === "zookeeper") return !!(form.value.host || form.value.connection_string || connectionUrlInput.value.trim());
+  if (form.value.db_type === "mqtt") return !!mqttHost.value.trim() && mqttPort.value > 0;
   if (form.value.db_type === "nacos") return !!nacosServerAddr.value.trim();
   if (isCloudflareD1Connection(form.value)) return hasCloudflareD1Credentials(form.value);
   if (isH2FileMode.value) return !!(form.value.host.trim() || h2FilePathFromJdbcUrl(form.value.connection_string));
@@ -2939,6 +3124,9 @@ function applyConnectionUrlToForm(input: string): boolean {
 
     const parsed = parseConnectionUrl(input, selectedType.value);
     form.value = applyParsedConnectionUrl(form.value, parsed);
+    if (form.value.db_type === "victoriametrics") {
+      hydrateVictoriaMetricsFields(form.value.external_config);
+    }
     oracleTnsAdminPath.value = parseOracleTnsConnectionString(parsed.connectionString)?.tnsAdmin || "";
     selectedType.value = parsed.driverProfile;
     customDriverName.value = isCustomCompatibleProfile() ? parsed.driverLabel : "";
@@ -3080,6 +3268,11 @@ function connectionConfigForSubmit(id: string, generatedName = ""): ConnectionCo
       throw new Error(t("connection.kingbaseDatabaseRequired"));
     }
   }
+  if (config.db_type === "gaussdb") {
+    const serialized = serializeGaussdbHosts(gaussdbHostEntries.value);
+    config.host = serialized.host;
+    config.port = serialized.port;
+  }
   if (isCloudflareD1Connection(config)) {
     normalizeCloudflareD1Connection(config);
     if (!hasCloudflareD1Credentials(config)) {
@@ -3162,8 +3355,8 @@ function connectionConfigForSubmit(id: string, generatedName = ""): ConnectionCo
   }
   if (!config.one_time) config.one_time = undefined;
   if (!config.read_only) config.read_only = undefined;
-  if (isSingleDatabase(config.db_type) && config.production_databases?.length) {
-    // Single-database drivers expose schemas or internal names, not independently selectable databases.
+  if ((isSingleDatabase(config.db_type) || config.db_type === "mq" || config.db_type === "mqtt") && config.production_databases?.length) {
+    // Single-database / MQ drivers expose no independently selectable database list for PROD scope.
     config.is_production = true;
     config.production_databases = [];
   }
@@ -3201,6 +3394,19 @@ function connectionConfigForSubmit(id: string, generatedName = ""): ConnectionCo
     config.database = undefined;
     config.connection_string = undefined;
     config.url_params = "";
+  } else if (config.db_type === "mqtt") {
+    const mqttConfig = buildMqttExternalConfig();
+    config.external_config = mqttConfig;
+    config.driver_profile = "mqtt";
+    config.driver_label = "MQTT";
+    config.host = mqttConfig.host;
+    config.port = mqttConfig.port;
+    config.ssl = mqttConfig.tls;
+    config.username = "";
+    config.password = "";
+    config.database = undefined;
+    config.connection_string = undefined;
+    config.url_params = "";
   } else if (config.db_type === "influxdb") {
     config.external_config = buildInfluxDbExternalConfig();
     config.connection_string = undefined;
@@ -3209,6 +3415,11 @@ function connectionConfigForSubmit(id: string, generatedName = ""): ConnectionCo
       config.password = config.password.trim();
       config.database = config.database?.trim() || undefined;
     }
+  } else if (config.db_type === "victoriametrics") {
+    config.external_config = buildVictoriaMetricsExternalConfig();
+    config.connection_string = undefined;
+    config.database = "metrics";
+    config.username = config.username.trim();
   } else if (config.db_type === "elasticsearch") {
     config.external_config = buildElasticsearchExternalConfig(elasticsearchConnectionMode.value, elasticsearchKibanaBasePath.value, elasticsearchConnectivityCheckPath.value);
   } else if (config.db_type === "sqlserver") {
@@ -3322,7 +3533,7 @@ function connectionConfigForSubmit(id: string, generatedName = ""): ConnectionCo
     config.client_cert_path = undefined;
     config.client_key_path = undefined;
   }
-  if (config.db_type !== "mysql" && config.db_type !== "clickhouse" && config.db_type !== "etcd" && config.db_type !== "starrocks" && config.db_type !== "mongodb") {
+  if (config.db_type !== "mysql" && config.db_type !== "clickhouse" && config.db_type !== "etcd" && config.db_type !== "starrocks" && config.db_type !== "mongodb" && config.db_type !== "victoriametrics") {
     config.ca_cert_path = undefined;
   } else {
     config.ca_cert_path = config.ca_cert_path?.trim() || "";
@@ -4757,7 +4968,7 @@ function openExternalUrl(url: string) {
 
 <template>
   <Dialog v-model:open="open">
-    <DialogContent class="connection-dialog-content" :class="connectionDialogContentClass" :data-wide="shouldUseWideConnectionDialog ? 'true' : undefined" @interact-outside.prevent @escape-key-down="handleDialogEscape">
+    <DialogContent class="connection-dialog-content" :class="connectionDialogContentClass" :data-wide="shouldUseWideConnectionDialog ? 'true' : undefined" @interact-outside.prevent @escape-key-down="handleDialogEscape" @keydown="preventDialogDocumentSelectAll">
       <DialogHeader>
         <DialogTitle>{{ editingId ? t("connection.editTitle") : t("connection.title") }}</DialogTitle>
       </DialogHeader>
@@ -4829,6 +5040,7 @@ function openExternalUrl(url: string) {
                     v-for="opt in category.options"
                     :key="opt.value"
                     type="button"
+                    :title="opt.label"
                     class="connection-db-picker-option group flex min-h-24 flex-col items-center justify-center gap-2 rounded-[4px] border bg-background/70 p-3 text-center transition hover:border-primary/40 hover:bg-muted/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     :class="selectedType === opt.value ? 'dbx-tile-selected shadow-sm' : 'border-border'"
                     :aria-pressed="selectedType === opt.value"
@@ -4838,7 +5050,9 @@ function openExternalUrl(url: string) {
                     <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-muted/60 transition group-hover:bg-background">
                       <DatabaseIcon :db-type="iconTypeMap[opt.value]" class="h-6 w-6" />
                     </span>
-                    <span class="max-w-full truncate text-sm font-medium">{{ opt.label }}</span>
+                    <span class="flex min-h-8 max-w-full items-center justify-center">
+                      <span class="line-clamp-2 text-sm leading-4 font-medium">{{ opt.label }}</span>
+                    </span>
                   </button>
                 </div>
 
@@ -5798,6 +6012,118 @@ function openExternalUrl(url: string) {
                   </template>
                 </template>
 
+                <!-- MQTT: broker address, client ID, protocol version, auth, TLS -->
+                <template v-else-if="form.db_type === 'mqtt'">
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.mqttBrokerAddress") }}</Label>
+                    <Input v-model="mqttHost" class="col-span-3" :placeholder="t('connection.mqttBrokerAddressPlaceholder')" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.mqttBrokerPort") }}</Label>
+                    <Input v-model.number="mqttPort" type="number" class="col-span-3 w-24" min="1" max="65535" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.mqttClientId") }}</Label>
+                    <Input v-model="mqttClientId" class="col-span-3" :placeholder="t('connection.mqttClientIdPlaceholder')" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.mqttProtocolVersion") }}</Label>
+                    <select v-model="mqttProtocolVersion" class="col-span-3 flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                      <option value="v5">MQTT 5.0</option>
+                      <option value="v4">MQTT 3.1.1</option>
+                      <option value="v3">MQTT 3.1</option>
+                    </select>
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.mqttTransport") }}</Label>
+                    <div class="col-span-3 flex gap-2">
+                      <Button size="sm" :variant="mqttTransportMode === 'tcp' ? 'default' : 'outline'" @click="mqttTransportMode = 'tcp'">{{ t("connection.mqttTransportTcp") }}</Button>
+                      <Button size="sm" :variant="mqttTransportMode === 'websocket' ? 'default' : 'outline'" @click="mqttTransportMode = 'websocket'">{{ t("connection.mqttTransportWebSocket") }}</Button>
+                    </div>
+                  </div>
+                  <div v-if="mqttTransportMode === 'websocket'" class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.mqttWsPath") }}</Label>
+                    <Input v-model="mqttWsPath" class="col-span-3" :placeholder="t('connection.mqttWsPathPlaceholder')" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.mqAuth") }}</Label>
+                    <div class="col-span-3 flex gap-2">
+                      <Button size="sm" :variant="mqttAuthKind === 'none' ? 'default' : 'outline'" @click="mqttAuthKind = 'none'">{{ t("connection.mqAuthNone") }}</Button>
+                      <Button size="sm" :variant="mqttAuthKind === 'password' ? 'default' : 'outline'" @click="mqttAuthKind = 'password'">{{ t("connection.mqAuthBasic") }}</Button>
+                    </div>
+                  </div>
+                  <template v-if="mqttAuthKind === 'password'">
+                    <div class="grid grid-cols-4 items-center gap-4">
+                      <Label :class="connectionLabelClass">{{ t("connection.mqttUsername") }}</Label>
+                      <Input v-model="mqttUsername" class="col-span-3" :placeholder="t('connection.mqttUsernamePlaceholder')" />
+                    </div>
+                    <div class="grid grid-cols-4 items-center gap-4">
+                      <Label :class="connectionLabelClass">{{ t("connection.mqttPassword") }}</Label>
+                      <Input v-model="mqttPassword" type="password" class="col-span-3" :placeholder="t('connection.mqttPasswordPlaceholder')" />
+                    </div>
+                  </template>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.mqttTls") }}</Label>
+                    <div class="col-span-3 flex items-center gap-2">
+                      <Switch :checked="mqttTls" @update:checked="mqttTls = $event" />
+                      <Label class="text-sm" :class="mqttTls ? '' : 'text-muted-foreground'">TLS</Label>
+                      <template v-if="mqttTls">
+                        <Switch :checked="mqttTlsSkipVerify" @update:checked="mqttTlsSkipVerify = $event" class="ml-4" />
+                        <Label class="text-sm" :class="mqttTlsSkipVerify ? '' : 'text-muted-foreground'">{{ t("connection.mqttTlsSkipVerify") }}</Label>
+                      </template>
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.mqttKeepAlive") }}</Label>
+                    <Input v-model.number="mqttKeepAliveSecs" type="number" class="col-span-3 w-32" min="1" max="65535" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.mqttConnectTimeout") }}</Label>
+                    <Input v-model.number="mqttConnectTimeoutSecs" type="number" class="col-span-3 w-32" min="1" max="300" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">最大报文（字节）</Label>
+                    <Input v-model.number="mqttMaxPacketSizeBytes" type="number" class="col-span-3 w-40" min="1024" max="268435455" />
+                  </div>
+                </template>
+
+                <template v-else-if="form.db_type === 'victoriametrics'">
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.host") }}</Label>
+                    <Input v-model="form.host" class="col-span-2" />
+                    <Input v-model.number="form.port" type="number" class="col-span-1" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <span />
+                    <label class="col-span-3 flex items-center gap-2 text-sm">
+                      <input type="checkbox" v-model="form.ssl" />
+                      <span>{{ t("connection.sslEnable") }}</span>
+                    </label>
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.user") }}</Label>
+                    <Input v-model="form.username" class="col-span-3" autocomplete="username" />
+                  </div>
+                  <div class="grid grid-cols-4 items-center gap-4">
+                    <Label :class="connectionLabelClass">{{ t("connection.password") }}</Label>
+                    <PasswordInput v-model="form.password" class="col-span-3" />
+                  </div>
+                  <div class="grid grid-cols-4 items-start gap-4">
+                    <Label :class="connectionLabelSmallClass">{{ t("connection.victoriametricsApiPath") }}</Label>
+                    <div class="col-span-3 space-y-1.5">
+                      <Input v-model="victoriaMetricsApiPath" placeholder="/prometheus" />
+                      <p class="text-xs leading-5 text-muted-foreground">{{ t("connection.victoriametricsApiPathHint") }}</p>
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-4 items-start gap-4">
+                    <Label :class="connectionLabelSmallClass">{{ t("connection.victoriametricsLookback") }}</Label>
+                    <div class="col-span-3 space-y-1.5">
+                      <Input v-model="victoriaMetricsLookback" class="w-28" placeholder="1h" />
+                      <p class="text-xs leading-5 text-muted-foreground">{{ t("connection.victoriametricsLookbackHint") }}</p>
+                    </div>
+                  </div>
+                </template>
+
                 <!-- InfluxDB: v1 username/password or v2 token/org/bucket -->
                 <template v-else-if="form.db_type === 'influxdb'">
                   <div class="grid grid-cols-4 items-center gap-4">
@@ -5932,7 +6258,26 @@ function openExternalUrl(url: string) {
                     </div>
                   </div>
 
-                  <div v-if="form.db_type !== 'oracle' || form.oracle_connection_type !== 'tns'" class="grid grid-cols-4 items-center gap-4">
+                  <!-- GaussDB: multi-host dynamic list -->
+                  <template v-if="form.db_type === 'gaussdb'">
+                    <div class="grid grid-cols-4 items-start gap-4">
+                      <Label :class="connectionLabelTopClass">{{ t("connection.host") }}</Label>
+                      <div class="col-span-3 space-y-2">
+                        <div v-for="(entry, idx) in gaussdbHostEntries" :key="idx" class="flex items-start gap-2">
+                          <Input v-model="entry.host" class="flex-1 min-w-0 break-all" placeholder="127.0.0.1" />
+                          <Input v-model.number="entry.port" type="number" class="w-24 shrink-0" />
+                          <Button type="button" variant="outline" size="icon" class="h-9 w-9 shrink-0 mt-0.5" :disabled="gaussdbHostEntries.length <= 1" @click="removeGaussdbHostEntry(idx)">
+                            <Trash2 class="h-4 w-4" />
+                          </Button>
+                        </div>
+                        <Button type="button" variant="outline" size="sm" class="mt-1" @click="addGaussdbHostEntry">
+                          <Plus class="mr-1 h-3.5 w-3.5" />
+                          {{ t("connection.addHost") }}
+                        </Button>
+                      </div>
+                    </div>
+                  </template>
+                  <div v-else-if="form.db_type !== 'oracle' || form.oracle_connection_type !== 'tns'" class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelClass">{{ form.db_type === "elasticsearch" && elasticsearchConnectionMode === "kibana" ? t("connection.elasticsearchKibanaHost") : t("connection.host") }}</Label>
                     <Input v-model="form.host" class="col-span-2" />
                     <Input v-model.number="form.port" type="number" class="col-span-1" @input="markSqlServerPortExplicit" />
@@ -5950,7 +6295,10 @@ function openExternalUrl(url: string) {
 
                   <div v-if="form.driver_profile === 'gbase8s'" class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelSmallClass">{{ t("connection.gbaseServer") }}</Label>
-                    <Input v-model="form.gbase_server" class="col-span-3" placeholder="gbase01" />
+                    <div class="col-span-3 space-y-1">
+                      <Input v-model="form.gbase_server" placeholder="gbase01" />
+                      <p class="text-xs text-muted-foreground">{{ t("connection.gbaseServerHint") }}</p>
+                    </div>
                   </div>
 
                   <div v-if="form.db_type === 'informix'" class="grid grid-cols-4 items-center gap-4">
@@ -7018,6 +7366,13 @@ function openExternalUrl(url: string) {
                         <span class="text-xs text-muted-foreground">{{ t("connection.sshExposeLan") }}</span>
                       </label>
                     </div>
+                    <div class="grid grid-cols-4 items-start gap-4">
+                      <span />
+                      <label class="col-span-3 flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" v-model="selectedSshLayer.allow_exec_channel_proxy" class="mt-0.5 mr-0" :disabled="selectedSshLayer.enabled === false" />
+                        <span class="text-xs text-muted-foreground">{{ t("connection.sshAllowExecChannelProxy") }}</span>
+                      </label>
+                    </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelSmallClass">{{ t("connection.sshConnectTimeout") }}</Label>
                       <Input v-model.number="selectedSshLayer.connect_timeout_secs" type="number" min="1" max="300" step="1" class="col-span-3" :disabled="selectedSshLayer.enabled === false" />
@@ -7227,7 +7582,7 @@ function openExternalUrl(url: string) {
   </Dialog>
 
   <Dialog v-model:open="showVisibleDatabasesDialog">
-    <DialogContent class="sm:max-w-[460px]">
+    <DialogContent class="sm:max-w-[520px]" @keydown="preventDialogDocumentSelectAll">
       <DialogHeader>
         <DialogTitle>{{ t(visibleObjectTitleKey) }}</DialogTitle>
         <p class="text-sm text-muted-foreground">
@@ -7275,9 +7630,7 @@ function openExternalUrl(url: string) {
           <Loader2 class="h-4 w-4 animate-spin" />
           {{ t("common.loading") }}
         </div>
-        <div v-else-if="visibleDatabaseError" class="p-3 text-sm text-destructive">
-          {{ t(visibleObjectLoadFailedKey, { message: visibleDatabaseError }) }}
-        </div>
+        <textarea v-else-if="visibleDatabaseError" class="h-full w-full resize-none overflow-auto border-0 bg-transparent p-3 text-sm leading-5 text-destructive outline-none" :value="t(visibleObjectLoadFailedKey, { message: visibleDatabaseError })" readonly />
         <div v-else-if="!filteredVisibleDatabaseNames.length" class="p-3 text-sm text-muted-foreground">
           {{ t("grid.noSearchResults") }}
         </div>

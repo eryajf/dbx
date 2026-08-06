@@ -255,7 +255,7 @@ async function put<T>(url: string, body: unknown): Promise<T> {
   return res.json();
 }
 
-async function backendResponseError(response: Response): Promise<BackendErrorException> {
+export async function backendResponseError(response: Response): Promise<BackendErrorException> {
   const text = await response.text();
   let payload: unknown = text;
   try {
@@ -291,7 +291,7 @@ export async function testConnectionWithInfo(config: ConnectionConfig): Promise<
   if (response.status === 404) {
     return normalizeConnectionTestResult(await testConnection(config), config);
   }
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw await backendResponseError(response);
   return normalizeConnectionTestResult(await response.json(), config);
 }
 
@@ -410,7 +410,7 @@ export async function importJdbcDrivers(pathsOrFiles: (string | File)[]): Promis
     method: "POST",
     body: formData,
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
   return res.json();
 }
 
@@ -459,7 +459,7 @@ export async function installJdbcPluginLocal(pathOrFile: string | File): Promise
     method: "POST",
     body: formData,
   });
-  if (!uploadRes.ok) throw new Error(await uploadRes.text());
+  if (!uploadRes.ok) throw await backendResponseError(uploadRes);
   return uploadRes.json();
 }
 
@@ -538,7 +538,7 @@ export async function importAgentsFromZip(fileOrPath: string | File, operationId
     method: "POST",
     body: formData,
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
   const result: { count: number } = await res.json();
   return result.count;
 }
@@ -560,7 +560,7 @@ export async function importAgentDriver(dbType: string, pathOrFile: string | Fil
     method: "POST",
     body: formData,
   });
-  if (!uploadRes.ok) throw new Error(await uploadRes.text());
+  if (!uploadRes.ok) throw await backendResponseError(uploadRes);
 }
 
 export const importAgentJar = importAgentDriver;
@@ -1297,7 +1297,7 @@ export async function aiStream(sessionId: string, request: AiCompletionRequest, 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sessionId, request }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
 
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
@@ -1393,7 +1393,7 @@ export async function aiAgentStream(
     }),
     signal,
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
 
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
@@ -1496,7 +1496,7 @@ export async function saveMcpGlobalPolicy(policy: Omit<McpGlobalPolicy, "configu
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(policy),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
 }
 
 export async function loadMaxAgentTurns(): Promise<number> {
@@ -1509,7 +1509,7 @@ export async function saveMaxAgentTurns(maxAgentTurns: number): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ maxAgentTurns }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
 }
 
 export async function loadMaxRetries(): Promise<number> {
@@ -1522,7 +1522,7 @@ export async function saveMaxRetries(maxRetries: number): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ maxRetries }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
 }
 
 export interface OpenTabsStatePayload {
@@ -1824,7 +1824,7 @@ export async function previewSqlFile(fileOrPath: string | File): Promise<SqlFile
     method: "POST",
     body: formData,
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
   return res.json();
 }
 
@@ -1894,7 +1894,7 @@ export async function startTransfer(request: TransferRequest, onProgress: (progr
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ request }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
 
   // 2. SSE to listen for progress
   return new Promise((resolve, reject) => {
@@ -1956,7 +1956,7 @@ export async function previewTableImportFile(fileOrPath: string | File | TableIm
         previewLimit: options.previewLimit,
       }),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw await backendResponseError(res);
     return res.json();
   }
   const formData = new FormData();
@@ -1968,7 +1968,7 @@ export async function previewTableImportFile(fileOrPath: string | File | TableIm
     method: "POST",
     body: formData,
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
   return res.json();
 }
 
@@ -1979,7 +1979,7 @@ export async function importTableFile(request: TableImportRequest, onProgress: (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ request }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
 
   // 2. SSE to listen for progress
   return new Promise((resolve, reject) => {
@@ -2033,7 +2033,7 @@ export async function exportDatabaseSql(request: DatabaseExportRequest, onProgre
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ request }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
 
   // 2. SSE to listen for progress
   return new Promise((resolve, reject) => {
@@ -2420,6 +2420,10 @@ export async function redisZrem(connectionId: string, db: number, keyRaw: string
   return post("/api/redis/zrem", { connectionId, db, keyRaw, member });
 }
 
+export async function redisZsetUpdate(connectionId: string, db: number, keyRaw: string, originalMember: string, expectedScore: string, member: string, score: string): Promise<boolean> {
+  return post("/api/redis/zset-update", { connectionId, db, keyRaw, originalMember, expectedScore, member, score });
+}
+
 export async function redisStreamAdd(connectionId: string, db: number, keyRaw: string, entryId: string, fields: [string, string][], ttl?: number): Promise<void> {
   return post("/api/redis/stream-add", {
     connectionId,
@@ -2469,7 +2473,7 @@ export async function redisExecuteCommand(connectionId: string, db: number, comm
   });
 }
 
-export async function redisLoadMore(connectionId: string, db: number, keyRaw: string, keyType: string, cursor: number, count: number, filter?: string): Promise<RedisCollectionPage> {
+export async function redisLoadMore(connectionId: string, db: number, keyRaw: string, keyType: string, cursor: number, count: number, filter?: string, sortDirection?: "asc" | "desc"): Promise<RedisCollectionPage> {
   return post("/api/redis/load-more", {
     connectionId,
     db,
@@ -2478,6 +2482,7 @@ export async function redisLoadMore(connectionId: string, db: number, keyRaw: st
     cursor,
     count,
     filter,
+    sortDirection,
   });
 }
 
@@ -2690,7 +2695,7 @@ export async function nacosSearchConfigContent(connectionId: string, req: NacosC
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ connectionId, req }),
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw await backendResponseError(response);
   if (!response.body) throw new Error("Nacos content search did not return a response stream");
 
   const reader = response.body.getReader();
@@ -2737,7 +2742,7 @@ export async function nacosExportConfigs(connectionId: string, selector: NacosCo
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ connectionId, selector, fileName }),
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw await backendResponseError(response);
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -2757,7 +2762,7 @@ export async function nacosPreviewConfigImport(connectionId: string, targetNames
     method: "POST",
     body: formData,
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw await backendResponseError(response);
   return response.json();
 }
 
@@ -2965,8 +2970,8 @@ export async function vectorGetCollectionDetail(connectionId: string, database: 
   });
 }
 
-export async function mongoFindDocuments(connectionId: string, database: string, collection: string, skip: number, limit: number, filter?: string, projection?: string, sort?: string, executionId?: string): Promise<MongoDocumentResult> {
-  return documentFindDocuments(connectionId, database, collection, skip, limit, filter, projection, sort, executionId);
+export async function mongoFindDocuments(connectionId: string, database: string, collection: string, skip: number, limit: number, filter?: string, projection?: string, sort?: string, collation?: string, executionId?: string): Promise<MongoDocumentResult> {
+  return documentFindDocuments(connectionId, database, collection, skip, limit, filter, projection, sort, collation, executionId);
 }
 
 export async function mongoParseShellCommand(source: string): Promise<MongoCommand> {
@@ -2986,7 +2991,7 @@ export async function mongoFindOne(connectionId: string, database: string, colle
   });
 }
 
-export async function documentFindDocuments(connectionId: string, database: string, collection: string, skip: number, limit: number, filter?: string, projection?: string, sort?: string, executionId?: string): Promise<DocumentQueryResult> {
+export async function documentFindDocuments(connectionId: string, database: string, collection: string, skip: number, limit: number, filter?: string, projection?: string, sort?: string, collation?: string, executionId?: string): Promise<DocumentQueryResult> {
   return post("/api/document-store/find-documents", {
     connectionId,
     database,
@@ -2996,6 +3001,7 @@ export async function documentFindDocuments(connectionId: string, database: stri
     filter,
     projection,
     sort,
+    collation,
     executionId,
   });
 }
@@ -3061,7 +3067,7 @@ export async function documentDownloadGridFsFile(connectionId: string, database:
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ connectionId, database, bucket, fileId }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
   const data = (await res.json()) as number[];
   return new Uint8Array(data);
 }
@@ -3080,7 +3086,7 @@ export async function documentUploadGridFsFile(connectionId: string, database: s
     method: "POST",
     body,
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await backendResponseError(res);
   return res.json();
 }
 
@@ -3385,3 +3391,4 @@ export async function refreshConnections(): Promise<void> {
 }
 
 export * from "@/lib/backend/mq-http";
+export * from "@/lib/backend/mqtt-http";
