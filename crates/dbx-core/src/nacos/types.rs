@@ -61,7 +61,7 @@ pub enum NacosServiceOperation {
     DeregisterInstance,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct NacosServiceCapabilities {
     pub list_services: NacosOperationCapability,
@@ -101,22 +101,6 @@ impl NacosServiceCapabilities {
             NacosServiceOperation::UpdateInstance => &self.update_instance,
             NacosServiceOperation::RegisterInstance => &self.register_instance,
             NacosServiceOperation::DeregisterInstance => &self.deregister_instance,
-        }
-    }
-}
-
-impl Default for NacosServiceCapabilities {
-    fn default() -> Self {
-        Self {
-            list_services: NacosOperationCapability::supported(),
-            get_service: NacosOperationCapability::supported(),
-            create_service: NacosOperationCapability::supported(),
-            update_service: NacosOperationCapability::supported(),
-            delete_service: NacosOperationCapability::supported(),
-            list_instances: NacosOperationCapability::supported(),
-            update_instance: NacosOperationCapability::supported(),
-            register_instance: NacosOperationCapability::supported(),
-            deregister_instance: NacosOperationCapability::supported(),
         }
     }
 }
