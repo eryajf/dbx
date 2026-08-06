@@ -925,19 +925,20 @@ impl NacosOpenApiAdmin {
         .await
     }
 
-    async fn list_configs_by_client_filter(
+    async fn list_configs_by_client_filters(
         &self,
         namespace: String,
-        group: Option<String>,
         data_id_filter: Option<String>,
+        group_filter: Option<String>,
         app_name_filter: Option<String>,
         page_no: u32,
         page_size: u32,
     ) -> Result<NacosConfigList, String> {
-        let Some(filter) = data_id_filter.map(|value| value.to_lowercase()).filter(|value| !value.is_empty()) else {
+        let data_id_filter = data_id_filter.map(|value| value.to_lowercase()).filter(|value| !value.is_empty());
+        let group_filter = group_filter.map(|value| value.to_lowercase()).filter(|value| !value.is_empty());
+        if data_id_filter.is_none() && group_filter.is_none() {
             return Ok(NacosConfigList { page_no, page_size, total_count: 0, items: Vec::new() });
-        };
-        let group = group.unwrap_or_default();
+        }
         let app_name = app_name_filter.unwrap_or_default();
         let scan_page_size = page_size.max(self.cfg.page_size).clamp(100, 500);
         let mut matched = Vec::new();
@@ -945,15 +946,18 @@ impl NacosOpenApiAdmin {
         let mut current_page = 1;
 
         loop {
-            let value =
-                self.get_config_list_value(&namespace, "", &group, &app_name, current_page, scan_page_size).await?;
+            let value = self.get_config_list_value(&namespace, "", "", &app_name, current_page, scan_page_size).await?;
             let list = parse_config_list(value, namespace.clone(), current_page, scan_page_size);
             let total_count = list.total_count;
             let empty = list.items.is_empty();
             let before = seen.len();
             for item in list.items {
                 let identity = (item.namespace.clone(), item.group.clone(), item.data_id.clone());
-                if seen.insert(identity) && item.data_id.to_lowercase().contains(&filter) {
+                let data_id_matches =
+                    data_id_filter.as_ref().is_none_or(|filter| item.data_id.to_lowercase().contains(filter));
+                let group_matches =
+                    group_filter.as_ref().is_none_or(|filter| item.group.to_lowercase().contains(filter));
+                if seen.insert(identity) && data_id_matches && group_matches {
                     matched.push(item);
                 }
             }
@@ -1406,19 +1410,19 @@ impl NacosAdmin for NacosOpenApiAdmin {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
         let search = data_id_filter.clone().unwrap_or_default();
-        let group_filter = query.group.clone();
+        let group_filter = query.group.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
         let group = group_filter.clone().unwrap_or_default();
         let app_name_filter = query.app_name.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
         let app_name = app_name_filter.clone().unwrap_or_default();
         let value = self.get_config_list_value(&namespace, &search, &group, &app_name, page_no, page_size).await?;
         let parsed =
             self.enrich_missing_config_formats(parse_config_list(value, namespace.clone(), page_no, page_size)).await;
-        if data_id_filter.is_some() && parsed.items.is_empty() {
+        if (data_id_filter.is_some() || group_filter.is_some()) && parsed.items.is_empty() {
             let fallback = self
-                .list_configs_by_client_filter(
+                .list_configs_by_client_filters(
                     namespace,
-                    group_filter,
                     data_id_filter,
+                    group_filter,
                     app_name_filter,
                     page_no,
                     page_size,
@@ -3261,6 +3265,55 @@ mod tests {
         let admin = NacosOpenApiAdmin::new(config).unwrap();
 
         admin.get_config_list_value("", "", "", "", 1, 20).await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn group_filter_falls_back_to_client_side_contains_match() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let target = read_request_target(&mut socket).await;
+            let url = reqwest::Url::parse(&format!("http://localhost{target}")).unwrap();
+            let params = url.query_pairs().collect::<HashMap<_, _>>();
+            assert_eq!(url.path(), "/nacos/v1/cs/configs");
+            assert_eq!(params.get("group").map(|value| value.as_ref()), Some("sensitive"));
+            write_json_response(&mut socket, r#"{"totalCount":0,"pageItems":[]}"#).await;
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let target = read_request_target(&mut socket).await;
+            let url = reqwest::Url::parse(&format!("http://localhost{target}")).unwrap();
+            let params = url.query_pairs().collect::<HashMap<_, _>>();
+            assert_eq!(url.path(), "/nacos/v1/cs/configs");
+            assert_eq!(params.get("group").map(|value| value.as_ref()), Some(""));
+            write_json_response(
+                &mut socket,
+                r#"{"totalCount":2,"pageItems":[{"dataId":"service.yaml","group":"SENSITIVE_GROUP","tenant":"ops","type":"yaml"},{"dataId":"other.yaml","group":"DEFAULT_GROUP","tenant":"ops","type":"yaml"}]}"#,
+            )
+            .await;
+        });
+        let mut config = test_admin_config(format!("http://{address}"));
+        config.context_path = "/nacos".to_string();
+        config.version_mode = Some(NacosVersionMode::V2);
+        let admin = NacosOpenApiAdmin::new(config).unwrap();
+
+        let list = admin
+            .list_configs(NacosConfigQuery {
+                namespace: Some("ops".to_string()),
+                group: Some("sensitive".to_string()),
+                data_id: None,
+                app_name: None,
+                search: None,
+                page_no: Some(1),
+                page_size: Some(20),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(list.total_count, 1);
+        assert_eq!(list.items.len(), 1);
+        assert_eq!(list.items[0].group, "SENSITIVE_GROUP");
         server.await.unwrap();
     }
 

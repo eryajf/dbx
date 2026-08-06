@@ -84,6 +84,18 @@ describe("NacosAdminConsole config workbench layout", () => {
     expect(source).not.toContain('v-if="serviceCluster"\n                  size="sm"');
   });
 
+  it("adds icon-only clear controls to populated configuration and service filters", () => {
+    for (const filter of ["configDataId", "configGroup", "configAppName", "serviceName", "serviceGroup"]) {
+      expect(source).toContain(`v-if="${filter}"`);
+      expect(source).toContain(`@click="${filter} = ''"`);
+    }
+    expect(source.match(/:aria-label="t\('nacos\.clear'\)"/g)?.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("uses green outlined styling for healthy instances and red styling for unhealthy instances", () => {
+    expect(source).toContain("instance.healthy === false ? 'border-destructive/50 text-destructive' : 'border-emerald-500/50 text-emerald-700 dark:text-emerald-300'");
+  });
+
   it("separates the service header, filtering controls, and management actions", () => {
     expect(source).toContain('<header class="shrink-0 border-b bg-background">');
     expect(source).toContain('class="flex flex-wrap items-center gap-x-4 gap-y-2 border-t bg-muted/30 px-4 py-2"');

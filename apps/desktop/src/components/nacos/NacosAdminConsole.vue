@@ -2210,9 +2210,24 @@ onBeforeUnmount(() => {
       <Pane :size="nacosSplitSize" min-size="24">
         <div class="flex h-full min-h-0 flex-col">
           <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 border-b p-2">
-            <Input v-model="configDataId" class="h-8 min-w-0" placeholder="dataId" @keyup.enter="loadConfigsWithRetry(1)" />
-            <Input v-model="configGroup" class="h-8 min-w-0" :placeholder="t('nacos.allGroups')" @keyup.enter="loadConfigsWithRetry(1)" />
-            <Input v-model="configAppName" class="h-8 min-w-0" :placeholder="t('nacos.application')" @keyup.enter="loadConfigsWithRetry(1)" />
+            <div class="relative min-w-0">
+              <Input v-model="configDataId" class="h-8 min-w-0 pr-8" placeholder="dataId" @keyup.enter="loadConfigsWithRetry(1)" />
+              <button v-if="configDataId" type="button" class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" :title="t('nacos.clear')" :aria-label="t('nacos.clear')" @click="configDataId = ''">
+                <X class="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div class="relative min-w-0">
+              <Input v-model="configGroup" class="h-8 min-w-0 pr-8" :placeholder="t('nacos.allGroups')" @keyup.enter="loadConfigsWithRetry(1)" />
+              <button v-if="configGroup" type="button" class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" :title="t('nacos.clear')" :aria-label="t('nacos.clear')" @click="configGroup = ''">
+                <X class="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div class="relative min-w-0">
+              <Input v-model="configAppName" class="h-8 min-w-0 pr-8" :placeholder="t('nacos.application')" @keyup.enter="loadConfigsWithRetry(1)" />
+              <button v-if="configAppName" type="button" class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" :title="t('nacos.clear')" :aria-label="t('nacos.clear')" @click="configAppName = ''">
+                <X class="h-3.5 w-3.5" />
+              </button>
+            </div>
             <Button size="sm" variant="outline" class="h-8 w-9 px-0" :title="t('nacos.load')" :disabled="configLoading" @click="loadConfigsWithRetry(1)">
               <Loader2 v-if="configLoading" class="h-3.5 w-3.5 animate-spin" />
               <RefreshCw v-else class="h-3.5 w-3.5" />
@@ -2471,8 +2486,18 @@ onBeforeUnmount(() => {
       <Pane :size="nacosSplitSize" min-size="24">
         <div class="flex h-full min-h-0 flex-col">
           <div class="grid shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 border-b p-2">
-            <Input v-model="serviceName" class="h-8 min-w-0" :placeholder="t('nacos.service')" @keyup.enter="loadServicesWithRetry(1)" />
-            <Input v-model="serviceGroup" class="h-8 min-w-0" :placeholder="t('nacos.allGroups')" @keyup.enter="loadServicesWithRetry(1)" />
+            <div class="relative min-w-0">
+              <Input v-model="serviceName" class="h-8 min-w-0 pr-8" :placeholder="t('nacos.service')" @keyup.enter="loadServicesWithRetry(1)" />
+              <button v-if="serviceName" type="button" class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" :title="t('nacos.clear')" :aria-label="t('nacos.clear')" @click="serviceName = ''">
+                <X class="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div class="relative min-w-0">
+              <Input v-model="serviceGroup" class="h-8 min-w-0 pr-8" :placeholder="t('nacos.allGroups')" @keyup.enter="loadServicesWithRetry(1)" />
+              <button v-if="serviceGroup" type="button" class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" :title="t('nacos.clear')" :aria-label="t('nacos.clear')" @click="serviceGroup = ''">
+                <X class="h-3.5 w-3.5" />
+              </button>
+            </div>
             <Button size="sm" variant="outline" class="h-8 gap-1.5" :disabled="readOnly || !createServiceCapability.supported" :title="readOnly || !createServiceCapability.supported ? capabilityReason(createServiceCapability) : undefined" @click="openCreateService">
               <Plus class="h-3.5 w-3.5" />
               {{ t("nacos.service") }}
@@ -2642,7 +2667,7 @@ onBeforeUnmount(() => {
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="font-mono text-sm font-medium">{{ instance.ip }}:{{ instance.port }}</span>
                       <Badge variant="outline">{{ instance.clusterName || "DEFAULT" }}</Badge>
-                      <Badge :variant="instance.healthy === false ? 'outline' : 'secondary'" :class="instance.healthy === false ? 'border-destructive/50 text-destructive' : ''">{{ instance.healthy === false ? t("nacos.unhealthy") : t("nacos.healthy") }}</Badge>
+                      <Badge variant="outline" :class="instance.healthy === false ? 'border-destructive/50 text-destructive' : 'border-emerald-500/50 text-emerald-700 dark:text-emerald-300'">{{ instance.healthy === false ? t("nacos.unhealthy") : t("nacos.healthy") }}</Badge>
                       <Badge :variant="instance.enabled === false ? 'outline' : 'secondary'" :class="instance.enabled === false ? 'border-muted-foreground/50 text-muted-foreground' : ''">{{ instance.enabled === false ? t("nacos.offline") : t("nacos.enabled") }}</Badge>
                       <Badge v-if="instance.ephemeral != null" variant="outline">{{ instance.ephemeral ? t("nacos.ephemeral") : t("nacos.persistent") }}</Badge>
                     </div>
