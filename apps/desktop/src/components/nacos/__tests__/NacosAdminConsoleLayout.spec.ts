@@ -46,6 +46,16 @@ describe("NacosAdminConsole config workbench layout", () => {
     expect(source).toContain("await Promise.all([loadServiceDetail(), loadInstances()]);");
   });
 
+  it("keeps configuration list responses scoped to the latest filters", () => {
+    expect(source).toContain("const configListRequestGuard = createNacosLatestRequestGuard();");
+    expect(source).toContain("const requestId = configListRequestGuard.begin();");
+    expect(source).toContain("if (!isCurrentRequest()) return false;");
+    expect(source).toContain("if (configListRequestGuard.isCurrent(requestId)) configLoading.value = false;");
+    expect(source).toContain("const current = await loadConfigs(page);");
+    expect(source).toContain("if (!current || !isConnectionNotFoundError(configError.value)");
+    expect(source.match(/configListRequestGuard\.invalidate\(\);/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("keeps instance weight edits as drafts until the explicit save action", () => {
     expect(source).toContain("instanceWeightDrafts.value[instanceIdentity(instance)] = String(value);");
     expect(source).toContain('@click="requestInstanceWeightUpdate(instance)"');

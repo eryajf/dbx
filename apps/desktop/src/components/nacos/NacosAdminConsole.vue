@@ -178,6 +178,7 @@ const importSourceName = ref("");
 const configEditorTheme = new Compartment();
 const configEditorFontTheme = new Compartment();
 const configEditorLanguage = new Compartment();
+const configListRequestGuard = createNacosLatestRequestGuard();
 const configDetailRequestGuard = createNacosLatestRequestGuard();
 let configEditorGeneration = 0;
 let configEditorSessionId = 0;
@@ -657,33 +658,58 @@ async function loadInfo() {
   }
 }
 
-async function loadConfigs(page = configPageNo.value) {
+async function loadConfigs(page = configPageNo.value): Promise<boolean> {
+  const requestId = configListRequestGuard.begin();
+  const connectionId = props.connectionId;
+  const requestNamespace = namespace.value;
+  const requestGroup = configGroup.value.trim();
+  const requestDataId = configDataId.value.trim();
+  const requestAppName = configAppName.value.trim();
+  const requestPageSize = configPageSize.value;
+  const isCurrentRequest = () =>
+    configListRequestGuard.isCurrent(requestId) &&
+    connectionId === props.connectionId &&
+    requestNamespace === namespace.value &&
+    requestGroup === configGroup.value.trim() &&
+    requestDataId === configDataId.value.trim() &&
+    requestAppName === configAppName.value.trim() &&
+    requestPageSize === configPageSize.value;
   configLoading.value = true;
   configError.value = "";
   configPageNo.value = page;
   try {
-    const result = await api.nacosListConfigs(props.connectionId, {
-      namespace: namespace.value || undefined,
-      group: configGroup.value.trim() || undefined,
+    const result = await api.nacosListConfigs(connectionId, {
+      namespace: requestNamespace || undefined,
+      group: requestGroup || undefined,
       groupContains: true,
-      dataId: configDataId.value.trim() || undefined,
-      appName: configAppName.value.trim() || undefined,
-      pageNo: configPageNo.value,
-      pageSize: configPageSize.value,
+      dataId: requestDataId || undefined,
+      appName: requestAppName || undefined,
+      pageNo: page,
+      pageSize: requestPageSize,
     });
+    if (!isCurrentRequest()) return false;
     configs.value = applyKnownConfigFormats(result.items.map(normalizeConfigItemFormat));
     configTotal.value = result.totalCount;
+    return true;
   } catch (error) {
-    await handleRNacosConsoleError(error, () => loadConfigs(page), "config");
+    if (!isCurrentRequest()) return false;
+    await handleRNacosConsoleError(
+      error,
+      async () => {
+        await loadConfigs(page);
+      },
+      "config",
+    );
+    return true;
   } finally {
-    configLoading.value = false;
+    if (configListRequestGuard.isCurrent(requestId)) configLoading.value = false;
   }
 }
 
 async function loadConfigsWithRetry(page = configPageNo.value) {
   for (let attempt = 0; ; attempt += 1) {
-    await loadConfigs(page);
-    if (!isConnectionNotFoundError(configError.value) || attempt >= CONNECTION_NOT_FOUND_RETRY_DELAYS_MS.length) return;
+    const current = await loadConfigs(page);
+    if (!current || !isConnectionNotFoundError(configError.value) || attempt >= CONNECTION_NOT_FOUND_RETRY_DELAYS_MS.length) return;
     await delay(CONNECTION_NOT_FOUND_RETRY_DELAYS_MS[attempt]);
   }
 }
@@ -2107,6 +2133,7 @@ watch(
   () => [props.connectionId, props.namespace] as const,
   async () => {
     closePendingConfigMutationConfirmations();
+    configListRequestGuard.invalidate();
     configDetailRequestGuard.invalidate();
     configEditorSessionId += 1;
     latestConfigSaveRequestId += 1;
@@ -2156,6 +2183,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  configListRequestGuard.invalidate();
   configDetailRequestGuard.invalidate();
   servicesRequestGuard.invalidate();
   serviceDetailRequestGuard.invalidate();
