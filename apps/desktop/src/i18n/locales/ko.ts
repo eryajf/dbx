@@ -6618,6 +6618,8 @@ export default withEnglishFallback({
     nacosRnacosDisabledHint: "비활성화하면 서비스 주소만 사용하며, 기본 구성 및 서비스 관리는 계속 사용할 수 있습니다.",
     nacosTlsHint: "신뢰할 수 있는 자체 서명 HTTPS 인증서에만 활성화하세요.",
     nacosVisibleNamespacesTitle: "표시할 네임스페이스 선택",
+    nacosVisibleNamespacesDetailLabel: "표시할 네임스페이스",
+    nacosVisibleNamespacesDetailActionLabel: '"{connection}"의 표시할 네임스페이스 구성',
     nacosVisibleNamespacesDescription: "{name}의 사이드바에 표시할 네임스페이스를 선택합니다.",
     nacosSearchNamespaces: "네임스페이스 검색...",
     nacosSelectedNamespaces: "{selected}/{total}개 선택됨",

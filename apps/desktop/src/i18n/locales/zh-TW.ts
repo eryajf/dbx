@@ -5290,6 +5290,8 @@ export default withEnglishFallback({
     nacosRnacosDisabledHint: "停用時只使用服務位址；基本設定與服務管理仍可使用。",
     nacosTlsHint: "僅在使用可信任的自簽 HTTPS 憑證時啟用。",
     nacosVisibleNamespacesTitle: "選擇顯示的命名空間",
+    nacosVisibleNamespacesDetailLabel: "可見命名空間",
+    nacosVisibleNamespacesDetailActionLabel: "設定「{connection}」的可見命名空間",
     nacosVisibleNamespacesDescription: "選擇要在「{name}」側邊欄顯示的命名空間。",
     nacosSearchNamespaces: "搜尋命名空間...",
     nacosSelectedNamespaces: "已選 {selected}/{total}",

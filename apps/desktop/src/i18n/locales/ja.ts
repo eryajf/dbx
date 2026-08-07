@@ -5880,6 +5880,8 @@ export default withEnglishFallback({
     nacosRnacosDisabledHint: "無効の場合はサービスアドレスだけを使用します。基本的な設定とサービス管理は引き続き利用できます。",
     nacosTlsHint: "信頼できる自己署名 HTTPS 証明書の場合だけ有効にしてください。",
     nacosVisibleNamespacesTitle: "表示する名前空間を選択",
+    nacosVisibleNamespacesDetailLabel: "表示する名前空間",
+    nacosVisibleNamespacesDetailActionLabel: "「{connection}」の表示する名前空間を設定",
     nacosVisibleNamespacesDescription: "「{name}」のサイドバーに表示する名前空間を選択します。",
     nacosSearchNamespaces: "名前空間を検索...",
     nacosSelectedNamespaces: "{selected}/{total} 件を選択",

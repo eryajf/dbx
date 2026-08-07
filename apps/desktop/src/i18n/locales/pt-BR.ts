@@ -5827,6 +5827,8 @@ export default withEnglishFallback({
     nacosRnacosDisabledHint: "Quando desativado, somente o endereço do serviço é usado; a configuração e o gerenciamento básico de serviços continuam disponíveis.",
     nacosTlsHint: "Ative somente para um certificado HTTPS autoassinado confiável.",
     nacosVisibleNamespacesTitle: "Escolher namespaces visíveis",
+    nacosVisibleNamespacesDetailLabel: "Namespaces visíveis",
+    nacosVisibleNamespacesDetailActionLabel: 'Configurar namespaces visíveis para "{connection}"',
     nacosVisibleNamespacesDescription: "Escolha os namespaces que serão exibidos na barra lateral de {name}.",
     nacosSearchNamespaces: "Pesquisar namespaces...",
     nacosSelectedNamespaces: "{selected}/{total} selecionados",
