@@ -637,8 +637,8 @@ describe("useDataGridExport prepared row statements", () => {
     );
   });
 
-  it("copies the full row when right-clicking a cell with a synthetic single-cell selection", async () => {
-    vi.mocked(extractDataGridSelection).mockResolvedValue({ text: "x", mimeType: "text/csv", fileExtension: "csv", rowCount: 1, columnCount: 3 });
+  it("copies only the clicked cell as TSV when right-clicking with a synthetic single-cell selection", async () => {
+    vi.mocked(extractDataGridSelection).mockResolvedValue({ text: "x", mimeType: "text/tab-separated-values", fileExtension: "tsv", rowCount: 1, columnCount: 1 });
     // A synthetic 1×1 selection (what right-click creates) — only column 0 of row 0.
     const matrix: CellSelectionMatrix = {
       rowIndexes: [0],
@@ -647,12 +647,14 @@ describe("useDataGridExport prepared row statements", () => {
       rows: [[1]],
     };
     const state = createExportState(editableTable, ["id", "name", "note"], matrix, undefined, undefined, undefined, [], DEFAULT_DATA_GRID_EXTRACTOR_OPTIONS, false, [0, 1, 2], true);
-    await state.copyWithExtractor("csv");
+    await state.copyWithExtractor("tsv");
 
-    // Despite the 1×1 matrix, the context-cell fallback should produce a full-row request (3 columns).
     expect(extractDataGridSelection).toHaveBeenCalledWith(
       expect.objectContaining({
-        columns: [expect.objectContaining({ displayName: "id" }), expect.objectContaining({ displayName: "name" }), expect.objectContaining({ displayName: "note" })],
+        columns: [expect.objectContaining({ displayName: "id" })],
+        selectedColumnIndexes: [0],
+        rows: [[1]],
+        selectionKind: "cells",
       }),
     );
   });
