@@ -3667,7 +3667,6 @@ export default {
     copyColumn: "Copy Column",
     copyColumnsTitle: "Copy Columns from Another Table",
     copyColumnsSourceTable: "Source table",
-    copyColumnsSelectSourceTable: "Select a source table",
     copyColumnsSearchSourceTables: "Search source tables",
     copyColumnsSelectFields: "Select fields",
     copyColumnsSearchFields: "Search fields or types",

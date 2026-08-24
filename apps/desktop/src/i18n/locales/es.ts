@@ -3588,7 +3588,6 @@ export default withEnglishFallback({
     copyColumn: "Copiar columna",
     copyColumnsTitle: "Copiar columnas de otra tabla",
     copyColumnsSourceTable: "Tabla de origen",
-    copyColumnsSelectSourceTable: "Selecciona una tabla de origen",
     copyColumnsSearchSourceTables: "Buscar tablas de origen",
     copyColumnsSelectFields: "Selecciona campos",
     copyColumnsSearchFields: "Buscar campos o tipos",

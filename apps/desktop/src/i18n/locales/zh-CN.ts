@@ -3653,7 +3653,6 @@ export default withEnglishFallback({
     copyColumn: "复制字段",
     copyColumnsTitle: "从其他表复制字段",
     copyColumnsSourceTable: "源表",
-    copyColumnsSelectSourceTable: "请选择源表",
     copyColumnsSearchSourceTables: "搜索源表",
     copyColumnsSelectFields: "选择字段",
     copyColumnsSearchFields: "搜索字段或类型",

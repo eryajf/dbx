@@ -3333,7 +3333,6 @@ export default withEnglishFallback({
     copyColumn: "複製欄位",
     copyColumnsTitle: "從其他資料表複製欄位",
     copyColumnsSourceTable: "來源資料表",
-    copyColumnsSelectSourceTable: "請選擇來源資料表",
     copyColumnsSearchSourceTables: "搜尋來源資料表",
     copyColumnsSelectFields: "選擇欄位",
     copyColumnsSearchFields: "搜尋欄位或類型",

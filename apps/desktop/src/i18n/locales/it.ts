@@ -3586,7 +3586,6 @@ export default withEnglishFallback({
     copyColumn: "Copia colonna",
     copyColumnsTitle: "Copia colonne da un'altra tabella",
     copyColumnsSourceTable: "Tabella di origine",
-    copyColumnsSelectSourceTable: "Seleziona una tabella di origine",
     copyColumnsSearchSourceTables: "Cerca tabelle di origine",
     copyColumnsSelectFields: "Seleziona campi",
     copyColumnsSearchFields: "Cerca campi o tipi",

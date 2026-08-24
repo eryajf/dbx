@@ -661,7 +661,7 @@ fn clickhouse_tables_sql(
     let columns = if include_comment { "name, engine, comment" } else { "name, engine" };
     let database_lit = clickhouse_literal(database);
     let table_kind_filter = if table_objects_only { " AND position(engine, 'View') = 0" } else { "" };
-    let name_filter = clickhouse_table_name_filter_sql(filter);
+    let name_filter = clickhouse_table_name_filter_sql(filter, include_comment);
     let pagination = limit.map(|limit| format!(" LIMIT {limit} OFFSET {}", offset.unwrap_or(0))).unwrap_or_default();
 
     format!(
@@ -669,7 +669,7 @@ fn clickhouse_tables_sql(
     )
 }
 
-fn clickhouse_table_name_filter_sql(filter: Option<&str>) -> String {
+fn clickhouse_table_name_filter_sql(filter: Option<&str>, include_comment: bool) -> String {
     let filter = filter.unwrap_or("").trim();
     if filter.is_empty() {
         return String::new();
@@ -681,7 +681,17 @@ fn clickhouse_table_name_filter_sql(filter: Option<&str>) -> String {
     }
     let predicates = patterns
         .into_iter()
-        .map(|pattern| format!("lowerUTF8(name) LIKE '{}'", clickhouse_literal(&pattern)))
+        .map(|pattern| {
+            // Keep comment-based search parity with the name predicate; the comment
+            // column is absent from the no-comment fallback query, so the extra
+            // predicate must be gated on include_comment.
+            let name_predicate = format!("lowerUTF8(name) LIKE '{}'", clickhouse_literal(&pattern));
+            if include_comment {
+                format!("{name_predicate} OR lowerUTF8(coalesce(comment, '')) LIKE '{}'", clickhouse_literal(&pattern))
+            } else {
+                name_predicate
+            }
+        })
         .collect::<Vec<_>>();
     format!(" AND ({})", predicates.join(" OR "))
 }
@@ -1208,6 +1218,7 @@ mod tests {
         assert!(sql.contains("database = 'analytics'"));
         assert!(sql.contains("position(engine, 'View') = 0"));
         assert!(sql.contains("lowerUTF8(name) LIKE '%orders%'"));
+        assert!(sql.contains("lowerUTF8(coalesce(comment, '')) LIKE '%orders%'"));
         assert!(sql.contains("ORDER BY name LIMIT 102 OFFSET 100"));
         assert!(sql.find("position(engine, 'View') = 0").unwrap() < sql.find("ORDER BY name").unwrap());
         assert!(sql.find("lowerUTF8(name) LIKE '%orders%'").unwrap() < sql.find("ORDER BY name").unwrap());
@@ -1219,6 +1230,15 @@ mod tests {
 
         assert!(sql.contains("lowerUTF8(name) LIKE '%ord%'"));
         assert!(sql.contains("lowerUTF8(name) LIKE '%o%r%d%'"));
+        assert!(!sql.contains("comment"));
         assert!(sql.ends_with("ORDER BY name LIMIT 100 OFFSET 0"));
+    }
+
+    #[test]
+    fn table_object_query_matches_fuzzy_filter_against_comments() {
+        let sql = clickhouse_tables_sql("analytics", Some("ord"), Some(100), None, true, true);
+
+        assert!(sql.contains("lowerUTF8(coalesce(comment, '')) LIKE '%ord%'"));
+        assert!(sql.contains("lowerUTF8(coalesce(comment, '')) LIKE '%o%r%d%'"));
     }
 }

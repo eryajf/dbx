@@ -3648,7 +3648,6 @@ export default withEnglishFallback({
     copyColumn: "列をコピー",
     copyColumnsTitle: "別のテーブルから列をコピー",
     copyColumnsSourceTable: "コピー元テーブル",
-    copyColumnsSelectSourceTable: "コピー元テーブルを選択",
     copyColumnsSearchSourceTables: "コピー元テーブルを検索",
     copyColumnsSelectFields: "フィールドを選択",
     copyColumnsSearchFields: "フィールドまたは型を検索",

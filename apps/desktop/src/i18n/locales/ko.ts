@@ -3437,7 +3437,6 @@ export default withEnglishFallback({
     copyColumn: "컬럼 복사",
     copyColumnsTitle: "다른 테이블에서 컬럼 복사",
     copyColumnsSourceTable: "원본 테이블",
-    copyColumnsSelectSourceTable: "원본 테이블 선택",
     copyColumnsSearchSourceTables: "원본 테이블 검색",
     copyColumnsSelectFields: "필드 선택",
     copyColumnsSearchFields: "필드 또는 유형 검색",
