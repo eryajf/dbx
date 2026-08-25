@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { translateBackendError } from "@/i18n/backend-errors";
-import { Upload, Download, FolderPlus, FolderOpen, RefreshCw, ChevronsLeft, ChevronsUp, Trash2, FolderInput, Check, Minus, Square, X } from "@lucide/vue";
+import { Upload, Download, FolderPlus, FolderOpen, RefreshCw, ChevronsLeft, ChevronsUp, Trash2, FolderInput, Check, Minus, Square, X, Loader2, Unplug } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import LightDropdown from "@/components/ui/LightDropdown.vue";
 import LightTooltip from "@/components/ui/LightTooltip.vue";
 import ConnectionTree from "@/components/sidebar/ConnectionTree.vue";
 import { applyConnectionMultiSelection, emptyConnectionMultiSelection, isExitConnectionMultiSelectionShortcut } from "@/lib/sidebar/sidebarConnectionMultiSelect";
+import { disconnectSidebarConnections } from "@/lib/sidebar/sidebarConnectionDisconnect";
 import { connectionGroupDestinationRows } from "@/lib/sidebar/sidebarLayout";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useToast } from "@/composables/useToast";
@@ -37,6 +38,7 @@ const { toast } = useToast();
 const connectionTreeRef = ref<InstanceType<typeof ConnectionTree>>();
 const showDeleteSelectedConfirm = ref(false);
 const showCreateSelectedGroupDialog = ref(false);
+const isDisconnectingAllActiveConnections = ref(false);
 const selectedGroupName = ref("");
 const UNGROUPED_GROUP_VALUE = "__ungrouped";
 const importSourceItems = computed(() => [
@@ -73,6 +75,27 @@ async function refreshTree() {
     await connectionStore.refreshAllTree();
   } catch (e: any) {
     toast(t("connection.connectFailed", { message: translateBackendError(t, e) }), 5000);
+  }
+}
+
+async function disconnectAllActiveConnections() {
+  if (isDisconnectingAllActiveConnections.value) return;
+  const connectionIds = [...connectionStore.connectedIds];
+  if (!connectionIds.length) return;
+
+  isDisconnectingAllActiveConnections.value = true;
+  try {
+    const result = await disconnectSidebarConnections(connectionIds, (connectionId) => connectionStore.disconnect(connectionId));
+    if (!result.failed) {
+      toast(t("connection.disconnectedSelected", { count: connectionIds.length }), 2000);
+    } else if (result.succeeded > 0) {
+      toast(t("connection.disconnectSelectedPartial", { succeeded: result.succeeded, failed: result.failed }), 5000);
+    } else {
+      const message = result.firstError instanceof Error ? result.firstError.message : String(result.firstError);
+      toast(t("connection.saveFailed", { message }), 5000);
+    }
+  } finally {
+    isDisconnectingAllActiveConnections.value = false;
   }
 }
 
@@ -264,6 +287,12 @@ defineExpose({ focusSearch, locateTabInSidebar });
           <LightTooltip :text="t('contextMenu.refreshChildren')" side="bottom" :delay="0" :close-delay="0" nowrap>
             <Button variant="ghost" size="icon" class="h-5 w-5" @click="refreshTree">
               <RefreshCw class="h-3 w-3" />
+            </Button>
+          </LightTooltip>
+          <LightTooltip :text="t('sidebar.disconnectAllActiveConnections')" side="bottom" :delay="0" :close-delay="0" nowrap>
+            <Button variant="ghost" size="icon" class="h-5 w-5" :disabled="connectionStore.connectedIds.size === 0 || isDisconnectingAllActiveConnections" @click="disconnectAllActiveConnections">
+              <Loader2 v-if="isDisconnectingAllActiveConnections" class="h-3 w-3 animate-spin" />
+              <Unplug v-else class="h-3 w-3" />
             </Button>
           </LightTooltip>
           <LightTooltip :text="t('sidebar.collapse')" side="bottom" :delay="0" :close-delay="0" nowrap>
