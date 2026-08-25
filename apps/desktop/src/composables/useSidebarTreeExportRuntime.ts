@@ -1,5 +1,6 @@
-import type { ShallowRef } from "vue";
+import { createApp, type ShallowRef } from "vue";
 import { useI18n } from "vue-i18n";
+import i18n from "@/i18n";
 import { useExportTracker, type ExportTask } from "@/composables/useExportTracker";
 import { useToast } from "@/composables/useToast";
 import type { useConnectionStore } from "@/stores/connectionStore";
@@ -14,6 +15,8 @@ import { joinExportedDdls } from "@/lib/export/ddlExport";
 import { translateBackendError } from "@/i18n/backend-errors";
 import { sidebarStructureExportTargets } from "@/lib/sidebar/sidebarExportRuntime";
 import { fetchTableDataForExport } from "@/lib/table/tableDataExport";
+import XlsxHeaderDialog from "@/components/export/XlsxHeaderDialog.vue";
+import { buildXlsxHeaderOverrides, hasXlsxHeaderComments, type XlsxHeaderMode } from "@/lib/export/xlsxHeader";
 import { isLoadingStructurePreview, showStructureDocCopyDialog, showStructurePreviewDialog, structureDocCopyText, structureDocCopyTitle, structurePreviewDefaultFileName, structurePreviewError, structurePreviewSql, structurePreviewTitle } from "@/components/sidebar/sidebarTreeDialogState";
 
 type StructureCopyFormat = "tsv" | "markdown";
@@ -237,7 +240,31 @@ export function useSidebarTreeExportRuntime(options: SidebarTreeExportRuntimeOpt
     }
   }
 
-  async function exportTableData(format: "csv" | "xlsx" | "sql") {
+  function showSidebarTreeXlsxHeaderDialog(hasComments: boolean): Promise<XlsxHeaderMode | null> {
+    if (!hasComments) return Promise.resolve("name");
+
+    return new Promise((resolve) => {
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const app = createApp(XlsxHeaderDialog, {
+        open: true,
+        onConfirm: (mode: XlsxHeaderMode) => {
+          resolve(mode);
+          app.unmount();
+          document.body.removeChild(container);
+        },
+        onCancel: () => {
+          resolve(null);
+          app.unmount();
+          document.body.removeChild(container);
+        },
+      });
+      app.use(i18n);
+      app.mount(container);
+    });
+  }
+
+  async function exportTableData(format: "csv" | "xlsx" | "sql", columnInfos?: ColumnInfo[], headerMode: XlsxHeaderMode = "name") {
     const node = activeNode.value;
     if (!node.connectionId || !node.database) return;
     const connectionId = node.connectionId;
@@ -275,7 +302,9 @@ export function useSidebarTreeExportRuntime(options: SidebarTreeExportRuntimeOpt
         if (format === "csv") {
           await api.exportQueryResultCsv(outputPath, result.columns, result.rows);
         } else {
-          await api.exportQueryResultXlsx(outputPath, node.label, result.columns, result.column_types ?? result.columns.map(() => ""), undefined, result.rows);
+          const comments = result.columns.map((name) => columnInfos?.find((column) => column.name.toLocaleLowerCase() === name.toLocaleLowerCase())?.comment);
+          const headerOverrides = buildXlsxHeaderOverrides(result.columns, comments, headerMode);
+          await api.exportQueryResultXlsx(outputPath, node.label, result.columns, result.column_types ?? result.columns.map(() => ""), headerOverrides, result.rows);
         }
         currentTask.status = "Done";
         currentTask.rowsExported = result.rows.length;
@@ -283,7 +312,15 @@ export function useSidebarTreeExportRuntime(options: SidebarTreeExportRuntimeOpt
         toast(t("grid.exported"));
         return;
       }
-      const queryColumns = config.db_type === "neo4j" ? (await api.getColumns(connectionId, database, node.schema || database, node.label)).map((column) => column.name) : undefined;
+      const queryColumns = columnInfos?.map((column) => column.name) ?? (config.db_type === "neo4j" ? (await api.getColumns(connectionId, database, node.schema || database, node.label)).map((column) => column.name) : undefined);
+      const columnComments =
+        format === "xlsx" && columnInfos
+          ? buildXlsxHeaderOverrides(
+              columnInfos.map((column) => column.name),
+              columnInfos.map((column) => column.comment),
+              headerMode,
+            )
+          : undefined;
       const rowLimit = settingsStore.editorSettings.exportRowLimitEnabled ? settingsStore.editorSettings.exportRowLimit : null;
       const request: api.TableExportRequest = {
         exportId: currentTask.exportId,
@@ -295,6 +332,7 @@ export function useSidebarTreeExportRuntime(options: SidebarTreeExportRuntimeOpt
         filePath: outputPath,
         format,
         columns: queryColumns,
+        columnComments,
         batchSize: settingsStore.editorSettings.exportBatchSize,
         skipCount: format === "sql",
         rowLimit,
@@ -320,7 +358,20 @@ export function useSidebarTreeExportRuntime(options: SidebarTreeExportRuntimeOpt
   }
 
   async function exportDataXlsx() {
-    await exportTableData("xlsx");
+    const node = activeNode.value;
+    if (!node.connectionId || !node.database) return;
+
+    let columnInfos: ColumnInfo[] | undefined;
+    try {
+      await connectionStore.ensureConnected(node.connectionId);
+      columnInfos = await api.getColumns(node.connectionId, node.database, node.schema || node.database, node.label, node.catalog);
+    } catch {
+      // Export still works with field-name headers when column metadata is unavailable.
+    }
+
+    const headerMode = await showSidebarTreeXlsxHeaderDialog(hasXlsxHeaderComments(columnInfos?.map((column) => column.comment)));
+    if (headerMode === null) return;
+    await exportTableData("xlsx", columnInfos, headerMode);
   }
 
   return {

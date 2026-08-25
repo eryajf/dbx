@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import { shallowRef } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TreeNode } from "@/types/database";
 
+const source = readFileSync(new URL("../useSidebarTreeExportRuntime.ts", import.meta.url), "utf8");
 const toastMock = vi.hoisted(() => vi.fn());
 const apiMock = vi.hoisted(() => ({
   buildTableSelectSql: vi.fn(async () => 'SELECT * FROM "main"."users" LIMIT 10000'),
@@ -14,6 +16,7 @@ vi.mock("@/lib/backend/api", () => apiMock);
 vi.mock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => false }));
 vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: toastMock }) }));
 vi.mock("@/composables/useExportTracker", () => ({ useExportTracker: () => ({ addTask: vi.fn() }) }));
+vi.mock("@/i18n", () => ({ default: { install() {} } }));
 vi.mock("vue-i18n", () => ({
   useI18n: () => ({
     t: (key: string, params?: Record<string, unknown>) => {
@@ -26,6 +29,19 @@ vi.mock("vue-i18n", () => ({
 
 import { useSidebarTreeExportRuntime } from "@/composables/useSidebarTreeExportRuntime";
 import { showStructurePreviewDialog, structurePreviewSql, structurePreviewTitle } from "@/components/sidebar/sidebarTreeDialogState";
+
+function functionBody(name: string): string {
+  const signature = new RegExp(`(?:async\\s+)?function\\s+${name}\\s*\\([^)]*\\)\\s*(?::\\s*[^\\{]+)?\\{`, "m").exec(source);
+  if (!signature) throw new Error(`Missing function ${name}`);
+  const bodyStart = signature.index + signature[0].length;
+  let depth = 1;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    else if (source[index] === "}") depth -= 1;
+    if (depth === 0) return source.slice(bodyStart, index);
+  }
+  throw new Error(`Unclosed function ${name}`);
+}
 
 describe("useSidebarTreeExportRuntime", () => {
   beforeEach(() => {
@@ -85,5 +101,28 @@ describe("useSidebarTreeExportRuntime", () => {
     expect(structurePreviewSql.value).toBe("CREATE TABLE one (id INT);\n\nCREATE VIEW two AS SELECT 1;\n");
     expect(structurePreviewTitle.value).toBe("contextMenu.exportStructurePreviewTitleMultiple");
     expect(showStructurePreviewDialog.value).toBe(true);
+  });
+
+  it("prompts for the header mode before it opens the save dialog when comments exist", () => {
+    const exportDataXlsx = functionBody("exportDataXlsx");
+
+    expect(source).toContain('import XlsxHeaderDialog from "@/components/export/XlsxHeaderDialog.vue"');
+    expect(exportDataXlsx).toContain("await api.getColumns(");
+    expect(exportDataXlsx).toContain("hasXlsxHeaderComments(columnInfos?.map((column) => column.comment))");
+    expect(exportDataXlsx.indexOf("await showSidebarTreeXlsxHeaderDialog(")).toBeLessThan(exportDataXlsx.indexOf('await exportTableData("xlsx", columnInfos, headerMode)'));
+  });
+
+  it("falls back to field-name headers when column metadata is unavailable", () => {
+    const exportDataXlsx = functionBody("exportDataXlsx");
+
+    expect(exportDataXlsx).toContain("catch {\n      // Export still works with field-name headers when column metadata is unavailable.\n    }");
+    expect(exportDataXlsx).toContain('await exportTableData("xlsx", columnInfos, headerMode)');
+  });
+
+  it("sends the selected mode's header overrides to both XLSX export paths", () => {
+    const exportTableData = functionBody("exportTableData");
+
+    expect(exportTableData).toContain("buildXlsxHeaderOverrides(result.columns, comments, headerMode)");
+    expect(exportTableData).toContain("columnComments,");
   });
 });
