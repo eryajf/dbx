@@ -119,7 +119,7 @@ export function useDataGridExtractor(options: UseDataGridExtractorOptions) {
     // INSERT and UPDATE need the complete record to retain key columns and
     // writable values. Other extractors should respect the actual cell range
     // that a right-click creates, just like keyboard copy does.
-    const requiresFullRowContext = extractor === "sql-inserts" || extractor === "sql-updates";
+    const requiresFullRowContext = extractor === "sql-inserts" || (extractor === "sql-updates" && options.databaseType.value !== "mongodb");
 
     if (contextPredicateCell) {
       const item = fullItemsById.get(contextPredicateCell.rowId);

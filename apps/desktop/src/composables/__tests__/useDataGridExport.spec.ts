@@ -66,6 +66,8 @@ function createMongoExportState(options: {
   selectedCellMatrix?: CellSelectionMatrix;
   selectedRowIds?: Set<number>;
   mongoUpdateTarget?: false;
+  contextColumn?: number;
+  syntheticContext?: boolean;
 }) {
   const items = options.items ?? [options.item];
   const selectedRowIds = options.selectedRowIds ?? new Set<number>();
@@ -90,8 +92,8 @@ function createMongoExportState(options: {
     selectedCells: computed(() => options.selectedCellMatrix ?? { columns: [], rows: [] }),
     selectedCellMatrix: computed(() => options.selectedCellMatrix ?? null),
     selectedRange: computed(() => null),
-    contextCell: ref({ rowId: options.item.id, rowIndex: 0, col: -1 }),
-    contextSelectionIsSynthetic: ref(false),
+    contextCell: ref({ rowId: options.item.id, rowIndex: 0, col: options.contextColumn ?? -1 }),
+    contextSelectionIsSynthetic: ref(options.syntheticContext ?? false),
     getRowItem: (rowId) => items.find((item) => item.id === rowId),
     selectedRowIds: ref(selectedRowIds),
     hasRowSelection: computed(() => selectedRowIds.size > 0),
@@ -1331,6 +1333,8 @@ describe("useDataGridExport prepared row statements", () => {
         columns: ["name"],
         rows: [[item.data[1]]],
       },
+      contextColumn: 1,
+      syntheticContext: true,
     });
 
     expect(state.canCopyWithExtractor("sql-updates")).toBe(true);
