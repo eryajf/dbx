@@ -185,7 +185,7 @@ enum ConnectionDatabaseInfoSource {
     VictoriaMetrics(db::victoriametrics_driver::VictoriaMetricsClient),
     Redis(String),
     Nacos,
-    Consul(crate::consul::ConsulClient),
+    Consul(Box<crate::consul::ConsulClient>),
     #[cfg(feature = "mq-admin")]
     MessageQueue,
 }
@@ -4308,7 +4308,7 @@ impl AppState {
                 }
                 Some(PoolKind::Redis(_)) => Some(ConnectionDatabaseInfoSource::Redis(pool_key.clone())),
                 Some(PoolKind::Nacos) => Some(ConnectionDatabaseInfoSource::Nacos),
-                Some(PoolKind::Consul(client)) => Some(ConnectionDatabaseInfoSource::Consul(client.clone())),
+                Some(PoolKind::Consul(client)) => Some(ConnectionDatabaseInfoSource::Consul(Box::new(client.clone()))),
                 #[cfg(feature = "mq-admin")]
                 Some(PoolKind::MessageQueue) => Some(ConnectionDatabaseInfoSource::MessageQueue),
                 _ => None,

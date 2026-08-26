@@ -310,7 +310,9 @@ func detectServerVersion(servers []string, timeout time.Duration) string {
 		if err != nil {
 			continue
 		}
-		for _, command := range []string{"envi", "stat"} {
+		// ZooKeeper 3.5+ whitelists only "srvr" by default; "envi"/"stat"
+		// are opt-in, so probe srvr first for default-config clusters.
+		for _, command := range []string{"srvr", "envi", "stat"} {
 			connection, err := net.DialTimeout("tcp", address, deadline)
 			if err != nil {
 				continue
@@ -342,7 +344,13 @@ func parseServerVersion(response string) string {
 		key := strings.ToLower(strings.TrimSpace(parts[0]))
 		key = strings.NewReplacer(" ", ".", "_", ".").Replace(key)
 		if len(parts) == 2 && key == "zookeeper.version" {
-			return strings.TrimSpace(parts[1])
+			version := strings.TrimSpace(parts[1])
+			// Drop the ", built on ..." suffix envi/stat/srvr carry so only
+			// the version itself is shown.
+			if idx := strings.Index(version, ","); idx >= 0 {
+				version = strings.TrimSpace(version[:idx])
+			}
+			return version
 		}
 	}
 	return ""
