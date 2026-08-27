@@ -6652,6 +6652,7 @@ export default {
     shortcutToggleTranspose: "Toggle transpose view",
     shortcutCancelSearch: "Cancel search",
     shortcutToggleSidebar: "Toggle sidebar",
+    shortcutToggleZenMode: "Toggle Zen mode",
     shortcutCopySidebarSelection: "Copy sidebar selection",
     shortcutPasteSidebarSelection: "Paste into sidebar",
     shortcutEditSidebarConnection: "Edit sidebar connection",
