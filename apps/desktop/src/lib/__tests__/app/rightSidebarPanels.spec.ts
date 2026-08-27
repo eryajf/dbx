@@ -62,7 +62,10 @@ describe("right sidebar panel entry points", () => {
   it("keeps Zen mode as a temporary data-tab layout", () => {
     expect(appSource).toContain("const isZenMode = ref(false);");
     expect(appSource).toContain('if (mode !== "data") isZenMode.value = false;');
+    expect(appSource).toContain("function toggleZenMode() {");
+    expect(appSource).toContain('if (activeTab.value?.mode !== "data") return;');
     expect(appSource).toContain('isToggleZenModeShortcut(e, shortcuts) && activeTab.value?.mode === "data"');
+    expect(appSource).toContain('@toggle-zen-mode="toggleZenMode"');
     expect(appSource).toContain('v-show="sidebarOpen && !isZenMode"');
     expect(appSource).toContain('v-show="!sidebarOpen && !isZenMode"');
     expect(appSource).toContain('v-show="!isAiPanelMaximized || isZenMode"');

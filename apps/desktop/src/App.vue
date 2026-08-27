@@ -332,6 +332,11 @@ watch(
   },
 );
 
+function toggleZenMode() {
+  if (activeTab.value?.mode !== "data") return;
+  isZenMode.value = !isZenMode.value;
+}
+
 const externalSqlFileChanges = useExternalSqlFileChanges({
   activeTab,
   recreateFile: async (tab) => {
@@ -2622,7 +2627,7 @@ async function handleKeydown(e: KeyboardEvent) {
   if (isToggleZenModeShortcut(e, shortcuts) && activeTab.value?.mode === "data") {
     e.preventDefault();
     e.stopPropagation();
-    isZenMode.value = !isZenMode.value;
+    toggleZenMode();
     return;
   }
   if (switchTabIndex != null) {
@@ -3018,6 +3023,7 @@ onUnmounted(() => {
                 :settings-page-open="settingsPageTabOpen"
                 :settings-page-active="settingsStore.settingsPageActive"
                 :agent-driver-update-count="toolbarAgentDriverUpdateCount"
+                @toggle-zen-mode="toggleZenMode"
                 @activate-driver-store="openDriverStorePage"
                 @activate-settings-page="activateSettingsPage"
                 @locate-tab="locateTabInSidebar"
