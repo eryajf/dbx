@@ -4658,6 +4658,7 @@ export interface TableExportRequest {
   rowLimit?: number | null;
   dateTimeFormat?: string;
   numericColumnRightAlign?: boolean;
+  autoFilter?: boolean;
 }
 
 export interface TableCsvExportOptions {
@@ -4706,6 +4707,7 @@ export interface QueryResultExportRequest {
   exportColumnTypes?: Array<string | null | undefined>;
   numericColumnRightAlign?: boolean;
   columnComments?: Array<string | null> | null;
+  autoFilter?: boolean;
   identifierQuote?: string;
 }
 
@@ -4845,7 +4847,16 @@ export async function exportTableDataCsv(options: TableCsvExportOptions): Promis
   return invoke("export_table_data_csv", { request: options });
 }
 
-export async function exportQueryResultXlsx(filePath: string, sheetName: string | undefined, columns: string[], columnTypes: string[], columnComments: readonly (string | null)[] | undefined, rows: readonly (readonly XlsxCellValue[])[], numericColumnRightAlign?: boolean): Promise<void> {
+export async function exportQueryResultXlsx(
+  filePath: string,
+  sheetName: string | undefined,
+  columns: string[],
+  columnTypes: string[],
+  columnComments: readonly (string | null)[] | undefined,
+  rows: readonly (readonly XlsxCellValue[])[],
+  numericColumnRightAlign?: boolean,
+  autoFilter?: boolean,
+): Promise<void> {
   return invoke("export_query_result_xlsx", {
     request: {
       filePath,
@@ -4855,6 +4866,7 @@ export async function exportQueryResultXlsx(filePath: string, sheetName: string 
       columnComments,
       rows,
       numericColumnRightAlign,
+      autoFilter,
     },
   });
 }
@@ -4868,12 +4880,15 @@ export async function exportQueryResultsXlsx(
     columnComments?: readonly (string | null)[];
     rows: readonly (readonly XlsxCellValue[])[];
     numericColumnRightAlign?: boolean;
+    autoFilter?: boolean;
   }[],
+  autoFilter?: boolean,
 ): Promise<void> {
   return invoke("export_query_results_xlsx", {
     request: {
       filePath,
       worksheets,
+      autoFilter,
     },
   });
 }
