@@ -40,3 +40,9 @@ describe("SqlFilePanel file renaming", () => {
     expect(renameFunction).not.toContain("readExternalSqlFileSnapshot(nextPath)");
   });
 });
+
+describe("SqlFilePanel directory actions", () => {
+  it("shows a new SQL file icon for nested directories", () => {
+    expect(panelSource).toContain('@click.stop="openCreateDialog(folder.path, entry.path)"');
+  });
+});

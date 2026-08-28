@@ -621,7 +621,14 @@ function clearContextTarget() {
                       <FileCode class="h-4 w-4 shrink-0 text-blue-500" />
                     </template>
                     <span class="truncate ml-1 flex-1">{{ entry.name }}</span>
-                    <template v-if="!entry.is_dir">
+                    <template v-if="entry.is_dir">
+                      <LightTooltip :text="t('sqlFileTree.newSqlFile')" side="bottom" :delay="0" :close-delay="0" nowrap>
+                        <Button variant="ghost" size="icon" class="h-4 w-4 shrink-0 text-muted-foreground hover:text-foreground" @click.stop="openCreateDialog(folder.path, entry.path)">
+                          <FilePlus class="h-3 w-3" />
+                        </Button>
+                      </LightTooltip>
+                    </template>
+                    <template v-else>
                       <LightTooltip :text="t('sqlFileTree.renameFile')" side="bottom" :delay="0" :close-delay="0" nowrap>
                         <Button variant="ghost" size="icon" class="h-4 w-4 shrink-0 text-muted-foreground hover:text-foreground" @click.stop="openRenameDialog({ kind: 'file', folderPath: folder.path, entry })">
                           <Pencil class="h-3 w-3" />
