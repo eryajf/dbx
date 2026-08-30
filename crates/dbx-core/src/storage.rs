@@ -234,6 +234,8 @@ pub struct McpGlobalPolicy {
     /// existing policy API while allowing each exposed connection to be safer.
     #[serde(default)]
     pub connection_policies: Vec<McpConnectionPolicy>,
+    #[serde(default)]
+    pub query_timeout_secs: Option<u64>,
 }
 
 fn default_mcp_connection_execution_mode_configured() -> bool {
@@ -338,6 +340,8 @@ pub struct McpGlobalPolicyState {
     pub allowed_tool_names: Option<Vec<String>>,
     #[serde(default)]
     pub connection_policies: Vec<McpConnectionPolicy>,
+    #[serde(default)]
+    pub query_timeout_secs: Option<u64>,
 }
 
 impl McpGlobalPolicyState {
@@ -348,6 +352,7 @@ impl McpGlobalPolicyState {
             allowed_connection_ids: self.allowed_connection_ids.clone(),
             allowed_tool_names: self.allowed_tool_names.clone(),
             connection_policies: self.connection_policies.clone(),
+            query_timeout_secs: self.query_timeout_secs,
         }
     }
 }
@@ -434,6 +439,7 @@ impl McpGlobalPolicy {
             allowed_connection_ids,
             allowed_tool_names,
             connection_policies,
+            query_timeout_secs: self.query_timeout_secs,
         }
     }
 }
@@ -1869,6 +1875,7 @@ impl Storage {
                         allowed_connection_ids: policy.allowed_connection_ids,
                         allowed_tool_names: policy.allowed_tool_names,
                         connection_policies: policy.connection_policies,
+                        query_timeout_secs: policy.query_timeout_secs,
                     });
                 };
                 let settings = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&json)
@@ -1882,6 +1889,7 @@ impl Storage {
                         allowed_connection_ids: policy.allowed_connection_ids,
                         allowed_tool_names: policy.allowed_tool_names,
                         connection_policies: policy.connection_policies,
+                        query_timeout_secs: policy.query_timeout_secs,
                     });
                 };
                 let policy = serde_json::from_value::<McpGlobalPolicy>(value.clone())
@@ -1894,6 +1902,7 @@ impl Storage {
                     allowed_connection_ids: policy.allowed_connection_ids,
                     allowed_tool_names: policy.allowed_tool_names,
                     connection_policies: policy.connection_policies,
+                    query_timeout_secs: policy.query_timeout_secs,
                 })
             })
             .await;
@@ -6274,6 +6283,7 @@ mod tests {
                 allowed_connection_ids: None,
                 allowed_tool_names: None,
                 connection_policies: Vec::new(),
+                query_timeout_secs: None,
             }
         );
 
@@ -6283,6 +6293,7 @@ mod tests {
                 read_only: true,
                 allow_dangerous_sql: true,
                 allowed_connection_ids: Some(vec!["conn-1".to_string(), "conn-2".to_string()]),
+                query_timeout_secs: Some(120),
                 ..Default::default()
             })
             .await
@@ -6293,17 +6304,19 @@ mod tests {
             McpGlobalPolicyState {
                 configured: true,
                 read_only: true,
-                allow_dangerous_sql: true,
+                allow_dangerous_sql: false,
                 allowed_connection_ids: Some(vec!["conn-1".to_string(), "conn-2".to_string()]),
                 allowed_tool_names: None,
                 connection_policies: Vec::new(),
+                query_timeout_secs: Some(120),
             }
         );
         assert_eq!(storage.load_password_hash().await.unwrap().as_deref(), Some("preserved"));
         let settings = storage.load_app_settings_json().await.unwrap();
         assert_eq!(settings[MCP_GLOBAL_POLICY_KEY]["readOnly"], true);
-        assert_eq!(settings[MCP_GLOBAL_POLICY_KEY]["allowDangerousSql"], true);
+        assert_eq!(settings[MCP_GLOBAL_POLICY_KEY]["allowDangerousSql"], false);
         assert_eq!(settings[MCP_GLOBAL_POLICY_KEY]["allowedConnectionIds"][0], "conn-1");
+        assert_eq!(settings[MCP_GLOBAL_POLICY_KEY]["queryTimeoutSecs"], 120);
         assert!(settings[MCP_GLOBAL_POLICY_KEY].get("configured").is_none());
 
         storage.save_desktop_settings(&DesktopSettings::default()).await.unwrap();
@@ -6376,6 +6389,7 @@ mod tests {
         let policy = storage.load_mcp_global_policy().await.unwrap();
         assert!(policy.configured);
         assert!(!policy.allow_dangerous_sql);
+        assert_eq!(policy.query_timeout_secs, None);
     }
 
     #[tokio::test]
@@ -6391,6 +6405,7 @@ mod tests {
                 read_only: false,
                 allow_dangerous_sql: false,
                 allowed_connection_ids: Some(vec![kept.id.clone()]),
+                query_timeout_secs: None,
                 ..Default::default()
             })
             .await
@@ -6415,6 +6430,7 @@ mod tests {
                 read_only: true,
                 allow_dangerous_sql: false,
                 allowed_connection_ids: None,
+                query_timeout_secs: None,
                 ..Default::default()
             })
             .await

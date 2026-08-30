@@ -557,6 +557,14 @@ impl DbxMcpServer {
         if let Some(limit) = request.cell_char_limit {
             arguments["cell_char_limit"] = json!(limit);
         }
+        // Surface the global MCP query timeout as a per-query argument. It is
+        // re-read on every tool call, so a settings-page change takes effect on
+        // the next MCP query with no client-config regeneration. A future
+        // per-call `timeout_secs` tool parameter can slot in above this by not
+        // being clobbered when set by the model.
+        if let Some(secs) = resolved.policy.query_timeout_secs {
+            arguments["timeout_secs"] = json!(secs);
+        }
         let result =
             self.backend.execute_agent_tool(connection, &database, "execute_query", arguments, permissions).await;
         agent_result(result)

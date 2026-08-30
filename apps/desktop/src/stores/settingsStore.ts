@@ -53,6 +53,8 @@ export interface McpGlobalPolicy {
   allowedToolNames: string[] | null;
   connectionPolicies: McpConnectionPolicy[];
   configured: boolean;
+  /** MCP query timeout override in seconds. null/undefined = inherit the connection; 0 = no limit. */
+  queryTimeoutSecs: number | null;
 }
 
 export interface McpConnectionPolicy {
@@ -103,6 +105,7 @@ export const DEFAULT_MCP_GLOBAL_POLICY: McpGlobalPolicy = {
   allowedToolNames: null,
   connectionPolicies: [],
   configured: false,
+  queryTimeoutSecs: null,
 };
 
 export function normalizeMcpGlobalPolicy(policy: Partial<McpGlobalPolicy> | null | undefined): McpGlobalPolicy {
@@ -122,6 +125,10 @@ export function normalizeMcpGlobalPolicy(policy: Partial<McpGlobalPolicy> | null
       return rules;
     }, {}),
   );
+  // null / undefined / non-positive => null (inherit connection). 0 is preserved
+  // as an explicit "no limit" only here; the UI maps "no limit" <=> 0 and
+  // "inherit" <=> null.
+  const queryTimeoutSecs = policy?.queryTimeoutSecs === null || policy?.queryTimeoutSecs === undefined ? null : typeof policy.queryTimeoutSecs === "number" && Number.isFinite(policy.queryTimeoutSecs) && policy.queryTimeoutSecs >= 0 ? Math.round(policy.queryTimeoutSecs) : null;
   return {
     readOnly: policy?.readOnly === true,
     allowDangerousSql: policy?.allowDangerousSql === true,
@@ -129,6 +136,7 @@ export function normalizeMcpGlobalPolicy(policy: Partial<McpGlobalPolicy> | null
     allowedToolNames,
     connectionPolicies,
     configured: policy?.configured === true,
+    queryTimeoutSecs,
   };
 }
 
@@ -1554,6 +1562,7 @@ export const useSettingsStore = defineStore("settings", () => {
         allowedConnectionIds: next.allowedConnectionIds,
         allowedToolNames: next.allowedToolNames,
         connectionPolicies: next.connectionPolicies,
+        queryTimeoutSecs: next.queryTimeoutSecs,
       });
     } catch (error) {
       mcpGlobalPolicy.value = previous;

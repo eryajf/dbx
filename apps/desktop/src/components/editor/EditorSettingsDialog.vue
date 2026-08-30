@@ -2084,6 +2084,31 @@ const mcpInstallError = ref(false);
 const mcpExecutionMode = computed(() => mcpExecutionModeFromPolicy(settingsStore.mcpGlobalPolicy));
 const mcpExecutionModeOptions: McpExecutionMode[] = ["read_only", "safe_write", "high_risk_write"];
 const mcpAllowedConnectionIds = computed(() => settingsStore.mcpGlobalPolicy.allowedConnectionIds);
+const mcpQueryTimeoutInput = ref<string>(settingsStore.mcpGlobalPolicy.queryTimeoutSecs === null ? "" : String(settingsStore.mcpGlobalPolicy.queryTimeoutSecs));
+
+watch(
+  () => settingsStore.mcpGlobalPolicy.queryTimeoutSecs,
+  (value) => {
+    mcpQueryTimeoutInput.value = value === null ? "" : String(value);
+  },
+);
+
+function onMcpQueryTimeoutInput() {
+  const raw = mcpQueryTimeoutInput.value.trim();
+  if (raw === "") {
+    void saveMcpPolicy({ queryTimeoutSecs: null });
+    return;
+  }
+  const parsed = Number(raw);
+  // Backend stores the value as u64; keep out-of-range integers on the
+  // invalid-value path instead of failing serde later with a generic error.
+  if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed) || parsed > Number("18446744073709551615")) {
+    toast(t("settings.mcpQueryTimeoutInvalid"), 5000);
+    mcpQueryTimeoutInput.value = settingsStore.mcpGlobalPolicy.queryTimeoutSecs === null ? "" : String(settingsStore.mcpGlobalPolicy.queryTimeoutSecs);
+    return;
+  }
+  void saveMcpPolicy({ queryTimeoutSecs: parsed });
+}
 const mcpSelectableConnections = computed(() => connectionStore.connections);
 const mcpPolicyControlsDisabled = computed(() =>
   isMcpPolicyMutationBlocked({
@@ -2136,6 +2161,7 @@ async function saveMcpPolicy(partial: {
   allowedConnectionIds?: string[] | null;
   allowedToolNames?: string[] | null;
   connectionPolicies?: { connectionId: string; readOnly: boolean; allowDangerousSql: boolean; executionModeConfigured: boolean; databaseScope: "all" | "selected" | "none"; allowedDatabases: string[] }[];
+  queryTimeoutSecs?: number | null;
 }) {
   if (mcpPolicyControlsDisabled.value) return;
   mcpPolicySaving.value = true;
@@ -7682,6 +7708,13 @@ onUnmounted(() => {
                             <AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0" />
                             <span>{{ t("settings.mcpExecutionModeHighRiskWriteDescription") }}</span>
                           </p>
+                        </div>
+                        <div class="space-y-1.5">
+                          <div class="space-y-0.5">
+                            <Label id="mcp-query-timeout-label">{{ t("settings.mcpQueryTimeout") }}</Label>
+                            <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpQueryTimeoutDescription") }}</p>
+                          </div>
+                          <Input id="mcp-query-timeout" v-model="mcpQueryTimeoutInput" type="number" min="0" step="1" inputmode="numeric" placeholder="0" :disabled="mcpPolicyControlsDisabled" @change="onMcpQueryTimeoutInput" />
                         </div>
                         <details class="rounded-md border bg-background">
                           <summary class="cursor-pointer px-3 py-2.5 text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">

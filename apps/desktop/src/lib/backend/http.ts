@@ -767,6 +767,10 @@ export async function backupSqliteDatabase(_connectionId: string, _destinationPa
   throw new Error("SQLite backup is only available in the desktop app.");
 }
 
+export async function restoreSqliteDatabase(_connectionId: string, _sourcePath: string): Promise<void> {
+  throw new Error("Remote SQLite restore is only available in the desktop app.");
+}
+
 export async function syncSavedSqlDirectory(_request: SavedSqlSyncRequest): Promise<void> {
   throw new Error("SQL directory sync is only available in the desktop app.");
 }
@@ -2239,6 +2243,18 @@ export interface SqlFileEntry {
 
 export async function listSqlFilesInFolder(_folderPath: string): Promise<SqlFileEntry[]> {
   throw new Error("Listing SQL files in a folder is only available in the desktop app");
+}
+
+export async function createSqlFileInFolder(_rootPath: string, _directoryPath: string, _fileName: string): Promise<string> {
+  throw new Error("Managing SQL files in folders is only available in the desktop app");
+}
+
+export async function renameSqlFileInFolder(_rootPath: string, _filePath: string, _fileName: string): Promise<string> {
+  throw new Error("Managing SQL files in folders is only available in the desktop app");
+}
+
+export async function deleteSqlFileInFolder(_rootPath: string, _filePath: string): Promise<void> {
+  throw new Error("Managing SQL files in folders is only available in the desktop app");
 }
 
 // ---------------------------------------------------------------------------
@@ -3817,7 +3833,20 @@ export async function mongoFindOne(connectionId: string, database: string, colle
   });
 }
 
-export async function documentFindDocuments(connectionId: string, database: string, collection: string, skip: number, limit: number, filter?: string, projection?: string, sort?: string, collation?: string, executionId?: string, cursor?: string): Promise<DocumentQueryResult> {
+export async function documentFindDocuments(
+  connectionId: string,
+  database: string,
+  collection: string,
+  skip: number,
+  limit: number,
+  filter?: string,
+  projection?: string,
+  sort?: string,
+  collation?: string,
+  executionId?: string,
+  cursor?: string,
+  cursorPagination?: boolean,
+): Promise<DocumentQueryResult> {
   return post("/api/document-store/find-documents", {
     connectionId,
     database,
@@ -3829,6 +3858,7 @@ export async function documentFindDocuments(connectionId: string, database: stri
     sort,
     collation,
     cursor,
+    cursorPagination,
     executionId,
   });
 }
