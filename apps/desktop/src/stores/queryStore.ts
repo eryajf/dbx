@@ -733,6 +733,16 @@ export const useQueryStore = defineStore("query", () => {
   const t = getI18nT();
   const settingsStore = useSettingsStore();
   const tabs = ref<QueryTab[]>([]);
+  // New tabs are created by many feature-specific entry points. Tracking id
+  // changes here gives every one a stable timestamp without duplicating the
+  // field at each call site; restored legacy tabs retain their saved order.
+  function ensureTabCreationTimes() {
+    const migrationBase = Date.now() - tabs.value.length;
+    tabs.value.forEach((tab, index) => {
+      if (typeof tab.createdAt !== "number" || !Number.isFinite(tab.createdAt)) tab.createdAt = migrationBase + index;
+    });
+  }
+  watch(() => tabs.value.map((tab) => tab.id), ensureTabCreationTimes, { immediate: true, flush: "sync" });
   // Default auto-commit for a fresh query tab follows the user's global
   // "默认事务提交方式" setting (Settings > Editor), not a hard-coded constant.
   const defaultAutoCommitForDbTypeWithSetting = (dbType?: string) => defaultAutoCommitForDbType(dbType, settingsStore.editorSettings.defaultTransactionMode);
@@ -2835,6 +2845,10 @@ export const useQueryStore = defineStore("query", () => {
     );
   }
 
+  function closeTabsByIds(ids: Iterable<string>, finalActiveTabId?: string | null, onComplete?: () => void) {
+    beginBatchClose([...ids], finalActiveTabId, onComplete);
+  }
+
   function closeRightTabs(id: string, onComplete?: () => void) {
     const target = tabs.value.find((tab) => tab.id === id);
     if (!target) return;
@@ -2848,7 +2862,7 @@ export const useQueryStore = defineStore("query", () => {
     }
 
     const finalActiveTabId = activeTabId.value && !ids.includes(activeTabId.value) ? activeTabId.value : id;
-    beginBatchClose(ids, finalActiveTabId, onComplete);
+    closeTabsByIds(ids, finalActiveTabId, onComplete);
   }
 
   function finalActiveTabAfterClosing(ids: string[]) {
@@ -6788,6 +6802,7 @@ export const useQueryStore = defineStore("query", () => {
     discardTabChanges,
     requestAppCloseConfirmation,
     closeOtherTabs,
+    closeTabsByIds,
     closeRightTabs,
     closeOtherRegularTabs,
     closeRegularTabs,
