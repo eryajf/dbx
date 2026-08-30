@@ -79,7 +79,7 @@ pub struct DatabaseExportRequest {
 
 enum DatabaseExportWriter {
     Plain(BufWriter<std::fs::File>),
-    Gzip(GzEncoder<BufWriter<std::fs::File>>),
+    Gzip(Box<GzEncoder<BufWriter<std::fs::File>>>),
 }
 
 impl Write for DatabaseExportWriter {
@@ -2360,7 +2360,7 @@ async fn export_database_sql_core_inner(
     let mut file = match request.output_compression {
         DatabaseExportOutputCompression::None => DatabaseExportWriter::Plain(BufWriter::new(file)),
         DatabaseExportOutputCompression::Gzip => {
-            DatabaseExportWriter::Gzip(GzEncoder::new(BufWriter::new(file), Compression::default()))
+            DatabaseExportWriter::Gzip(Box::new(GzEncoder::new(BufWriter::new(file), Compression::default())))
         }
     };
 
@@ -3471,10 +3471,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("backup.sql.gz");
         let file = std::fs::File::create(&path).unwrap();
-        let mut writer = DatabaseExportWriter::Gzip(flate2::write::GzEncoder::new(
+        let mut writer = DatabaseExportWriter::Gzip(Box::new(flate2::write::GzEncoder::new(
             std::io::BufWriter::new(file),
             flate2::Compression::default(),
-        ));
+        )));
         writer.write_all(b"SELECT 1;\n").unwrap();
         writer.finish().unwrap();
 
