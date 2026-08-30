@@ -188,6 +188,7 @@ async fn enforces_global_connection_scope_and_read_only_policy() {
             read_only: true,
             allow_dangerous_sql: false,
             allowed_connection_ids: Some(vec!["allowed".to_string(), "allowed-staging".to_string()]),
+            ..Default::default()
         },
         connections: vec![
             test_connection("allowed", "shared-db"),
@@ -256,7 +257,12 @@ async fn read_only_policy_blocks_write_capable_sql_the_keyword_scan_misses() {
         (true, "SELECT * FROM users FOR SHARE"),
     ] {
         let backend = PolicyBackend {
-            policy: McpGlobalPolicy { read_only: true, allow_dangerous_sql, allowed_connection_ids: None },
+            policy: McpGlobalPolicy {
+                read_only: true,
+                allow_dangerous_sql,
+                allowed_connection_ids: None,
+                ..Default::default()
+            },
             connections: vec![mysql_connection("mysql", "reporting")],
             group_paths: Ok(HashMap::new()),
         };
@@ -296,7 +302,12 @@ async fn read_only_policy_allows_read_only_show_statements() {
     ] {
         let connection_id = connection.id.clone();
         let backend = PolicyBackend {
-            policy: McpGlobalPolicy { read_only: true, allow_dangerous_sql: false, allowed_connection_ids: None },
+            policy: McpGlobalPolicy {
+                read_only: true,
+                allow_dangerous_sql: false,
+                allowed_connection_ids: None,
+                ..Default::default()
+            },
             connections: vec![connection],
             group_paths: Ok(HashMap::new()),
         };

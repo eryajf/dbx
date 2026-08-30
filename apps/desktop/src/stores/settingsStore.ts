@@ -50,7 +50,18 @@ export interface McpGlobalPolicy {
   readOnly: boolean;
   allowDangerousSql: boolean;
   allowedConnectionIds: string[] | null;
+  allowedToolNames: string[] | null;
+  connectionPolicies: McpConnectionPolicy[];
   configured: boolean;
+}
+
+export interface McpConnectionPolicy {
+  connectionId: string;
+  readOnly: boolean;
+  allowDangerousSql: boolean;
+  executionModeConfigured: boolean;
+  databaseScope: "all" | "selected" | "none";
+  allowedDatabases: string[];
 }
 
 export type DesktopIconTheme = "default" | "black";
@@ -89,15 +100,34 @@ export const DEFAULT_MCP_GLOBAL_POLICY: McpGlobalPolicy = {
   readOnly: false,
   allowDangerousSql: false,
   allowedConnectionIds: null,
+  allowedToolNames: null,
+  connectionPolicies: [],
   configured: false,
 };
 
 export function normalizeMcpGlobalPolicy(policy: Partial<McpGlobalPolicy> | null | undefined): McpGlobalPolicy {
   const allowedConnectionIds = policy?.allowedConnectionIds === null || policy?.allowedConnectionIds === undefined ? null : [...new Set(policy.allowedConnectionIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0).map((id) => id.trim()))];
+  const allowedToolNames = policy?.allowedToolNames === null || policy?.allowedToolNames === undefined ? null : [...new Set(policy.allowedToolNames.filter((name): name is string => typeof name === "string" && name.trim().length > 0).map((name) => name.trim()))];
+  const connectionPolicies = Object.values(
+    (policy?.connectionPolicies ?? []).reduce<Record<string, McpConnectionPolicy>>((rules, rule) => {
+      if (!rule || typeof rule.connectionId !== "string" || !rule.connectionId.trim()) return rules;
+      rules[rule.connectionId.trim()] = {
+        connectionId: rule.connectionId.trim(),
+        readOnly: rule.readOnly === true,
+        allowDangerousSql: rule.readOnly !== true && rule.allowDangerousSql === true,
+        executionModeConfigured: rule.executionModeConfigured !== false,
+        databaseScope: rule.databaseScope === "selected" || rule.databaseScope === "none" ? rule.databaseScope : "all",
+        allowedDatabases: rule.databaseScope === "selected" ? [...new Set((rule.allowedDatabases ?? []).filter((database): database is string => typeof database === "string" && database.trim().length > 0).map((database) => database.trim()))] : [],
+      };
+      return rules;
+    }, {}),
+  );
   return {
     readOnly: policy?.readOnly === true,
     allowDangerousSql: policy?.allowDangerousSql === true,
     allowedConnectionIds,
+    allowedToolNames,
+    connectionPolicies,
     configured: policy?.configured === true,
   };
 }
@@ -1522,6 +1552,8 @@ export const useSettingsStore = defineStore("settings", () => {
         readOnly: next.readOnly,
         allowDangerousSql: next.allowDangerousSql,
         allowedConnectionIds: next.allowedConnectionIds,
+        allowedToolNames: next.allowedToolNames,
+        connectionPolicies: next.connectionPolicies,
       });
     } catch (error) {
       mcpGlobalPolicy.value = previous;
