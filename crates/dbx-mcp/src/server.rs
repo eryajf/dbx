@@ -143,7 +143,9 @@ pub struct DuplicateConnectionRequest {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RemoveConnectionRequest {
-    pub connection_name: String,
+    #[schemars(description = "Name of the DBX connection when connection_id is not provided")]
+    #[schemars(extend("type" = "string"))]
+    pub connection_name: Option<String>,
     #[schemars(extend("type" = "string"))]
     pub connection_id: Option<String>,
 }
@@ -953,22 +955,38 @@ impl DbxMcpServer {
         let target = if let Some(id) = request.connection_id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
             connections.iter().find(|connection| connection.id == id).cloned()
         } else {
+            let Some(name) = request.connection_name.as_deref().map(str::trim).filter(|name| !name.is_empty()) else {
+                return tool_error("CONNECTION_NOT_FOUND", "Either connection_id or connection_name is required.");
+            };
             let matching = connections
                 .iter()
-                .filter(|connection| connection.name.eq_ignore_ascii_case(&request.connection_name))
+                .filter(|connection| connection.name.eq_ignore_ascii_case(name))
                 .cloned()
                 .collect::<Vec<_>>();
             if matching.len() > 1 {
-                return tool_error("AMBIGUOUS_CONNECTION", ambiguous_connections(&request.connection_name, &matching));
+                return tool_error("AMBIGUOUS_CONNECTION", ambiguous_connections(name, &matching));
             }
             matching.into_iter().next()
         };
         let Some(target) = target else {
             return tool_error(
                 "CONNECTION_NOT_FOUND",
-                format!("Connection \"{}\" not found.", request.connection_name),
+                request
+                    .connection_id
+                    .as_deref()
+                    .filter(|id| !id.trim().is_empty())
+                    .map(|id| format!("Connection with id \"{id}\" not found."))
+                    .unwrap_or_else(|| {
+                        format!("Connection \"{}\" not found.", request.connection_name.as_deref().unwrap_or_default())
+                    }),
             );
         };
+        if !policy_allows_connection(&policy, &target) {
+            return tool_error(
+                "CONNECTION_OUT_OF_SCOPE",
+                format!("Connection \"{}\" is not allowed by DBX MCP settings.", target.id),
+            );
+        }
         match self.backend.remove_connection_for_mcp(&target.id).await {
             Ok(true) => text(format!("Connection \"{}\" (id: {}) removed.", target.name, target.id)),
             Ok(false) => tool_error("CONNECTION_NOT_FOUND", format!("Connection \"{}\" not found.", target.name)),
@@ -1866,10 +1884,11 @@ mod tests {
         let tools = server.tool_router.list_all();
         let names = tools.iter().map(|tool| tool.name.as_ref()).collect::<Vec<_>>();
         #[cfg(feature = "mq-admin")]
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 15);
         #[cfg(not(feature = "mq-admin"))]
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 14);
         assert!(names.contains(&"dbx_list_connections"));
+        assert!(names.contains(&"dbx_list_databases"));
         assert!(names.contains(&"dbx_list_tables"));
         assert!(names.contains(&"dbx_describe_table"));
         assert!(names.contains(&"dbx_execute_query"));
@@ -1960,7 +1979,7 @@ mod tests {
             ("dbx_open_table", &["database", "schema"]),
             ("dbx_execute_and_show", &["database"]),
             ("dbx_add_connection", &["port", "database", "driver_profile"]),
-            ("dbx_remove_connection", &["connection_id"]),
+            ("dbx_remove_connection", &["connection_id", "connection_name"]),
             ("dbx_execute_redis_command", &["db"]),
             ("dbx_get_schema_context", &["database", "schema", "max_tables"]),
         ];
@@ -2078,9 +2097,9 @@ mod tests {
         );
         let names = server.tool_router.list_all().into_iter().map(|tool| tool.name).collect::<Vec<_>>();
         #[cfg(feature = "mq-admin")]
-        assert_eq!(names.len(), 9);
+        assert_eq!(names.len(), 10);
         #[cfg(not(feature = "mq-admin"))]
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 9);
         assert!(!names.iter().any(|name| name == "dbx_add_connection"));
         assert!(!names.iter().any(|name| name == "dbx_duplicate_connection"));
         assert!(!names.iter().any(|name| name == "dbx_remove_connection"));

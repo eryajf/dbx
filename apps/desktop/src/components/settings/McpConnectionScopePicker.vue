@@ -177,7 +177,7 @@ watch(allowedPageCount, () => setPanePage("allowed", allowedPage.value));
 </script>
 
 <template>
-  <div ref="rootRef" tabindex="-1" class="mcp-scope-picker space-y-3 rounded-md border bg-muted/20 p-3 outline-none" :aria-busy="busy">
+  <div ref="rootRef" tabindex="-1" class="mcp-scope-picker space-y-3 outline-none" :aria-busy="busy">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div class="min-w-0 space-y-1">
         <div class="flex flex-wrap items-center gap-2">
@@ -188,7 +188,7 @@ watch(allowedPageCount, () => setPanePage("allowed", allowedPage.value));
       </div>
     </div>
 
-    <div class="grid grid-cols-1 p-1 sm:grid-cols-2 gap-2.5" role="radiogroup" :aria-labelledby="`${pickerId}-mode-label`">
+    <div class="grid grid-cols-1 gap-1 rounded-md border bg-muted/50 p-1 sm:grid-cols-2" role="radiogroup" :aria-labelledby="`${pickerId}-mode-label`">
       <Button
         :disabled="disabled"
         type="button"
@@ -197,8 +197,8 @@ watch(allowedPageCount, () => setPanePage("allowed", allowedPage.value));
         :aria-checked="scopeMode === 'all'"
         :tabindex="scopeMode === 'all' ? 0 : -1"
         variant="outline"
-        class="settings-choice-card h-auto justify-center border p-3"
-        :class="[scopeMode === 'all' ? 'dbx-choice-selected' : '', disabled ? 'cursor-not-allowed opacity-50' : '']"
+        class="settings-choice-card h-auto justify-center border-0 p-2.5 shadow-none"
+        :class="[scopeMode === 'all' ? 'dbx-choice-selected bg-background shadow-sm' : 'text-muted-foreground hover:bg-background/70', disabled ? 'cursor-not-allowed opacity-50' : '']"
         @click="setScopeMode('all')"
         @keydown="onScopeModeKeydown($event, 'all')"
       >
@@ -215,8 +215,8 @@ watch(allowedPageCount, () => setPanePage("allowed", allowedPage.value));
         :aria-checked="scopeMode === 'selected'"
         :tabindex="scopeMode === 'selected' ? 0 : -1"
         variant="outline"
-        class="settings-choice-card h-auto justify-center border p-3"
-        :class="[scopeMode === 'selected' ? 'dbx-choice-selected' : '', disabled ? 'cursor-not-allowed opacity-50' : '']"
+        class="settings-choice-card h-auto justify-center border-0 p-2.5 shadow-none"
+        :class="[scopeMode === 'selected' ? 'dbx-choice-selected bg-background shadow-sm' : 'text-muted-foreground hover:bg-background/70', disabled ? 'cursor-not-allowed opacity-50' : '']"
         @click="setScopeMode('selected')"
         @keydown="onScopeModeKeydown($event, 'selected')"
       >
@@ -234,7 +234,7 @@ watch(allowedPageCount, () => setPanePage("allowed", allowedPage.value));
       </div>
       <label class="flex h-9 items-center gap-1.5 rounded-md border bg-background px-2 text-xs text-muted-foreground">
         每页
-        <select v-model.number="connectionsPerPage" class="bg-transparent text-xs text-foreground outline-none" :disabled="disabled">
+        <select :value="connectionsPerPage" class="bg-transparent text-xs text-foreground outline-none" :disabled="disabled" @change="connectionsPerPage = Number(($event.target as HTMLSelectElement).value)">
           <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
         </select>
       </label>

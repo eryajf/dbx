@@ -7540,9 +7540,6 @@ onUnmounted(() => {
                 <McpAuthorizationStepper>
                   <template #connections>
                     <div class="space-y-3">
-                      <p class="text-xs text-muted-foreground">
-                        {{ t("settings.mcpConfigOptionsHint") }}
-                      </p>
                       <p v-if="mcpPolicyLoadError" class="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600 dark:text-red-400">
                         {{
                           t("settings.mcpPolicyLoadFailed", {
@@ -7564,7 +7561,7 @@ onUnmounted(() => {
                     />
                   </template>
                   <template #overrides>
-                    <div v-if="mcpConnectionPolicyConnections.length" class="space-y-2 rounded-md border bg-muted/20 p-3">
+                    <div v-if="mcpConnectionPolicyConnections.length" class="space-y-2">
                       <div class="flex flex-wrap items-start justify-between gap-2">
                         <div>
                           <p class="text-sm font-medium">连接级权限上限</p>
@@ -7605,8 +7602,8 @@ onUnmounted(() => {
                     <div v-else class="rounded-md border border-dashed px-3 py-8 text-center text-xs text-muted-foreground">请先在第 1 步中允许至少一个连接，才能设置连接级执行上限。</div>
                   </template>
                   <template #capabilities>
-                    <div class="space-y-3">
-                      <div class="space-y-2 rounded-md border bg-muted/20 p-3">
+                    <div class="space-y-4">
+                      <section class="space-y-2">
                         <div>
                           <p class="text-sm font-medium">MCP 工具权限</p>
                           <p class="text-xs text-muted-foreground">只暴露当前需要的 MCP 工具。取消选择后，客户端即使缓存了工具定义也会被服务端拒绝。</p>
@@ -7617,8 +7614,8 @@ onUnmounted(() => {
                             <span>{{ tool.label }}</span>
                           </label>
                         </div>
-                      </div>
-                      <div class="space-y-3 rounded-md border bg-muted/20 p-3">
+                      </section>
+                      <section class="space-y-3 border-t pt-4">
                         <div class="space-y-1">
                           <Label id="mcp-execution-mode-label">{{ t("settings.mcpExecutionMode") }}</Label>
                           <p class="text-xs text-muted-foreground">
@@ -7729,7 +7726,7 @@ onUnmounted(() => {
                             </p>
                           </div>
                         </details>
-                      </div>
+                      </section>
                     </div>
                   </template>
                 </McpAuthorizationStepper>

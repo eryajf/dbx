@@ -163,7 +163,7 @@ watch(databasePageCount, () => setDatabasePage(databasePage.value));
 </script>
 
 <template>
-  <section class="space-y-3 rounded-md border bg-muted/20 p-3">
+  <section class="space-y-3">
     <div>
       <p class="text-sm font-medium">连接与数据库范围</p>
       <p class="text-xs text-muted-foreground">先在左侧选择已暴露给 MCP 的连接，再限定该连接可访问的数据库。数据库名称按精确名称匹配。</p>

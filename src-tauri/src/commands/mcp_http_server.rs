@@ -4,7 +4,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
@@ -27,13 +27,19 @@ pub struct McpHttpServerState {
     operation_lock: tokio::sync::Mutex<()>,
     server: Mutex<Option<RunningServer>>,
     diagnostics: Arc<Mutex<McpHttpServerDiagnostics>>,
-    supervisor_started: AtomicBool,
+    supervisor: Mutex<Option<HealthSupervisor>>,
+    next_supervisor_id: AtomicU64,
 }
 
 struct RunningServer {
     settings: McpHttpServerSettings,
     cancellation: CancellationToken,
     task: tauri::async_runtime::JoinHandle<()>,
+}
+
+struct HealthSupervisor {
+    id: u64,
+    cancellation: CancellationToken,
 }
 
 #[derive(Default)]
@@ -62,7 +68,8 @@ impl McpHttpServerState {
             operation_lock: tokio::sync::Mutex::new(()),
             server: Mutex::new(None),
             diagnostics: Arc::new(Mutex::new(McpHttpServerDiagnostics::default())),
-            supervisor_started: AtomicBool::new(false),
+            supervisor: Mutex::new(None),
+            next_supervisor_id: AtomicU64::new(1),
         }
     }
 
@@ -125,8 +132,29 @@ impl McpHttpServerState {
         push_log(&mut diagnostics, format!("ERROR {error}"));
     }
 
-    fn reset_supervisor(&self) {
-        self.supervisor_started.store(false, Ordering::Release);
+    fn cancel_health_supervisor(&self) {
+        let supervisor = self.supervisor.lock().unwrap_or_else(|error| error.into_inner()).take();
+        if let Some(supervisor) = supervisor {
+            supervisor.cancellation.cancel();
+        }
+    }
+
+    fn claim_health_supervisor(&self) -> Option<(u64, CancellationToken)> {
+        let mut supervisor = self.supervisor.lock().unwrap_or_else(|error| error.into_inner());
+        if supervisor.is_some() {
+            return None;
+        }
+        let id = self.next_supervisor_id.fetch_add(1, Ordering::Relaxed);
+        let cancellation = CancellationToken::new();
+        *supervisor = Some(HealthSupervisor { id, cancellation: cancellation.clone() });
+        Some((id, cancellation))
+    }
+
+    fn release_health_supervisor(&self, id: u64) {
+        let mut supervisor = self.supervisor.lock().unwrap_or_else(|error| error.into_inner());
+        if supervisor.as_ref().is_some_and(|supervisor| supervisor.id == id) {
+            *supervisor = None;
+        }
     }
 
     async fn stop_locked(&self) {
@@ -281,6 +309,9 @@ fn push_log(diagnostics: &mut McpHttpServerDiagnostics, line: String) {
 
 impl Drop for McpHttpServerState {
     fn drop(&mut self) {
+        if let Some(supervisor) = self.supervisor.get_mut().unwrap_or_else(|error| error.into_inner()).take() {
+            supervisor.cancellation.cancel();
+        }
         if let Some(server) = self.server.get_mut().unwrap_or_else(|error| error.into_inner()).take() {
             server.cancellation.cancel();
             server.task.abort();
@@ -346,7 +377,7 @@ pub async fn save_mcp_http_server_settings(
     if settings.enabled {
         spawn_health_supervisor(state.inner().clone(), service.inner().clone());
     } else {
-        service.reset_supervisor();
+        service.cancel_health_supervisor();
     }
     Ok(service.status(&settings))
 }
@@ -398,12 +429,15 @@ pub async fn start_if_enabled(state: Arc<AppState>, service: Arc<McpHttpServerSt
 /// failure. The supervisor deliberately lives only in the desktop process:
 /// Web deployments are managed by their container/process supervisor instead.
 fn spawn_health_supervisor(state: Arc<AppState>, service: Arc<McpHttpServerState>) {
-    if service.supervisor_started.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+    let Some((supervisor_id, cancellation)) = service.claim_health_supervisor() else {
         return;
-    }
+    };
     tauri::async_runtime::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            tokio::select! {
+                _ = cancellation.cancelled() => break,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {}
+            }
             let settings = match state.storage.load_mcp_http_server_settings().await {
                 Ok(settings) => settings,
                 Err(error) => {
@@ -412,7 +446,6 @@ fn spawn_health_supervisor(state: Arc<AppState>, service: Arc<McpHttpServerState
                 }
             };
             if !settings.enabled {
-                service.reset_supervisor();
                 break;
             }
             if !service.status(&settings).running {
@@ -421,12 +454,13 @@ fn spawn_health_supervisor(state: Arc<AppState>, service: Arc<McpHttpServerState
                 }
             }
         }
+        service.release_health_supervisor(supervisor_id);
     });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::endpoint_for_settings;
+    use super::{endpoint_for_settings, McpHttpServerState};
     use dbx_core::storage::McpHttpServerSettings;
 
     #[test]
@@ -452,5 +486,17 @@ mod tests {
         let ipv6 =
             McpHttpServerSettings { host: "::1".to_string(), allow_remote: false, allowed_hosts: vec![], ..settings };
         assert_eq!(endpoint_for_settings(&ipv6).as_deref(), Some("http://[::1]:5225/mcp"));
+    }
+
+    #[test]
+    fn cancelled_supervisor_cannot_clear_a_replacement() {
+        let service = McpHttpServerState::new(std::env::temp_dir());
+        let (first_id, _) = service.claim_health_supervisor().expect("first supervisor");
+        service.cancel_health_supervisor();
+        let (second_id, _) = service.claim_health_supervisor().expect("replacement supervisor");
+
+        service.release_health_supervisor(first_id);
+        assert_ne!(first_id, second_id);
+        assert!(service.claim_health_supervisor().is_none());
     }
 }
