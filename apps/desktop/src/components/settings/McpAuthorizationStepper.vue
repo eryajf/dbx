@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
+import { useI18n } from "vue-i18n";
 
 type StepId = "capabilities" | "connections" | "databases" | "overrides";
 
-const steps: Array<{ id: StepId; title: string; description: string }> = [
-  { id: "connections", title: "连接范围", description: "决定哪些连接可被 MCP 看见" },
-  { id: "databases", title: "数据库范围", description: "为每个连接限定可访问的库" },
-  { id: "overrides", title: "连接例外", description: "按连接进一步收紧执行权限" },
-  { id: "capabilities", title: "能力与执行", description: "选择 MCP 工具和全局操作级别" },
-];
+const { t } = useI18n();
+
+const steps = computed<Array<{ id: StepId; title: string; description: string }>>(() => [
+  { id: "connections", title: t("settings.mcpAuthStepConnectionsTitle"), description: t("settings.mcpAuthStepConnectionsDescription") },
+  { id: "databases", title: t("settings.mcpAuthStepDatabasesTitle"), description: t("settings.mcpAuthStepDatabasesDescription") },
+  { id: "overrides", title: t("settings.mcpAuthStepOverridesTitle"), description: t("settings.mcpAuthStepOverridesDescription") },
+  { id: "capabilities", title: t("settings.mcpAuthStepCapabilitiesTitle"), description: t("settings.mcpAuthStepCapabilitiesDescription") },
+]);
 
 const currentStep = ref<StepId>("connections");
-const currentIndex = computed(() => steps.findIndex((step) => step.id === currentStep.value));
+const currentIndex = computed(() => steps.value.findIndex((step) => step.id === currentStep.value));
 
 function scrollableAncestor(target: EventTarget | null): HTMLElement | null {
   let element = target instanceof HTMLElement ? target.parentElement : null;
@@ -36,12 +39,12 @@ async function selectStep(step: StepId, event?: Event) {
 }
 
 function previousStep(event: Event) {
-  const step = steps[currentIndex.value - 1];
+  const step = steps.value[currentIndex.value - 1];
   if (step) void selectStep(step.id, event);
 }
 
 function nextStep(event: Event) {
-  const step = steps[currentIndex.value + 1];
+  const step = steps.value[currentIndex.value + 1];
   if (step) void selectStep(step.id, event);
 }
 </script>
@@ -49,11 +52,11 @@ function nextStep(event: Event) {
 <template>
   <section class="space-y-4 rounded-md border bg-background p-3 sm:p-4">
     <header class="space-y-1">
-      <p class="text-sm font-semibold">MCP 授权设置</p>
-      <p class="text-xs text-muted-foreground">按顺序完成授权：先选择连接，再限定数据库和连接例外，最后确定可用工具与全局执行级别。</p>
+      <p class="text-sm font-semibold">{{ t("settings.mcpAuthTitle") }}</p>
+      <p class="text-xs text-muted-foreground">{{ t("settings.mcpAuthDescription") }}</p>
     </header>
 
-    <nav class="grid gap-1 rounded-md border bg-muted/50 p-1 sm:grid-cols-4" aria-label="MCP 授权步骤">
+    <nav class="grid gap-1 rounded-md border bg-muted/50 p-1 sm:grid-cols-4" :aria-label="t('settings.mcpAuthStepsLabel')">
       <button
         v-for="(step, index) in steps"
         :key="step.id"
@@ -75,15 +78,15 @@ function nextStep(event: Event) {
       </button>
     </nav>
 
-    <div :class="currentStep === 'connections' ? 'block' : 'hidden'" :aria-hidden="currentStep !== 'connections'" role="region" aria-label="第 1 步：连接范围"><slot name="connections" /></div>
-    <div :class="currentStep === 'databases' ? 'block' : 'hidden'" :aria-hidden="currentStep !== 'databases'" role="region" aria-label="第 2 步：数据库范围"><slot name="databases" /></div>
-    <div :class="currentStep === 'overrides' ? 'block' : 'hidden'" :aria-hidden="currentStep !== 'overrides'" role="region" aria-label="第 3 步：连接例外"><slot name="overrides" /></div>
-    <div :class="currentStep === 'capabilities' ? 'block' : 'hidden'" :aria-hidden="currentStep !== 'capabilities'" role="region" aria-label="第 4 步：能力与执行"><slot name="capabilities" /></div>
+    <div :class="currentStep === 'connections' ? 'block' : 'hidden'" :aria-hidden="currentStep !== 'connections'" role="region" :aria-label="t('settings.mcpAuthStepRegionLabel', { step: 1, title: t('settings.mcpAuthStepConnectionsTitle') })"><slot name="connections" /></div>
+    <div :class="currentStep === 'databases' ? 'block' : 'hidden'" :aria-hidden="currentStep !== 'databases'" role="region" :aria-label="t('settings.mcpAuthStepRegionLabel', { step: 2, title: t('settings.mcpAuthStepDatabasesTitle') })"><slot name="databases" /></div>
+    <div :class="currentStep === 'overrides' ? 'block' : 'hidden'" :aria-hidden="currentStep !== 'overrides'" role="region" :aria-label="t('settings.mcpAuthStepRegionLabel', { step: 3, title: t('settings.mcpAuthStepOverridesTitle') })"><slot name="overrides" /></div>
+    <div :class="currentStep === 'capabilities' ? 'block' : 'hidden'" :aria-hidden="currentStep !== 'capabilities'" role="region" :aria-label="t('settings.mcpAuthStepRegionLabel', { step: 4, title: t('settings.mcpAuthStepCapabilitiesTitle') })"><slot name="capabilities" /></div>
 
     <footer class="flex items-center justify-between gap-3 border-t pt-3">
-      <button type="button" class="rounded-md border bg-background px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50" :disabled="currentIndex === 0" @click="previousStep($event)">上一步</button>
-      <p class="text-center text-xs text-muted-foreground">第 {{ currentIndex + 1 }} 步，共 {{ steps.length }} 步</p>
-      <button type="button" class="rounded-md border bg-background px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50" :disabled="currentIndex === steps.length - 1" @click="nextStep($event)">下一步</button>
+      <button type="button" class="rounded-md border bg-background px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50" :disabled="currentIndex === 0" @click="previousStep($event)">{{ t("settings.mcpAuthPreviousStep") }}</button>
+      <p class="text-center text-xs text-muted-foreground">{{ t("settings.mcpAuthStepProgress", { current: currentIndex + 1, total: steps.length }) }}</p>
+      <button type="button" class="rounded-md border bg-background px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50" :disabled="currentIndex === steps.length - 1" @click="nextStep($event)">{{ t("settings.mcpAuthNextStep") }}</button>
     </footer>
   </section>
 </template>

@@ -2136,15 +2136,15 @@ const mcpHttpDraftValidationError = computed(() => {
   const port = Number(mcpHttpSettings.value.port);
   const path = mcpHttpSettings.value.path.trim();
   if (!mcpHttpSettings.value.enabled) return "";
-  if (!host) return "请填写监听地址。";
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return "端口必须是 1 到 65535 之间的整数。";
-  if (!path.startsWith("/")) return "MCP 路径必须以 / 开头。";
+  if (!host) return t("settings.mcpHttpValidationHostRequired");
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return t("settings.mcpHttpValidationPortRange");
+  if (!path.startsWith("/")) return t("settings.mcpHttpValidationPathPrefix");
 
   const isLoopback = host === "127.0.0.1" || host === "::1";
   if (isLoopback) return "";
-  if (!mcpHttpSettings.value.allowRemote) return "监听非本机地址时，请开启“允许远程访问”。";
-  if (!mcpHttpList(mcpHttpAllowedHostsText.value).length) return "远程访问需要至少填写一个允许的 Host。";
-  if (!mcpHttpList(mcpHttpAllowedOriginsText.value).length) return "远程访问需要至少填写一个允许的 Origin。";
+  if (!mcpHttpSettings.value.allowRemote) return t("settings.mcpHttpValidationRemoteRequired");
+  if (!mcpHttpList(mcpHttpAllowedHostsText.value).length) return t("settings.mcpHttpValidationHostsRequired");
+  if (!mcpHttpList(mcpHttpAllowedOriginsText.value).length) return t("settings.mcpHttpValidationOriginsRequired");
   return "";
 });
 
@@ -2209,21 +2209,21 @@ function onMcpAllowedConnectionIdsChange(allowedConnectionIds: string[] | null) 
 type McpConnectionExecutionMode = "read_only" | "safe_write" | "high_risk_write";
 
 const mcpToolOptions = [
-  { name: "dbx_list_connections", label: "列出连接" },
-  { name: "dbx_list_databases", label: "列出数据库" },
-  { name: "dbx_list_tables", label: "列出表" },
-  { name: "dbx_describe_table", label: "表结构" },
-  { name: "dbx_get_schema_context", label: "Schema 上下文" },
-  { name: "dbx_execute_query", label: "执行 SQL / Mongo 命令" },
-  { name: "dbx_open_session", label: "打开查询会话" },
-  { name: "dbx_close_session", label: "关闭查询会话" },
-  { name: "dbx_execute_redis_command", label: "执行 Redis 命令" },
-  { name: "dbx_send_message", label: "发送消息队列消息" },
-  { name: "dbx_add_connection", label: "新增连接" },
-  { name: "dbx_duplicate_connection", label: "复制连接" },
-  { name: "dbx_remove_connection", label: "删除连接" },
-  { name: "dbx_open_table", label: "在 DBX 中打开表" },
-  { name: "dbx_execute_and_show", label: "在 DBX 中执行并展示" },
+  { name: "dbx_list_connections", labelKey: "settings.mcpToolListConnections" },
+  { name: "dbx_list_databases", labelKey: "settings.mcpToolListDatabases" },
+  { name: "dbx_list_tables", labelKey: "settings.mcpToolListTables" },
+  { name: "dbx_describe_table", labelKey: "settings.mcpToolDescribeTable" },
+  { name: "dbx_get_schema_context", labelKey: "settings.mcpToolGetSchemaContext" },
+  { name: "dbx_execute_query", labelKey: "settings.mcpToolExecuteQuery" },
+  { name: "dbx_open_session", labelKey: "settings.mcpToolOpenSession" },
+  { name: "dbx_close_session", labelKey: "settings.mcpToolCloseSession" },
+  { name: "dbx_execute_redis_command", labelKey: "settings.mcpToolExecuteRedisCommand" },
+  { name: "dbx_send_message", labelKey: "settings.mcpToolSendMessage" },
+  { name: "dbx_add_connection", labelKey: "settings.mcpToolAddConnection" },
+  { name: "dbx_duplicate_connection", labelKey: "settings.mcpToolDuplicateConnection" },
+  { name: "dbx_remove_connection", labelKey: "settings.mcpToolRemoveConnection" },
+  { name: "dbx_open_table", labelKey: "settings.mcpToolOpenTable" },
+  { name: "dbx_execute_and_show", labelKey: "settings.mcpToolExecuteAndShow" },
 ] as const;
 
 const mcpAllowedToolNames = computed(() => settingsStore.mcpGlobalPolicy.allowedToolNames);
@@ -2319,13 +2319,13 @@ function mcpHttpDraftSettings(): McpHttpServerSettings {
 function formatMcpHttpError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes("remote MCP HTTP binding requires allowed hosts and allowed origins")) {
-    return "远程访问需要同时填写允许的 Host 和允许的 Origin。";
+    return t("settings.mcpHttpErrorRemoteHostsAndOrigins");
   }
   if (message.includes("remote MCP HTTP binding requires")) {
-    return "远程监听需要开启远程访问，并设置 Host 和 Origin 白名单。";
+    return t("settings.mcpHttpErrorRemoteBinding");
   }
   if (message.includes("Address already in use")) {
-    return "该端口已被其他应用占用。DBX 会在保存时自动重启自己的 MCP 服务；请关闭占用该端口的其他应用，或改用其他端口。";
+    return t("settings.mcpHttpErrorPortInUse");
   }
   return message;
 }
@@ -2372,7 +2372,7 @@ async function saveMcpHttpSettings() {
 }
 
 async function rotateMcpHttpToken() {
-  if (mcpHttpSaving.value || !window.confirm("轮换 Token 后，使用旧 Token 的 MCP 客户端会立即断开。是否继续？")) return;
+  if (mcpHttpSaving.value || !window.confirm(t("settings.mcpHttpRotateTokenConfirm"))) return;
   mcpHttpSaving.value = true;
   mcpHttpError.value = "";
   try {
@@ -7310,24 +7310,31 @@ onUnmounted(() => {
 
               <Tabs v-model="mcpTransportTab" class="space-y-3">
                 <TabsList class="grid h-9 w-full grid-cols-2">
-                  <TabsTrigger value="stdio">本地 stdio</TabsTrigger>
-                  <TabsTrigger value="http">HTTP 服务</TabsTrigger>
+                  <TabsTrigger value="stdio">{{ t("settings.mcpTransportLocalStdio") }}</TabsTrigger>
+                  <TabsTrigger value="http">{{ t("settings.mcpTransportHttpService") }}</TabsTrigger>
                 </TabsList>
               </Tabs>
 
               <div v-if="isWeb && mcpTransportTab === 'http'" class="space-y-4">
                 <div class="rounded-md border bg-muted/20 p-4 space-y-2">
                   <div class="flex items-center justify-between gap-3">
-                    <Label class="text-base">Web Streamable HTTP 服务</Label>
-                    <Badge :variant="webMcpHttpStatus?.enabled ? 'default' : 'outline'">{{ webMcpHttpStatus?.enabled ? "已启用" : "未启用" }}</Badge>
+                    <Label class="text-base">{{ t("settings.mcpHttpWebServiceTitle") }}</Label>
+                    <Badge :variant="webMcpHttpStatus?.enabled ? 'default' : 'outline'">{{ webMcpHttpStatus?.enabled ? t("settings.mcpHttpStatusLabelEnabled") : t("settings.mcpHttpStatusLabelDisabled") }}</Badge>
                   </div>
-                  <p class="text-xs text-muted-foreground">Web/Docker 复用当前 Web 监听端口。通过部署环境变量启用，设置页不会保存 Token。</p>
+                  <p class="text-xs text-muted-foreground">{{ t("settings.mcpHttpWebServiceDescription") }}</p>
                   <template v-if="webMcpHttpStatus">
                     <code class="block rounded border bg-background px-2 py-1.5 text-xs">{{ webMcpEndpoint }}</code>
-                    <p class="text-[11px] text-muted-foreground">Token 来源：{{ webMcpHttpStatus.tokenSource || "未配置" }}；允许 Host：{{ webMcpHttpStatus.allowedHosts.join(", ") || "未配置" }}</p>
-                    <p v-if="webMcpHttpStatus.allowedOrigins.length" class="text-[11px] text-muted-foreground">允许 Origin：{{ webMcpHttpStatus.allowedOrigins.join(", ") }}</p>
+                    <p class="text-[11px] text-muted-foreground">
+                      {{
+                        t("settings.mcpHttpWebTokenSourceAndHosts", {
+                          tokenSource: webMcpHttpStatus.tokenSource || t("settings.mcpHttpNotConfigured"),
+                          hosts: webMcpHttpStatus.allowedHosts.join(", ") || t("settings.mcpHttpNotConfigured"),
+                        })
+                      }}
+                    </p>
+                    <p v-if="webMcpHttpStatus.allowedOrigins.length" class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpWebAllowedOrigins", { origins: webMcpHttpStatus.allowedOrigins.join(", ") }) }}</p>
                   </template>
-                  <Button type="button" variant="outline" size="sm" :disabled="mcpHttpLoading" @click="loadMcpHttpSettings">重新加载状态</Button>
+                  <Button type="button" variant="outline" size="sm" :disabled="mcpHttpLoading" @click="loadMcpHttpSettings">{{ t("settings.mcpHttpReloadStatus") }}</Button>
                 </div>
               </div>
 
@@ -7336,12 +7343,12 @@ onUnmounted(() => {
                   <div class="flex items-start justify-between gap-4">
                     <div class="space-y-1">
                       <div class="flex items-center gap-2">
-                        <Label class="text-base">Streamable HTTP 服务</Label>
+                        <Label class="text-base">{{ t("settings.mcpHttpServiceTitle") }}</Label>
                         <Badge :variant="mcpHttpStatus?.running ? 'default' : 'outline'">
-                          {{ mcpHttpStatus?.running ? "运行中" : mcpHttpSettings.enabled ? "待应用配置" : "未启用" }}
+                          {{ mcpHttpStatus?.running ? t("settings.mcpHttpStatusLabelRunning") : mcpHttpSettings.enabled ? t("settings.mcpHttpStatusLabelPending") : t("settings.mcpHttpStatusLabelDisabled") }}
                         </Badge>
                       </div>
-                      <p class="text-xs leading-relaxed text-muted-foreground">默认关闭。启用后由 DBX Desktop 托管服务；保存后才会将上方配置应用到实际监听服务。</p>
+                      <p class="text-xs leading-relaxed text-muted-foreground">{{ t("settings.mcpHttpServiceDescription") }}</p>
                     </div>
                     <Switch id="mcp-http-enabled" v-model="mcpHttpSettings.enabled" :disabled="mcpHttpLoading || mcpHttpSaving" />
                   </div>
@@ -7350,20 +7357,20 @@ onUnmounted(() => {
                 <template v-if="mcpHttpSettings.enabled">
                   <section class="space-y-3 rounded-md border p-4">
                     <div>
-                      <h4 class="text-sm font-medium">监听配置</h4>
-                      <p class="mt-1 text-xs text-muted-foreground">推荐保留 <code>127.0.0.1</code>，仅允许同一台电脑上的 MCP 客户端连接。</p>
+                      <h4 class="text-sm font-medium">{{ t("settings.mcpHttpListenerTitle") }}</h4>
+                      <p class="mt-1 text-xs text-muted-foreground">{{ t("settings.mcpHttpListenerHintPrefix") }}<code>127.0.0.1</code>{{ t("settings.mcpHttpListenerHintSuffix") }}</p>
                     </div>
                     <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(9rem,0.42fr)]">
                       <div class="space-y-1.5">
-                        <Label for="mcp-http-host">监听地址</Label>
+                        <Label for="mcp-http-host">{{ t("settings.mcpHttpHostLabel") }}</Label>
                         <Input id="mcp-http-host" v-model="mcpHttpSettings.host" :disabled="mcpHttpSaving" placeholder="127.0.0.1" />
                       </div>
                       <div class="space-y-1.5">
-                        <Label for="mcp-http-port">端口</Label>
+                        <Label for="mcp-http-port">{{ t("settings.mcpHttpPortLabel") }}</Label>
                         <Input id="mcp-http-port" v-model.number="mcpHttpSettings.port" :disabled="mcpHttpSaving" type="number" min="1" max="65535" />
                       </div>
                       <div class="space-y-1.5 sm:col-span-2">
-                        <Label for="mcp-http-path">MCP 路径</Label>
+                        <Label for="mcp-http-path">{{ t("settings.mcpHttpPathLabel") }}</Label>
                         <Input id="mcp-http-path" v-model="mcpHttpSettings.path" :disabled="mcpHttpSaving" placeholder="/mcp" />
                       </div>
                     </div>
@@ -7372,24 +7379,24 @@ onUnmounted(() => {
                   <section class="space-y-3 rounded-md border p-4">
                     <div class="flex items-start justify-between gap-4">
                       <div>
-                        <h4 class="text-sm font-medium">远程访问</h4>
-                        <p class="mt-1 text-xs leading-relaxed text-muted-foreground">仅当监听地址不是 <code>127.0.0.1</code> 或 <code>::1</code> 时需要。开启后，必须填写 Host 和 Origin 白名单。</p>
+                        <h4 class="text-sm font-medium">{{ t("settings.mcpHttpRemoteTitle") }}</h4>
+                        <p class="mt-1 text-xs leading-relaxed text-muted-foreground">{{ t("settings.mcpHttpRemoteHintPrefix") }}<code>127.0.0.1</code>{{ t("settings.mcpHttpRemoteHintMiddle") }}<code>::1</code>{{ t("settings.mcpHttpRemoteHintSuffix") }}</p>
                       </div>
                       <Switch id="mcp-http-remote" v-model="mcpHttpSettings.allowRemote" :disabled="mcpHttpSaving" />
                     </div>
                     <div v-if="mcpHttpSettings.allowRemote" class="grid gap-3 sm:grid-cols-2">
                       <div class="space-y-1.5">
-                        <Label for="mcp-http-hosts">允许的 Host</Label>
+                        <Label for="mcp-http-hosts">{{ t("settings.mcpHttpAllowedHostsLabel") }}</Label>
                         <textarea id="mcp-http-hosts" v-model="mcpHttpAllowedHostsText" :disabled="mcpHttpSaving" class="min-h-20 w-full rounded-md border bg-background px-3 py-2 font-mono text-xs" placeholder="mcp.example.com&#10;10.0.0.10" />
-                        <p class="text-[11px] text-muted-foreground">每行一个，也可用逗号分隔。</p>
+                        <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpHostsHint") }}</p>
                       </div>
                       <div class="space-y-1.5">
-                        <Label for="mcp-http-origins">允许的 Origin</Label>
+                        <Label for="mcp-http-origins">{{ t("settings.mcpHttpAllowedOriginsLabel") }}</Label>
                         <textarea id="mcp-http-origins" v-model="mcpHttpAllowedOriginsText" :disabled="mcpHttpSaving" class="min-h-20 w-full rounded-md border bg-background px-3 py-2 font-mono text-xs" placeholder="https://mcp.example.com" />
-                        <p class="text-[11px] text-muted-foreground">必须包含协议，例如 <code>https://</code>。</p>
+                        <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpOriginsHintPrefix") }}<code>https://</code>{{ t("settings.mcpHttpOriginsHintSuffix") }}</p>
                       </div>
                     </div>
-                    <p v-else class="rounded bg-muted px-3 py-2 text-xs text-muted-foreground">未开启远程访问时，白名单无需配置。</p>
+                    <p v-else class="rounded bg-muted px-3 py-2 text-xs text-muted-foreground">{{ t("settings.mcpHttpRemoteDisabledHint") }}</p>
                   </section>
 
                   <div v-if="mcpHttpDraftValidationError" class="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
@@ -7401,25 +7408,25 @@ onUnmounted(() => {
 
                   <div class="flex flex-col gap-3 rounded-md border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
                     <p class="text-xs text-muted-foreground">
-                      {{ mcpHttpHasUnsavedChanges ? "上方配置尚未保存，当前运行服务不会立即改变。" : "保存后会启动或重启服务，并更新下方接入信息。" }}
+                      {{ mcpHttpHasUnsavedChanges ? t("settings.mcpHttpUnsavedChangesHint") : t("settings.mcpHttpSaveHint") }}
                     </p>
                     <div class="flex shrink-0 justify-end gap-2">
-                      <Button type="button" variant="outline" :disabled="mcpHttpLoading || mcpHttpSaving" @click="loadMcpHttpSettings">重新加载</Button>
+                      <Button type="button" variant="outline" :disabled="mcpHttpLoading || mcpHttpSaving" @click="loadMcpHttpSettings">{{ t("settings.mcpHttpReload") }}</Button>
                       <Button type="button" :disabled="mcpHttpLoading || mcpHttpSaving || Boolean(mcpHttpDraftValidationError)" @click="saveMcpHttpSettings">
                         <Loader2 v-if="mcpHttpSaving" class="mr-2 h-4 w-4 animate-spin" />
-                        保存并启动服务
+                        {{ t("settings.mcpHttpSaveAndStart") }}
                       </Button>
                     </div>
                   </div>
                 </template>
 
                 <div v-else class="flex flex-col gap-3 rounded-md border border-dashed px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-                  <p>启用服务后可配置监听地址、远程访问白名单和客户端接入信息。</p>
+                  <p>{{ t("settings.mcpHttpDisabledHint") }}</p>
                   <div class="flex shrink-0 justify-end gap-2">
-                    <Button type="button" variant="outline" :disabled="mcpHttpLoading || mcpHttpSaving" @click="loadMcpHttpSettings">重新加载</Button>
+                    <Button type="button" variant="outline" :disabled="mcpHttpLoading || mcpHttpSaving" @click="loadMcpHttpSettings">{{ t("settings.mcpHttpReload") }}</Button>
                     <Button type="button" :disabled="mcpHttpLoading || mcpHttpSaving" @click="saveMcpHttpSettings">
                       <Loader2 v-if="mcpHttpSaving" class="mr-2 h-4 w-4 animate-spin" />
-                      保存并停止服务
+                      {{ t("settings.mcpHttpSaveAndStop") }}
                     </Button>
                   </div>
                 </div>
@@ -7432,13 +7439,13 @@ onUnmounted(() => {
                   <div class="flex flex-wrap items-center justify-between gap-2">
                     <div class="flex items-center gap-2 text-sm font-medium">
                       <span class="h-2 w-2 rounded-full" :class="mcpHttpStatus.running ? 'bg-green-500' : 'bg-amber-500'" />
-                      {{ mcpHttpStatus.running ? "已生效的客户端接入信息" : "服务当前未运行" }}
+                      {{ mcpHttpStatus.running ? t("settings.mcpHttpConnectionInfoTitle") : t("settings.mcpHttpServiceNotRunning") }}
                     </div>
-                    <Badge variant="outline" class="font-normal">{{ mcpHttpStatus.running ? "运行配置" : "最近一次状态" }}</Badge>
+                    <Badge variant="outline" class="font-normal">{{ mcpHttpStatus.running ? t("settings.mcpHttpRunningConfigBadge") : t("settings.mcpHttpLastStatusBadge") }}</Badge>
                   </div>
-                  <p v-if="mcpHttpHasUnsavedChanges" class="rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">下方是当前运行服务的接入信息；它与上方未保存的草稿可能不同。</p>
+                  <p v-if="mcpHttpHasUnsavedChanges" class="rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">{{ t("settings.mcpHttpRunningDraftDiffersHint") }}</p>
                   <div v-if="mcpHttpStatus.endpoint" class="space-y-1">
-                    <Label>服务地址</Label>
+                    <Label>{{ t("settings.mcpHttpEndpointLabel") }}</Label>
                     <div class="flex min-w-0 items-center gap-2">
                       <code class="min-w-0 flex-1 overflow-x-auto rounded border bg-background px-2 py-1.5 text-xs">{{ mcpHttpStatus.endpoint }}</code>
                       <Button type="button" variant="outline" size="icon" :title="t('common.copy')" @click="copyMcpText('http-endpoint', mcpHttpStatus.endpoint || '')">
@@ -7450,7 +7457,7 @@ onUnmounted(() => {
                   <div v-if="mcpHttpStatus.accessToken" class="space-y-1">
                     <div class="flex items-center justify-between gap-3">
                       <Label>Bearer Token</Label>
-                      <Button type="button" variant="outline" size="sm" :disabled="mcpHttpSaving" @click="rotateMcpHttpToken">轮换 Token</Button>
+                      <Button type="button" variant="outline" size="sm" :disabled="mcpHttpSaving" @click="rotateMcpHttpToken">{{ t("settings.mcpHttpRotateToken") }}</Button>
                     </div>
                     <div class="flex min-w-0 items-center gap-2">
                       <code class="min-w-0 flex-1 overflow-x-auto rounded border bg-background px-2 py-1.5 text-xs">{{ mcpHttpStatus.accessToken }}</code>
@@ -7459,10 +7466,10 @@ onUnmounted(() => {
                         <Copy v-else class="h-3.5 w-3.5" />
                       </Button>
                     </div>
-                    <p class="text-[11px] text-muted-foreground">将此值作为客户端的 HTTP <code>Authorization: Bearer</code> 凭证。</p>
+                    <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpTokenHintPrefix") }}<code>Authorization: Bearer</code>{{ t("settings.mcpHttpTokenHintSuffix") }}</p>
                   </div>
                   <details v-if="mcpHttpClientConfig" class="rounded border bg-muted/20 p-3 text-xs">
-                    <summary class="cursor-pointer font-medium">通用 HTTP 客户端配置</summary>
+                    <summary class="cursor-pointer font-medium">{{ t("settings.mcpHttpClientConfigTitle") }}</summary>
                     <div class="mt-3 space-y-2">
                       <div class="flex justify-end">
                         <Button type="button" variant="outline" size="sm" :title="t('common.copy')" @click="copyMcpText('http-config', mcpHttpClientConfig)">
@@ -7472,11 +7479,11 @@ onUnmounted(() => {
                         </Button>
                       </div>
                       <pre class="max-h-48 overflow-auto rounded border bg-background p-2 text-[11px] whitespace-pre-wrap">{{ mcpHttpClientConfig }}</pre>
-                      <p class="text-[11px] text-muted-foreground">客户端字段名称不同，请保留 URL 与 Authorization 值。</p>
+                      <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpClientConfigHint") }}</p>
                     </div>
                   </details>
                   <details v-if="mcpHttpStatus.recentLogs.length" class="text-xs">
-                    <summary class="cursor-pointer text-muted-foreground">服务诊断日志</summary>
+                    <summary class="cursor-pointer text-muted-foreground">{{ t("settings.mcpHttpLogsTitle") }}</summary>
                     <pre class="mt-2 max-h-40 overflow-auto rounded border bg-background p-2 text-[11px] whitespace-pre-wrap">{{ mcpHttpStatus.recentLogs.join("\n") }}</pre>
                   </details>
                 </section>
@@ -7590,11 +7597,11 @@ onUnmounted(() => {
                     <div v-if="mcpConnectionPolicyConnections.length" class="space-y-2">
                       <div class="flex flex-wrap items-start justify-between gap-2">
                         <div>
-                          <p class="text-sm font-medium">连接级权限上限</p>
-                          <p class="text-xs text-muted-foreground">可针对每个已暴露连接进一步收紧权限；不能超过全局 MCP 权限。</p>
+                          <p class="text-sm font-medium">{{ t("settings.mcpConnectionPolicyTitle") }}</p>
+                          <p class="text-xs text-muted-foreground">{{ t("settings.mcpConnectionPolicyDescription") }}</p>
                         </div>
                         <label class="flex h-8 items-center gap-1.5 rounded-md border bg-background px-2 text-xs text-muted-foreground">
-                          每页
+                          {{ t("settings.mcpPerPage") }}
                           <select v-model.number="mcpConnectionPolicyPageSize" class="bg-transparent text-xs text-foreground outline-none" :disabled="mcpPolicyControlsDisabled">
                             <option v-for="size in MCP_CONNECTION_POLICY_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
                           </select>
@@ -7612,32 +7619,34 @@ onUnmounted(() => {
                             class="h-8 shrink-0 rounded-md border bg-background px-2 text-xs"
                             @change="onMcpConnectionExecutionModeChange(connection.id, ($event.target as HTMLSelectElement).value as McpConnectionExecutionMode | 'inherit')"
                           >
-                            <option value="inherit">继承全局</option>
-                            <option value="read_only">仅只读</option>
-                            <option value="safe_write">允许安全写入</option>
-                            <option value="high_risk_write">允许高风险操作</option>
+                            <option value="inherit">{{ t("settings.mcpConnectionPolicyInherit") }}</option>
+                            <option value="read_only">{{ t("settings.mcpConnectionPolicyReadOnly") }}</option>
+                            <option value="safe_write">{{ t("settings.mcpConnectionPolicySafeWrite") }}</option>
+                            <option value="high_risk_write">{{ t("settings.mcpConnectionPolicyHighRiskWrite") }}</option>
                           </select>
                         </div>
                       </div>
                       <div v-if="mcpConnectionPolicyPageCount > 1" class="flex items-center justify-center gap-2 border-t pt-2 text-xs text-muted-foreground">
-                        <Button type="button" size="icon-sm" variant="ghost" :disabled="mcpConnectionPolicyPage === 1" title="上一页" aria-label="上一页" @click="setMcpConnectionPolicyPage(mcpConnectionPolicyPage - 1)"><ChevronLeft /></Button>
+                        <Button type="button" size="icon-sm" variant="ghost" :disabled="mcpConnectionPolicyPage === 1" :title="t('settings.mcpPreviousPage')" :aria-label="t('settings.mcpPreviousPage')" @click="setMcpConnectionPolicyPage(mcpConnectionPolicyPage - 1)"><ChevronLeft /></Button>
                         <span class="min-w-12 text-center tabular-nums">{{ mcpConnectionPolicyPage }} / {{ mcpConnectionPolicyPageCount }}</span>
-                        <Button type="button" size="icon-sm" variant="ghost" :disabled="mcpConnectionPolicyPage === mcpConnectionPolicyPageCount" title="下一页" aria-label="下一页" @click="setMcpConnectionPolicyPage(mcpConnectionPolicyPage + 1)"><ChevronRight /></Button>
+                        <Button type="button" size="icon-sm" variant="ghost" :disabled="mcpConnectionPolicyPage === mcpConnectionPolicyPageCount" :title="t('settings.mcpNextPage')" :aria-label="t('settings.mcpNextPage')" @click="setMcpConnectionPolicyPage(mcpConnectionPolicyPage + 1)"
+                          ><ChevronRight
+                        /></Button>
                       </div>
                     </div>
-                    <div v-else class="rounded-md border border-dashed px-3 py-8 text-center text-xs text-muted-foreground">请先在第 1 步中允许至少一个连接，才能设置连接级执行上限。</div>
+                    <div v-else class="rounded-md border border-dashed px-3 py-8 text-center text-xs text-muted-foreground">{{ t("settings.mcpConnectionPolicyEmptyHint") }}</div>
                   </template>
                   <template #capabilities>
                     <div class="space-y-4">
                       <section class="space-y-2">
                         <div>
-                          <p class="text-sm font-medium">MCP 工具权限</p>
-                          <p class="text-xs text-muted-foreground">只暴露当前需要的 MCP 工具。取消选择后，客户端即使缓存了工具定义也会被服务端拒绝。</p>
+                          <p class="text-sm font-medium">{{ t("settings.mcpToolPermissionsTitle") }}</p>
+                          <p class="text-xs text-muted-foreground">{{ t("settings.mcpToolPermissionsDescription") }}</p>
                         </div>
                         <div class="grid gap-2 sm:grid-cols-2">
                           <label v-for="tool in mcpToolOptions" :key="tool.name" class="flex items-center gap-2 rounded border bg-background px-2.5 py-2 text-xs">
                             <input type="checkbox" :checked="mcpToolAllowed(tool.name)" :disabled="mcpPolicyControlsDisabled" @change="onMcpToolAllowedChange(tool.name, ($event.target as HTMLInputElement).checked)" />
-                            <span>{{ tool.label }}</span>
+                            <span>{{ t(tool.labelKey) }}</span>
                           </label>
                         </div>
                       </section>

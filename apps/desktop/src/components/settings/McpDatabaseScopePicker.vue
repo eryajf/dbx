@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { Check, ChevronLeft, ChevronRight, Loader2, Plus, RefreshCw, Search } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +10,8 @@ import type { McpConnectionPolicy } from "@/stores/settingsStore";
 import type { ConnectionConfig } from "@/types/database";
 
 type DatabaseScope = McpConnectionPolicy["databaseScope"];
+
+const { t } = useI18n();
 
 const PAGE_SIZE_OPTIONS = [6, 10, 20] as const;
 
@@ -144,9 +147,9 @@ async function loadConnectionDatabases() {
 
 function scopeSummary(connection: ConnectionConfig): string {
   const policy = props.connectionPolicies.find((item) => item.connectionId === connection.id);
-  if (!policy || policy.databaseScope === "all") return "全部库";
-  if (policy.databaseScope === "none") return "无库访问";
-  return `已选 ${policy.allowedDatabases.length} 个库`;
+  if (!policy || policy.databaseScope === "all") return t("settings.mcpDatabaseScopeSummaryAll");
+  if (policy.databaseScope === "none") return t("settings.mcpDatabaseScopeSummaryNone");
+  return t("settings.mcpDatabaseScopeSummarySelected", { count: policy.allowedDatabases.length });
 }
 
 watch(search, () => {
@@ -165,17 +168,17 @@ watch(databasePageCount, () => setDatabasePage(databasePage.value));
 <template>
   <section class="space-y-3">
     <div>
-      <p class="text-sm font-medium">连接与数据库范围</p>
-      <p class="text-xs text-muted-foreground">先在左侧选择已暴露给 MCP 的连接，再限定该连接可访问的数据库。数据库名称按精确名称匹配。</p>
+      <p class="text-sm font-medium">{{ t("settings.mcpDatabaseScopeTitle") }}</p>
+      <p class="text-xs text-muted-foreground">{{ t("settings.mcpDatabaseScopeDescription") }}</p>
     </div>
 
-    <div v-if="!scopedConnections.length" class="rounded border border-dashed bg-background px-3 py-4 text-center text-xs text-muted-foreground">请先在“连接范围”中允许至少一个连接。</div>
+    <div v-if="!scopedConnections.length" class="rounded border border-dashed bg-background px-3 py-4 text-center text-xs text-muted-foreground">{{ t("settings.mcpDatabaseScopeEmptyHint") }}</div>
     <div v-else class="grid min-h-72 overflow-hidden rounded-md border bg-background md:grid-cols-[minmax(14rem,0.42fr)_minmax(0,1fr)]">
       <div class="border-b p-2 md:border-b-0 md:border-r">
         <div class="flex items-center justify-between gap-2 px-2 pb-2">
-          <p class="text-xs font-medium text-muted-foreground">已允许的连接</p>
+          <p class="text-xs font-medium text-muted-foreground">{{ t("settings.mcpDatabaseScopeAllowedConnections") }}</p>
           <label class="flex h-7 items-center gap-1 rounded border bg-background px-1.5 text-[11px] text-muted-foreground">
-            每页
+            {{ t("settings.mcpPerPage") }}
             <select v-model.number="pageSize" class="bg-transparent text-[11px] text-foreground outline-none" :disabled="disabled">
               <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
             </select>
@@ -191,9 +194,9 @@ watch(databasePageCount, () => setDatabasePage(databasePage.value));
           </button>
         </div>
         <div v-if="connectionPageCount > 1" class="mt-2 flex items-center justify-center gap-2 border-t pt-2 text-xs text-muted-foreground">
-          <Button type="button" size="icon-sm" variant="ghost" :disabled="connectionPage === 1" title="上一页" aria-label="上一页" @click="setConnectionPage(connectionPage - 1)"><ChevronLeft /></Button>
+          <Button type="button" size="icon-sm" variant="ghost" :disabled="connectionPage === 1" :title="t('settings.mcpPreviousPage')" :aria-label="t('settings.mcpPreviousPage')" @click="setConnectionPage(connectionPage - 1)"><ChevronLeft /></Button>
           <span class="min-w-12 text-center tabular-nums">{{ connectionPage }} / {{ connectionPageCount }}</span>
-          <Button type="button" size="icon-sm" variant="ghost" :disabled="connectionPage === connectionPageCount" title="下一页" aria-label="下一页" @click="setConnectionPage(connectionPage + 1)"><ChevronRight /></Button>
+          <Button type="button" size="icon-sm" variant="ghost" :disabled="connectionPage === connectionPageCount" :title="t('settings.mcpNextPage')" :aria-label="t('settings.mcpNextPage')" @click="setConnectionPage(connectionPage + 1)"><ChevronRight /></Button>
         </div>
       </div>
 
@@ -201,35 +204,44 @@ watch(databasePageCount, () => setDatabasePage(databasePage.value));
         <div class="flex flex-wrap items-start justify-between gap-2">
           <div>
             <p class="text-sm font-medium">{{ selectedConnection.name }}</p>
-            <p class="text-xs text-muted-foreground">选择范围不会改变此连接在 DBX 中原有的数据库权限。</p>
+            <p class="text-xs text-muted-foreground">{{ t("settings.mcpDatabaseScopePermissionNote") }}</p>
           </div>
           <Button type="button" variant="outline" size="sm" :disabled="disabled || Boolean(loadingConnectionId)" @click="loadConnectionDatabases">
             <Loader2 v-if="loadingConnectionId === selectedConnection.id" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
             <RefreshCw v-else class="mr-1.5 h-3.5 w-3.5" />
-            从连接加载
+            {{ t("settings.mcpDatabaseLoadButton") }}
           </Button>
         </div>
 
-        <div class="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="数据库访问范围">
+        <div class="grid gap-2 sm:grid-cols-3" role="radiogroup" :aria-label="t('settings.mcpDatabaseScopeAriaLabel')">
           <Button type="button" variant="outline" class="h-auto justify-start px-3 py-2 text-left" :class="selectedScope === 'all' ? 'dbx-choice-selected' : ''" :disabled="disabled || busy" @click="setScope('all')">
-            <span><span class="block text-sm">全部数据库</span><span class="block text-[11px] font-normal text-muted-foreground">保持现有访问范围</span></span>
+            <span
+              ><span class="block text-sm">{{ t("settings.mcpDatabaseScopeAllTitle") }}</span
+              ><span class="block text-[11px] font-normal text-muted-foreground">{{ t("settings.mcpDatabaseScopeAllDescription") }}</span></span
+            >
           </Button>
           <Button type="button" variant="outline" class="h-auto justify-start px-3 py-2 text-left" :class="selectedScope === 'selected' ? 'dbx-choice-selected' : ''" :disabled="disabled || busy" @click="setScope('selected')">
-            <span><span class="block text-sm">仅指定数据库</span><span class="block text-[11px] font-normal text-muted-foreground">只开放勾选项</span></span>
+            <span
+              ><span class="block text-sm">{{ t("settings.mcpDatabaseScopeSelectedTitle") }}</span
+              ><span class="block text-[11px] font-normal text-muted-foreground">{{ t("settings.mcpDatabaseScopeSelectedDescription") }}</span></span
+            >
           </Button>
           <Button type="button" variant="outline" class="h-auto justify-start px-3 py-2 text-left" :class="selectedScope === 'none' ? 'dbx-choice-selected' : ''" :disabled="disabled || busy" @click="setScope('none')">
-            <span><span class="block text-sm">不允许访问</span><span class="block text-[11px] font-normal text-muted-foreground">保留规则但拒绝所有库</span></span>
+            <span
+              ><span class="block text-sm">{{ t("settings.mcpDatabaseScopeNoneTitle") }}</span
+              ><span class="block text-[11px] font-normal text-muted-foreground">{{ t("settings.mcpDatabaseScopeNoneDescription") }}</span></span
+            >
           </Button>
         </div>
 
         <template v-if="selectedScope === 'selected'">
-          <p class="text-xs text-muted-foreground">已允许 {{ selectedDatabases.length }} 个数据库。未勾选数据库及跨库请求会被 MCP 服务端拒绝。</p>
+          <p class="text-xs text-muted-foreground">{{ t("settings.mcpDatabaseScopeSelectedSummary", { count: selectedDatabases.length }) }}</p>
           <div class="flex gap-2">
-            <div class="relative min-w-0 flex-1"><Search class="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" /><Input v-model="search" class="h-8 pl-8 text-xs" placeholder="筛选已加载的数据库" /></div>
-            <Input v-model="manualDatabase" class="h-8 w-40 text-xs" placeholder="手工添加库名" @keydown.enter.prevent="addManualDatabase" />
+            <div class="relative min-w-0 flex-1"><Search class="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" /><Input v-model="search" class="h-8 pl-8 text-xs" :placeholder="t('settings.mcpDatabaseSearchPlaceholder')" /></div>
+            <Input v-model="manualDatabase" class="h-8 w-40 text-xs" :placeholder="t('settings.mcpDatabaseManualPlaceholder')" @keydown.enter.prevent="addManualDatabase" />
             <Button type="button" variant="outline" size="sm" :disabled="disabled || !manualDatabase.trim()" @click="addManualDatabase"><Plus class="h-3.5 w-3.5" /></Button>
           </div>
-          <p v-if="loadError" class="rounded border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-xs text-destructive">加载数据库失败：{{ loadError }}。可手工添加准确的数据库名称。</p>
+          <p v-if="loadError" class="rounded border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-xs text-destructive">{{ t("settings.mcpDatabaseLoadFailed", { error: loadError }) }}</p>
           <div v-if="displayedDatabases.length" class="rounded border">
             <label v-for="database in pagedDatabases" :key="database" class="flex cursor-pointer items-center gap-2 border-b px-3 py-2 text-xs last:border-b-0 hover:bg-muted/50">
               <input type="checkbox" :checked="selectedDatabases.includes(database)" :disabled="disabled || busy" @change="toggleDatabase(database, ($event.target as HTMLInputElement).checked)" />
@@ -237,12 +249,12 @@ watch(databasePageCount, () => setDatabasePage(databasePage.value));
               <Check v-if="selectedDatabases.includes(database)" class="h-3.5 w-3.5 text-green-600" />
             </label>
             <div v-if="databasePageCount > 1" class="flex items-center justify-center gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
-              <Button type="button" size="icon-sm" variant="ghost" :disabled="databasePage === 1" title="上一页" aria-label="上一页" @click="setDatabasePage(databasePage - 1)"><ChevronLeft /></Button>
+              <Button type="button" size="icon-sm" variant="ghost" :disabled="databasePage === 1" :title="t('settings.mcpPreviousPage')" :aria-label="t('settings.mcpPreviousPage')" @click="setDatabasePage(databasePage - 1)"><ChevronLeft /></Button>
               <span class="min-w-12 text-center tabular-nums">{{ databasePage }} / {{ databasePageCount }}</span>
-              <Button type="button" size="icon-sm" variant="ghost" :disabled="databasePage === databasePageCount" title="下一页" aria-label="下一页" @click="setDatabasePage(databasePage + 1)"><ChevronRight /></Button>
+              <Button type="button" size="icon-sm" variant="ghost" :disabled="databasePage === databasePageCount" :title="t('settings.mcpNextPage')" :aria-label="t('settings.mcpNextPage')" @click="setDatabasePage(databasePage + 1)"><ChevronRight /></Button>
             </div>
           </div>
-          <p v-else class="rounded border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">点击“从连接加载”获取数据库列表，或手工添加允许的数据库。</p>
+          <p v-else class="rounded border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">{{ t("settings.mcpDatabaseEmptyHint") }}</p>
         </template>
       </div>
     </div>

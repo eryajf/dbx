@@ -233,7 +233,7 @@ watch(allowedPageCount, () => setPanePage("allowed", allowedPage.value));
         <Input v-model="searchQuery" class="h-9 pl-8" :disabled="disabled" :aria-label="t('settings.mcpConnectionSearchPlaceholder')" :placeholder="t('settings.mcpConnectionSearchPlaceholder')" />
       </div>
       <label class="flex h-9 items-center gap-1.5 rounded-md border bg-background px-2 text-xs text-muted-foreground">
-        每页
+        {{ t("settings.mcpPerPage") }}
         <select :value="connectionsPerPage" class="bg-transparent text-xs text-foreground outline-none" :disabled="disabled" @change="connectionsPerPage = Number(($event.target as HTMLSelectElement).value)">
           <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
         </select>
@@ -320,11 +320,11 @@ watch(allowedPageCount, () => setPanePage("allowed", allowedPage.value));
             </Button>
           </div>
           <div v-if="availablePageCount > 1" class="flex items-center justify-center gap-2 border-t pt-2 text-xs text-muted-foreground">
-            <Button type="button" size="icon-sm" variant="ghost" :disabled="availablePage === 1" title="上一页" aria-label="上一页" @click="setPanePage('available', availablePage - 1)">
+            <Button type="button" size="icon-sm" variant="ghost" :disabled="availablePage === 1" :title="t('settings.mcpPreviousPage')" :aria-label="t('settings.mcpPreviousPage')" @click="setPanePage('available', availablePage - 1)">
               <ChevronLeft />
             </Button>
             <span class="min-w-12 text-center tabular-nums">{{ paginationLabel(availablePage, availablePageCount) }}</span>
-            <Button type="button" size="icon-sm" variant="ghost" :disabled="availablePage === availablePageCount" title="下一页" aria-label="下一页" @click="setPanePage('available', availablePage + 1)">
+            <Button type="button" size="icon-sm" variant="ghost" :disabled="availablePage === availablePageCount" :title="t('settings.mcpNextPage')" :aria-label="t('settings.mcpNextPage')" @click="setPanePage('available', availablePage + 1)">
               <ChevronRight />
             </Button>
           </div>
@@ -404,11 +404,11 @@ watch(allowedPageCount, () => setPanePage("allowed", allowedPage.value));
             </div>
           </div>
           <div v-if="allowedPageCount > 1" class="flex items-center justify-center gap-2 border-t pt-2 text-xs text-muted-foreground">
-            <Button type="button" size="icon-sm" variant="ghost" :disabled="allowedPage === 1" title="上一页" aria-label="上一页" @click="setPanePage('allowed', allowedPage - 1)">
+            <Button type="button" size="icon-sm" variant="ghost" :disabled="allowedPage === 1" :title="t('settings.mcpPreviousPage')" :aria-label="t('settings.mcpPreviousPage')" @click="setPanePage('allowed', allowedPage - 1)">
               <ChevronLeft />
             </Button>
             <span class="min-w-12 text-center tabular-nums">{{ paginationLabel(allowedPage, allowedPageCount) }}</span>
-            <Button type="button" size="icon-sm" variant="ghost" :disabled="allowedPage === allowedPageCount" title="下一页" aria-label="下一页" @click="setPanePage('allowed', allowedPage + 1)">
+            <Button type="button" size="icon-sm" variant="ghost" :disabled="allowedPage === allowedPageCount" :title="t('settings.mcpNextPage')" :aria-label="t('settings.mcpNextPage')" @click="setPanePage('allowed', allowedPage + 1)">
               <ChevronRight />
             </Button>
           </div>
