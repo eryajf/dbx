@@ -6979,6 +6979,7 @@ mod tests {
                 model: "gpt-4o".to_string(),
                 models: Vec::new(),
                 api_style: AiApiStyle::Completions,
+                custom_headers: Default::default(),
                 proxy_enabled: false,
                 proxy_url: String::new(),
                 enable_thinking: true,
