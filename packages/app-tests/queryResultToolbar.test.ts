@@ -188,6 +188,13 @@ test("embedded result toolbar remeasures after the SQL preview action is removed
   assert.match(dataGrid, /clearDataGridTopbarRecheckTimer\(\)/);
 });
 
+test("embedded result toolbar remeasures after save and rollback actions are removed", () => {
+  const dataGrid = source(dataGridPath);
+
+  assert.match(dataGrid, /\(\) => saveToolbarState\.value\.showActions,/);
+  assert.match(dataGrid, /if \(previousShowActions && !showActions\) resetDataGridTopbarOverflowCompact\(\)/);
+});
+
 test("embedded and standalone result toolbars share the same fixed height", () => {
   const contentArea = source(contentAreaPath);
   const dataGrid = source(dataGridPath);

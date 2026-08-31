@@ -4900,6 +4900,15 @@ watch(
     if (previousVisible && !visible) resetDataGridTopbarOverflowCompact();
   },
 );
+// Save/rollback disappear with saveToolbarState.showActions (committing or
+// discarding all pending edits), which shortens the action list while compact
+// just like the preview action disappearing does.
+watch(
+  () => saveToolbarState.value.showActions,
+  (showActions, previousShowActions) => {
+    if (previousShowActions && !showActions) resetDataGridTopbarOverflowCompact();
+  },
+);
 const layerPreviewToolbarCapability = computed<DataGridToolbarActionCapability>(() => {
   const action = previewActions.value.find((candidate) => candidate.id === "geometry-map-preview");
   return {
