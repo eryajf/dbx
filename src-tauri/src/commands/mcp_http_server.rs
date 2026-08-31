@@ -193,7 +193,7 @@ impl McpHttpServerState {
             Ok(()) => Ok(()),
             Err(error) => {
                 if let Some(previous_settings) = previous_settings {
-                    match self.runtime_config(&previous_settings).and_then(|config| Ok((previous_settings, config))) {
+                    match self.runtime_config(&previous_settings).map(|config| (previous_settings, config)) {
                         Ok((previous_settings, config)) => {
                             if let Err(restore_error) =
                                 self.start_with_config_locked(app_state, &previous_settings, config).await
