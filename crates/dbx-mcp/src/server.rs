@@ -1139,6 +1139,22 @@ impl DbxMcpServer {
         }
     }
 
+    /// The advertised `tools/list` view: router-enabled tools narrowed to the
+    /// global policy's tool allowlist. When the policy cannot be loaded every
+    /// tool call already fails with `MCP_POLICY_UNAVAILABLE`, so fall back to
+    /// the plain router view rather than adding a new failure mode here.
+    async fn policy_filtered_tools(&self) -> Vec<rmcp::model::Tool> {
+        match self.load_policy().await {
+            Ok(policy) => self
+                .tool_router
+                .list_all()
+                .into_iter()
+                .filter(|tool| policy_allows_tool(&policy, tool.name.as_ref()))
+                .collect(),
+            Err(_) => self.tool_router.list_all(),
+        }
+    }
+
     // CallToolResult is the rmcp wire response type; keeping it unboxed avoids conversions at every tool boundary.
     #[allow(clippy::result_large_err)]
     fn resolve_database(
@@ -1287,6 +1303,21 @@ impl ServerHandler for DbxMcpServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("dbx", env!("CARGO_PKG_VERSION")))
             .with_instructions("Use DBX connections to inspect schemas and query databases safely.")
+    }
+
+    /// Hide tools the global policy disallows from the advertised list, the
+    /// same way scope-based route disabling does. Per-call enforcement stays
+    /// in `ensure_tool_allowed`; this only stops clients (especially LLMs)
+    /// from seeing — and repeatedly retrying — capabilities that would be
+    /// rejected anyway. When the policy cannot be loaded, every call already
+    /// fails with `MCP_POLICY_UNAVAILABLE`, so the listing falls back to the
+    /// router view instead of adding a new failure mode here.
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        Ok(rmcp::model::ListToolsResult { tools: self.policy_filtered_tools().await, meta: None, next_cursor: None })
     }
 }
 
@@ -1911,6 +1942,31 @@ mod tests {
         assert!(names.contains(&"dbx_close_session"));
         #[cfg(feature = "mq-admin")]
         assert!(names.contains(&"dbx_send_message"));
+    }
+
+    #[tokio::test]
+    async fn tools_list_hides_tools_the_policy_disallows() {
+        let mut policy = McpGlobalPolicy::default();
+        policy.allowed_tool_names = Some(vec!["dbx_list_connections".to_string(), "dbx_execute_query".to_string()]);
+        let server = DbxMcpServer::with_runtime_options(
+            Arc::new(FakeBackend { policy, ..Default::default() }),
+            McpScope::default(),
+            false,
+        );
+
+        let tools = server.policy_filtered_tools().await;
+        let names = tools.iter().map(|tool| tool.name.as_ref()).collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["dbx_execute_query", "dbx_list_connections"]);
+    }
+
+    #[tokio::test]
+    async fn tools_list_keeps_the_full_view_without_an_allowlist() {
+        let server = DbxMcpServer::with_runtime_options(Arc::new(FakeBackend::default()), McpScope::default(), false);
+
+        let tools = server.policy_filtered_tools().await;
+
+        assert_eq!(tools.len(), server.tool_router.list_all().len());
     }
 
     #[test]
