@@ -1946,8 +1946,10 @@ mod tests {
 
     #[tokio::test]
     async fn tools_list_hides_tools_the_policy_disallows() {
-        let mut policy = McpGlobalPolicy::default();
-        policy.allowed_tool_names = Some(vec!["dbx_list_connections".to_string(), "dbx_execute_query".to_string()]);
+        let policy = McpGlobalPolicy {
+            allowed_tool_names: Some(vec!["dbx_list_connections".to_string(), "dbx_execute_query".to_string()]),
+            ..Default::default()
+        };
         let server = DbxMcpServer::with_runtime_options(
             Arc::new(FakeBackend { policy, ..Default::default() }),
             McpScope::default(),
