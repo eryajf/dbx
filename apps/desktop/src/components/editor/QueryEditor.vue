@@ -2749,6 +2749,7 @@ function createHoverDom(title: string, detail: string, sqlContent?: string, rows
 }
 
 async function resolveSqlHoverTooltip(currentView: EditorViewType, pos: number) {
+  if (!settingsStore.editorSettings.showTableDdlHoverPreview) return null;
   if (!props.connectionId || props.database == null || contextMenuOpen.value) return null;
 
   const sql = currentView.state.doc.toString();

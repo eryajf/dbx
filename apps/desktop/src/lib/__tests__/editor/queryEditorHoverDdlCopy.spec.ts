@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 const queryEditorSource = readFileSync(new URL("../../../components/editor/QueryEditor.vue", import.meta.url), "utf8");
 
 describe("QueryEditor hover DDL copy", () => {
+  it("does not resolve hover DDL when the preference is disabled", () => {
+    expect(queryEditorSource).toContain("if (!settingsStore.editorSettings.showTableDdlHoverPreview) return null;");
+  });
+
   it("adds an accessible copy button that preserves SQL whitespace semantics", () => {
     expect(queryEditorSource).toContain('copyButton.textContent = t("grid.copyDdl");');
     expect(queryEditorSource).toContain('copyButton.setAttribute("aria-label", t("grid.copyDdl"));');
