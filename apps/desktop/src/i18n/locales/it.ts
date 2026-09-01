@@ -6037,7 +6037,6 @@ export default withEnglishFallback({
     tabPlacementLeft: "Lato sinistro",
     tabPlacementRight: "Lato destro",
     tabPlacementDescription: "Le barre laterali scorrono verticalmente; le righe multiple valgono solo sopra o sotto il contenuto.",
-    tabOrganization: "Organizzazione schede",
     tabGroup: "Raggruppa per",
     tabGroupNone: "Nessun raggruppamento",
     tabGroupDatabaseType: "Raggruppa per tipo di database",

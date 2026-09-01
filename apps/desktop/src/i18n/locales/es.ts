@@ -6037,7 +6037,6 @@ export default withEnglishFallback({
     tabPlacementLeft: "Lado izquierdo",
     tabPlacementRight: "Lado derecho",
     tabPlacementDescription: "Las barras laterales se desplazan verticalmente; el ajuste multilínea solo se aplica arriba o abajo.",
-    tabOrganization: "Organización de pestañas",
     tabGroup: "Agrupar por",
     tabGroupNone: "Sin agrupación",
     tabGroupDatabaseType: "Agrupar por tipo de base de datos",

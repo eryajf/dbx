@@ -2872,22 +2872,6 @@ export const useQueryStore = defineStore("query", () => {
     beginBatchClose([...ids], finalActiveTabId, onComplete);
   }
 
-  function closeLeftTabs(id: string, onComplete?: () => void) {
-    const target = tabs.value.find((tab) => tab.id === id);
-    if (!target) return;
-
-    const groupedTabs = tabs.value.filter((tab) => Boolean(tab.pinned) === Boolean(target.pinned));
-    const targetIndex = groupedTabs.findIndex((tab) => tab.id === id);
-    const ids = groupedTabs.slice(0, targetIndex).map((tab) => tab.id);
-    if (ids.length === 0) {
-      onComplete?.();
-      return;
-    }
-
-    const finalActiveTabId = activeTabId.value && !ids.includes(activeTabId.value) ? activeTabId.value : id;
-    beginBatchClose(ids, finalActiveTabId, onComplete);
-  }
-
   function closeRightTabs(id: string, onComplete?: () => void) {
     const target = tabs.value.find((tab) => tab.id === id);
     if (!target) return;
@@ -6867,7 +6851,6 @@ export const useQueryStore = defineStore("query", () => {
     requestAppCloseConfirmation,
     closeOtherTabs,
     closeTabsByIds,
-    closeLeftTabs,
     closeRightTabs,
     closeOtherRegularTabs,
     closeRegularTabs,

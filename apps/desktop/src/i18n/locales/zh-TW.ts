@@ -5359,7 +5359,6 @@ export default withEnglishFallback({
     tabPlacementLeft: "左側",
     tabPlacementRight: "右側",
     tabPlacementDescription: "側邊標籤欄使用垂直捲動；多行平鋪僅適用於上方或下方。",
-    tabOrganization: "標籤頁組織",
     tabGroup: "分組方式",
     tabGroupNone: "不分組",
     tabGroupDatabaseType: "依資料庫類型分組",

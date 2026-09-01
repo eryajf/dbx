@@ -267,7 +267,12 @@ function hasTabsToLeft(tab: QueryTab) {
 }
 
 function closeTabsToLeftFromTab(tab: QueryTab) {
-  queryStore.closeLeftTabs(tab.id);
+  // Mirror the close-right path: compute the ids from the sorted display
+  // order (fixedTabs/regularTabs), not the underlying array order, so the
+  // menu closes exactly the tabs shown to the left of the target.
+  const tabsToClose = tabsToLeftInGroup(tab).map((item) => item.id);
+  const finalActiveTabId = queryStore.activeTabId && !tabsToClose.includes(queryStore.activeTabId) ? queryStore.activeTabId : tab.id;
+  queryStore.closeTabsByIds(tabsToClose, finalActiveTabId);
 }
 
 function hasSpecialRegularSurfaceToRight(surface: SpecialRegularSurface) {

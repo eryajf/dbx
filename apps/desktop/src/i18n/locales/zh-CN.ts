@@ -6344,7 +6344,6 @@ export default withEnglishFallback({
     tabPlacementLeft: "左侧",
     tabPlacementRight: "右侧",
     tabPlacementDescription: "侧边标签栏使用纵向滚动；多行平铺仅适用于上方或下方。",
-    tabOrganization: "标签页组织",
     tabGroup: "分组方式",
     tabGroupNone: "不分组",
     tabGroupDatabaseType: "按数据库类型分组",

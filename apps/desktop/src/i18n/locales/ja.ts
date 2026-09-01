@@ -6075,7 +6075,6 @@ export default withEnglishFallback({
     tabPlacementLeft: "左側",
     tabPlacementRight: "右側",
     tabPlacementDescription: "サイドのタブバーは縦にスクロールします。複数行表示はコンテンツの上下でのみ利用できます。",
-    tabOrganization: "タブの整理",
     tabGroup: "グループ化",
     tabGroupNone: "グループ化しない",
     tabGroupDatabaseType: "データベース種別でグループ化",
