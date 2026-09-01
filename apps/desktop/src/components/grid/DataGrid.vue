@@ -172,7 +172,7 @@ import {
 } from "@/lib/dataGrid/dataGridDetail";
 import {
   applyColumnFormatter,
-  buildColumnFormatterKey,
+  columnFormatterKeys,
   defaultIoTDBTimestampFormatter,
   DataGridDateTimePatterns,
   displayTimeZoneOption,
@@ -1564,58 +1564,16 @@ function closeLocalFilter() {
 function formatterKeysForColumn(columnIndex: number): string[] {
   const resultColumn = props.result.columns[columnIndex];
   if (!props.connectionId || !resultColumn) return [];
-
-  const displaySource = props.queryDisplaySourceColumns?.[columnIndex];
-  // A joined-result source key is only meaningful within one query. Do not
-  // guess a formatter key for cached legacy mappings that lack a physical table.
-  if (displaySource && !displaySource.tableName) return [];
-
-  const tableMeta = displaySource?.tableName
-    ? {
-        database: displaySource.database,
-        schema: displaySource.schema,
-        tableName: displaySource.tableName,
-      }
-    : props.tableMeta;
-  if (!tableMeta?.tableName) return [];
-
-  const sourceColumn = displaySource?.sourceColumn || props.sourceColumns?.[columnIndex] || resultColumn;
-  const keys = new Set<string>();
-  const primaryDatabase = tableMeta.database?.trim() || props.database;
-  const primarySchema = tableMeta.schema ?? props.schema;
-  const addKey = (database: string | undefined, schema: string | undefined, column: string) => {
-    keys.add(
-      buildColumnFormatterKey({
-        connectionId: props.connectionId!,
-        database,
-        schema,
-        tableName: tableMeta.tableName,
-        column,
-      }),
-    );
-  };
-
-  // Always save under the physical source identity. When the query resolver
-  // supplied that identity, do not fall back to the current tab namespace:
-  // a same-named table in another database or schema must not inherit this
-  // column's formatter. MySQL historically stored table-view formatter keys
-  // with an empty schema even though query metadata mirrors the database into
-  // that field, so retain only that same-database legacy key.
-  addKey(primaryDatabase, primarySchema, sourceColumn);
-  if (displaySource?.tableName) {
-    if (resolvedDatabaseType.value === "mysql" && primarySchema) addKey(primaryDatabase, "", sourceColumn);
-    return [...keys];
-  }
-
-  const databases = [...new Set([primaryDatabase, props.database, props.tableMeta?.database])];
-  const schemas = [...new Set([primarySchema, props.schema, props.tableMeta?.schema, ""])];
-  const columns = displaySource ? [sourceColumn] : [...new Set([sourceColumn, resultColumn])];
-  for (const database of databases) {
-    for (const schema of schemas) {
-      for (const column of columns) addKey(database, schema, column);
-    }
-  }
-  return [...keys];
+  return columnFormatterKeys({
+    connectionId: props.connectionId,
+    database: props.database,
+    schema: props.schema,
+    databaseType: resolvedDatabaseType.value,
+    resultColumn,
+    sourceColumn: props.sourceColumns?.[columnIndex],
+    displaySource: props.queryDisplaySourceColumns?.[columnIndex],
+    tableMeta: props.tableMeta,
+  });
 }
 
 function formatterKeyForColumn(columnIndex: number): string | null {
@@ -1954,9 +1912,12 @@ async function saveColumnFormatter(columnIndex: number) {
 }
 
 function clearColumnFormatter(columnIndex: number) {
-  const key = savedColumnFormatterEntry(columnIndex)?.key ?? formatterKeyForColumn(columnIndex);
-  if (!key) return;
-  settingsStore.updateColumnFormatter(key, undefined);
+  // Clear every candidate key: MySQL-family columns can carry both the shared
+  // empty-schema spelling and the legacy query-side mirrored-schema spelling,
+  // and either surface must leave the column unformatted everywhere.
+  const keys = formatterKeysForColumn(columnIndex);
+  if (!keys.length) return;
+  for (const key of keys) settingsStore.updateColumnFormatter(key, undefined);
   closeColumnFormatter();
 }
 
