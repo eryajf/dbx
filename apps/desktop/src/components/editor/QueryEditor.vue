@@ -20,7 +20,7 @@ import { executableStatementRangeAtCursor, executableStatementRangeCacheForDoc, 
 import { currentStatementFrameRangeTo } from "@/lib/sql/currentStatementFrame";
 import { expandToSqlStatementWindow } from "@/lib/sql/insertValueHints";
 import { insertValueHintColumnNames } from "@/lib/sql/insertValueHintColumns";
-import { canFormatSqlForDatabaseType, formatSqlForEditing, compressSqlText, type SqlFormatDialect } from "@/lib/sql/sqlFormatter";
+import { canFormatSqlForDatabaseType, formatSqlForDisplay, formatSqlForEditing, compressSqlText, sqlFormatDialectForDbType, type SqlFormatDialect } from "@/lib/sql/sqlFormatter";
 import { detectAndFormatStructured } from "@/lib/sql/autoFormat";
 import { enabledSqlParameterSyntaxes, resolveSqlVariableSyntaxToggles } from "@/lib/sql/sqlVariableSyntax";
 import { blankLineDeletionChanges, replaceSelectedEditorText } from "@/lib/editor/queryEditorTextEdits";
@@ -92,8 +92,10 @@ import {
 } from "@/lib/sql/sqlNavigation";
 import { buildHoverTableSql, ddlForHoverPreview, hoverTableMatchesScope, normalizeAlignedSqlWhitespace, quoteIdentifier, quoteQualifiedName, reformatHoverDdl, scopeHoverTables, type HoverTableScope } from "@/lib/editor/hoverTableSql";
 import { constrainSqlHoverLayout } from "@/lib/editor/sqlHoverLayout";
+import { createHoverSearch, type HoverSearchController } from "@/lib/editor/sqlHoverSearch";
 import { lineColumnToOffset, sqlErrorDecorationRange as resolveSqlErrorDecorationRange } from "@/lib/sql/sqlDiagnostics";
 import { analyzeMysqlRoutineSyntax, supportsMysqlRoutineSyntaxDiagnostics } from "@/lib/sql/mysqlRoutineSyntaxDiagnostics";
+import { buildOracleSyntaxDiagnostics } from "@/lib/sql/oracleSyntaxDiagnostics";
 import {
   DBX_TABLE_REFERENCE_MIME,
   DBX_TABLE_REFERENCE_DROP_EVENT,
@@ -118,7 +120,7 @@ import { buildQueryEditorLineNumbersExtension, createQueryEditorLineNumberAlignm
 import { searchKeymapWithoutModD } from "@/lib/editor/codemirrorSearchKeymap";
 import { defaultKeymapForGlobalShortcuts } from "@/lib/editor/codemirrorDefaultKeymap";
 import { appendSqlCompletionSpace } from "@/lib/editor/sqlCompletionInsertion";
-import { batchColumnSelectionColumnList, batchColumnSelectionReplaceTo, shouldResolveSqlColumnCompletion } from "@/lib/editor/batchColumnSelection";
+import { batchColumnSelectionColumnList, batchColumnSelectionInsertReplacement, batchColumnSelectionReplaceTo, isBatchColumnSelectionCompletionActive, shouldResolveSqlColumnCompletion } from "@/lib/editor/batchColumnSelection";
 import { compareSqlCompletions, completionLabelPresentation } from "@/lib/editor/sqlCompletionPresentation";
 import { clampEditorFontSize, createEditorWheelZoomGestureGuard, createEditorZoomCommitScheduler, fontSizeFromGestureScale, fontSizeFromWheelDelta } from "@/lib/editor/editorZoom";
 import { enabledSqlShortcutActions, resolveSqlShortcutTemplate } from "@/lib/sql/sqlShortcutActions";
@@ -2085,7 +2087,7 @@ function runKeymapExtension(codeMirrorKeymap: (typeof import("@codemirror/view")
 
 function handleEnter(view: EditorViewType): boolean {
   clearPendingCompletionEnter();
-  if (applySelectedBatchColumnSelection(view)) return true;
+  if (isBatchColumnSelectionCompletionActive(codeMirrorCompletionStatus?.(view.state) ?? null) && applySelectedBatchColumnSelection(view)) return true;
   // CodeMirror's default completion keymap is disabled so batch selection can
   // take precedence. Preserve its normal single-item acceptance here.
   if (codeMirrorAcceptCompletion?.(view)) return true;
@@ -2139,8 +2141,8 @@ function acceptCompletionOrNextSnippetField(view: EditorViewType): boolean {
   // not word completion. A completion popup can still appear as a side effect
   // of the indent edit itself, so it must never hijack this or a following Tab.
   if (view.state.selection.ranges.every((range) => range.empty)) {
-    if (applySelectedBatchColumnSelection(view)) return true;
     const completionStatus = codeMirrorCompletionStatus?.(view.state) ?? null;
+    if (isBatchColumnSelectionCompletionActive(completionStatus) && applySelectedBatchColumnSelection(view)) return true;
     if (completionStatus === "active" && acceptSelectedOrFirstCompletion(view, codeMirrorAcceptCompletion, codeMirrorSelectedCompletionIndex, codeMirrorSelectFirstCompletion)) return true;
     if (completionStatus) return waitForCompletionTab(view);
   }
@@ -2654,6 +2656,7 @@ function createHoverDom(title: string, detail: string, sqlContent?: string, rows
 
   let layoutController: ReturnType<typeof constrainSqlHoverLayout> | null = null;
   let handleCopy: ((event: ClipboardEvent) => void) | null = null;
+  let searchController: HoverSearchController | null = null;
 
   if (sqlContent) {
     heading.className = "flex items-center justify-between gap-3 font-medium";
@@ -2698,7 +2701,18 @@ function createHoverDom(title: string, detail: string, sqlContent?: string, rows
       sqlContainer.textContent = sqlContent;
     }
 
+    // 纯前端搜索：在已生成的 DDL 内容上做大小写不敏感匹配并高亮，不重新请求元数据/DDL。
+    // originalHtml 必须在挂到文档前、内容渲染后捕获，作为每次搜索的还原基线。
+    searchController = createHoverSearch({
+      target: sqlContainer,
+      originalHtml: sqlContainer.innerHTML,
+      placeholder: t("grid.hoverSearchPlaceholder"),
+      noResultLabel: t("grid.hoverSearchNoResult"),
+    });
+    dom.appendChild(searchController.element);
+
     dom.appendChild(sqlContainer);
+    dom.appendChild(searchController.status);
     // 返回 mount/destroy 给 CodeMirror TooltipView 生命周期钩子，
     // 避免 MutationObserver 监听 body 全子树来兜底清理。
     layoutController = constrainSqlHoverLayout(dom, sqlContainer);
@@ -2732,16 +2746,17 @@ function createHoverDom(title: string, detail: string, sqlContent?: string, rows
   return {
     dom,
     mount:
-      layoutController || handleCopy
+      layoutController || handleCopy || searchController
         ? () => {
             layoutController?.mount();
             if (handleCopy) document.addEventListener("copy", handleCopy);
           }
         : undefined,
     destroy:
-      layoutController || handleCopy
+      layoutController || handleCopy || searchController
         ? () => {
             layoutController?.destroy();
+            searchController?.destroy();
             if (handleCopy) document.removeEventListener("copy", handleCopy);
           }
         : undefined,
@@ -2804,7 +2819,7 @@ async function resolveSqlHoverTooltip(currentView: EditorViewType, pos: number) 
       cachedTables = mergeCompletionTables(cachedTables, remoteHoverTables);
       table = matchTable(qualifiedTableLookup, hoverTables) ?? matchTable(tableLookupName, hoverTables) ?? matchTable(identifier, hoverTables) ?? matchTable(name, hoverTables);
     }
-    if (table && !semanticQualifierIsRowSource && (!qualifier || table.schema?.toLowerCase() === qualifier.toLowerCase() || table.name === name)) {
+    if (table && settingsStore.editorSettings.showTableDdlHoverPreview && !semanticQualifierIsRowSource && (!qualifier || table.schema?.toLowerCase() === qualifier.toLowerCase() || table.name === name)) {
       const hoverDatabase = hoverScope.database;
       const hoverSchema = hoverScope.schema ?? table.schema ?? "";
       const hoverQualifiedName = [hoverScope.catalog, hoverDatabase, hoverSchema, table.name].filter(Boolean).join(".");
@@ -2825,7 +2840,13 @@ async function resolveSqlHoverTooltip(currentView: EditorViewType, pos: number) 
         const { ddl } = await loadObjectDdl(objectMetadataRequest);
         const rawDdl = ddlForHoverPreview(ddl);
         if (rawDdl && rawDdl.trim()) {
-          sqlContent = reformatHoverDdl(rawDdl, quoteQualifiedName(hoverQualifiedName));
+          // A view's display DDL wraps the raw (often single-line) view source
+          // in `CREATE ... VIEW ... AS`; the table-oriented reformatter cannot
+          // lay out a SELECT body, so views reuse the shared display formatter
+          // (the same one the sidebar/object-source viewers use). Tables keep
+          // the aligned column layout from reformatHoverDdl.
+          const isViewObject = objectMetadataRequest.objectType === "VIEW" || objectMetadataRequest.objectType === "MATERIALIZED_VIEW";
+          sqlContent = isViewObject ? await formatSqlForDisplay(rawDdl, props.formatDialect ?? sqlFormatDialectForDbType(props.databaseType), settingsStore.editorSettings.sqlFormatter) : reformatHoverDdl(rawDdl, quoteQualifiedName(hoverQualifiedName));
         }
       } catch (error) {
         console.warn(`[DBX] Failed to load table DDL for ${hoverDatabase}.${hoverSchema}.${table.name}:`, error);
@@ -3169,6 +3190,13 @@ async function refreshSemanticDiagnostics(options: { preserveOutsideRanges?: boo
   }
 
   const nextDiagnostics: SqlSemanticDiagnostic[] = [];
+  const oracleSyntaxDiagnostics = buildOracleSyntaxDiagnostics(sql, props.databaseType);
+  nextDiagnostics.push(
+    ...oracleSyntaxDiagnostics.filter((diagnostic) => {
+      const diagnosticRange = sqlTextSpanToRange(sql, diagnostic.span);
+      return !!diagnosticRange && diagnosticRanges.some((range) => rangesOverlap(diagnosticRange, range));
+    }),
+  );
   const mysqlRoutineAnalysis = props.databaseType === "mysql" && supportsMysqlRoutineSyntaxDiagnostics(sqlDriverProfile.value) ? analyzeMysqlRoutineSyntax(sql) : null;
   if (mysqlRoutineAnalysis) {
     nextDiagnostics.push(
@@ -3346,7 +3374,11 @@ function hasDroppedTableReference(event: DragEvent) {
 
 function insertTableReferencePayload(currentView: EditorViewType, payload: QueryEditorTableReferencePayload, coords?: { clientX: number; clientY: number }): boolean {
   if (props.readOnly) return false;
-  const insertText = tableReferenceInsertText(payload, props.databaseType);
+  const insertText = tableReferenceInsertText(payload, props.databaseType, {
+    tableNameSeparator: settingsStore.editorSettings.sidebarCopyTableNameSeparator,
+    columnNameSeparator: settingsStore.editorSettings.sidebarCopyTableNameSeparator,
+    includeTableSchema: settingsStore.editorSettings.sidebarCopyTableNameIncludeSchema,
+  });
   const dropPos = coords ? currentView.posAtCoords({ x: coords.clientX, y: coords.clientY }) : null;
   const selection = currentView.state.selection.main;
   const from = dropPos ?? selection.from;
@@ -3513,6 +3545,10 @@ type QueryCompletionOption = Completion & {
 
 let batchColumnSelectionSession: BatchColumnSelectionSession | null = null;
 
+function clearBatchColumnSelectionSession() {
+  batchColumnSelectionSession = null;
+}
+
 function isBatchColumnSelectionAction(item: QueryCompletionItem | BatchColumnSelectionActionItem): item is BatchColumnSelectionActionItem {
   return "batchColumnSelectionAction" in item && item.batchColumnSelectionAction === true;
 }
@@ -3627,20 +3663,35 @@ function applyBatchColumnSelection(view: EditorViewType, item: BatchColumnSelect
     return;
   }
 
-  const replaceTo = batchColumnSelectionReplaceTo({
-    to,
-    mode: session.mode,
-    nextCharacter: view.state.sliceDoc(to, to + 1),
-    replaceClosingQuote: session.replaceClosingQuote,
-  });
   const columns = batchColumnSelectionColumnList(
     selected.map((candidate) => candidate.apply),
     session.mode,
     session.qualifier,
   );
-  const insert = session.mode === "insert" ? `${columns}) ${settingsStore.editorSettings.sqlFormatter.keywordCase === "lower" ? "values" : "VALUES"} (${selected.map((_, index) => `\${${index + 1}:value}`).join(", ")})` : columns;
+  let replaceTo = batchColumnSelectionReplaceTo({
+    to,
+    mode: session.mode,
+    nextCharacter: view.state.sliceDoc(to, to + 1),
+    replaceClosingQuote: session.replaceClosingQuote,
+  });
+  let insert = columns;
+  if (session.mode === "insert") {
+    const replacement = batchColumnSelectionInsertReplacement({
+      document: view.state.doc.toString(),
+      to,
+      columns,
+      valuesKeyword: settingsStore.editorSettings.sqlFormatter.keywordCase === "lower" ? "values" : "VALUES",
+      valueCount: selected.length,
+    });
+    replaceTo = replacement.replaceTo;
+    insert = replacement.insert;
+  }
 
-  batchColumnSelectionSession = null;
+  if (session.mode === "insert" && !codeMirrorSnippetCompletion) {
+    clearBatchColumnSelectionSession();
+    return;
+  }
+  clearBatchColumnSelectionSession();
   markCompletionAccepted(item);
   if (session.mode === "insert") {
     const snippet = codeMirrorSnippetCompletion(insert, { label: item.label });
@@ -3658,7 +3709,7 @@ function applyBatchColumnSelection(view: EditorViewType, item: BatchColumnSelect
 
 function applySelectedBatchColumnSelection(view: EditorViewType): boolean {
   const session = batchColumnSelectionSession;
-  if (!session || session.document !== view.state.doc.toString() || session.selectedKeys.size === 0) return false;
+  if (!session || !isBatchColumnSelectionCompletionActive(codeMirrorCompletionStatus?.(view.state) ?? null) || session.document !== view.state.doc.toString() || session.selectedKeys.size === 0) return false;
   applyBatchColumnSelection(
     view,
     {
@@ -3782,6 +3833,13 @@ function shouldInsertSqlCompletionSpace(): boolean {
   return props.databaseType !== "mongodb" && props.databaseType !== "redis" && props.databaseType !== "elasticsearch" && props.databaseType !== "easysearch" && props.databaseType !== "meilisearch" && props.databaseType !== "victoriametrics";
 }
 
+// Snippet expansion normally follows from the item type; a provider can also
+// opt a differently-typed item in so its `${}` fields still expand on accept.
+function shouldApplyCompletionAsSnippet(item: QueryCompletionItem): boolean {
+  if ("applyAsSnippet" in item && item.applyAsSnippet === true) return true;
+  return item.type === "snippet" || item.type === "function";
+}
+
 function completionOptionForItem(item: QueryCompletionItem | BatchColumnSelectionActionItem) {
   const filterText = "filterText" in item && typeof item.filterText === "string" ? item.filterText : undefined;
   const labelPresentation = completionLabelPresentation(item.label, filterText);
@@ -3800,7 +3858,7 @@ function completionOptionForItem(item: QueryCompletionItem | BatchColumnSelectio
     recordCompletionSelection(item.label, item.type);
   };
   const batchColumnSelection = batchColumnSelectionMarkerForItem(item);
-  if ((item.type === "snippet" || item.type === "function") && item.apply) {
+  if (shouldApplyCompletionAsSnippet(item) && item.apply) {
     const completion = codeMirrorSnippetCompletion(item.apply, {
       ...labelPresentation,
       type: item.type,
@@ -5659,6 +5717,7 @@ onMounted(async () => {
           {
             key: "Escape",
             run: () => {
+              clearBatchColumnSelectionSession();
               return searchPanelRef.value?.closeSearch() ?? false;
             },
           },
@@ -5718,6 +5777,7 @@ onMounted(async () => {
           const status = codeMirrorCompletionStatus(update.state) ?? null;
           if (status === null) {
             activeCompletionOrigin = null;
+            clearBatchColumnSelectionSession();
           }
         }
       }),
