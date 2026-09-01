@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::http::HeaderMap;
 use dbx_core::models::connection::ConnectionConfig;
-use dbx_core::storage::McpGlobalPolicy;
+use dbx_core::storage::{McpDatabaseScope, McpGlobalPolicy};
 
 use crate::error::AppError;
 use crate::state::WebState;
@@ -240,6 +240,122 @@ fn ensure_allowed(policy: &McpGlobalPolicy, connection_id: &str) -> Result<(), A
     Ok(())
 }
 
+fn ensure_database_in_scope(policy: &McpGlobalPolicy, connection_id: &str, database: &str) -> Result<(), AppError> {
+    let Some(rule) = policy.connection_policies.iter().find(|rule| rule.connection_id == connection_id) else {
+        return Ok(());
+    };
+    match rule.database_scope {
+        McpDatabaseScope::All => Ok(()),
+        McpDatabaseScope::None => Err(AppError::from(format!(
+            "DATABASE_OUT_OF_SCOPE: database '{database}' is not allowed by DBX MCP settings for connection '{connection_id}'"
+        ))),
+        McpDatabaseScope::Selected if rule.allowed_databases.iter().any(|allowed| allowed == database) => Ok(()),
+        McpDatabaseScope::Selected => Err(AppError::from(format!(
+            "DATABASE_OUT_OF_SCOPE: database '{database}' is not allowed by DBX MCP settings for connection '{connection_id}'"
+        ))),
+    }
+}
+
+/// Execution modes are scoped defaults: a database setting overrides a
+/// configured connection default, which in turn overrides the global default.
+/// Connection read-only and production protections are checked separately.
+fn effective_database_execution_policy(policy: &McpGlobalPolicy, connection_id: &str, database: &str) -> (bool, bool) {
+    let mut effective = (policy.read_only, policy.allow_dangerous_sql);
+    let Some(rule) = policy.connection_policies.iter().find(|rule| rule.connection_id == connection_id) else {
+        return effective;
+    };
+    if rule.execution_mode_configured {
+        effective = (rule.read_only, !rule.read_only && rule.allow_dangerous_sql);
+    }
+    if let Some(database_policy) = rule.database_policies.iter().find(|rule| rule.database_name == database) {
+        effective = (database_policy.read_only, !database_policy.read_only && database_policy.allow_dangerous_sql);
+    }
+    effective
+}
+
+fn ensure_sql_database_execution_scope(
+    policy: &McpGlobalPolicy,
+    connection: &ConnectionConfig,
+    active_database: &str,
+    sql: &str,
+) -> Result<(), AppError> {
+    let Some(rule) = policy.connection_policies.iter().find(|rule| rule.connection_id == connection.id) else {
+        return Ok(());
+    };
+    if rule.database_policies.is_empty()
+        || !dbx_core::production_safety::sql_references_disallowed_database(
+            sql,
+            &connection.db_type,
+            active_database,
+            &[active_database.to_string()],
+        )
+    {
+        return Ok(());
+    }
+    Err(AppError::from(
+        "DATABASE_EXECUTION_POLICY_OUT_OF_SCOPE: SQL cannot reference another database while database-specific MCP execution permissions are configured."
+            .to_string(),
+    ))
+}
+
+fn mongo_pipeline_output_databases(pipeline_json: &str, active_database: &str) -> Result<Vec<String>, AppError> {
+    let stages = serde_json::from_str::<serde_json::Value>(pipeline_json)
+        .ok()
+        .and_then(|value| value.as_array().cloned())
+        .ok_or_else(|| AppError::from("QUERY_ERROR: MongoDB aggregate pipeline must be a JSON array.".to_string()))?;
+    let mut databases = Vec::new();
+    for stage in stages {
+        let Some(stage) = stage.as_object() else { continue };
+        for key in ["$out", "$merge"] {
+            let Some(target) = stage.get(key) else { continue };
+            let database = match target {
+                serde_json::Value::String(_) => active_database.to_string(),
+                serde_json::Value::Object(target) => target
+                    .get("db")
+                    .or_else(|| {
+                        target.get("into").and_then(serde_json::Value::as_object).and_then(|into| into.get("db"))
+                    })
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(active_database)
+                    .to_string(),
+                _ => {
+                    return Err(AppError::from(
+                        "QUERY_ERROR: MongoDB aggregate output target must be a string or object.".to_string(),
+                    ))
+                }
+            };
+            databases.push(database);
+        }
+    }
+    Ok(databases)
+}
+
+fn ensure_mongo_database_execution_scope(
+    policy: &McpGlobalPolicy,
+    connection_id: &str,
+    active_database: &str,
+    pipeline_json: &str,
+) -> Result<(), AppError> {
+    let has_database_policies = policy
+        .connection_policies
+        .iter()
+        .find(|rule| rule.connection_id == connection_id)
+        .is_some_and(|rule| !rule.database_policies.is_empty());
+    if !has_database_policies {
+        return Ok(());
+    }
+    if mongo_pipeline_output_databases(pipeline_json, active_database)?
+        .into_iter()
+        .any(|target_database| target_database != active_database)
+    {
+        return Err(AppError::from(
+            "DATABASE_EXECUTION_POLICY_OUT_OF_SCOPE: MongoDB aggregation cannot target another database while database-specific MCP execution permissions are configured."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn connection_read_only_error(message: impl Into<String>) -> AppError {
     AppError::from(format!("CONNECTION_READ_ONLY: {}", message.into()))
 }
@@ -293,6 +409,13 @@ pub async fn ensure_mongo_pipeline_target(
     if !is_mcp_request(headers) {
         return Ok(());
     }
+    let policy = load_policy(state).await?;
+    ensure_allowed(&policy, connection_id)?;
+    ensure_database_in_scope(&policy, connection_id, database)?;
+    for target_database in mongo_pipeline_output_databases(pipeline_json, database)? {
+        ensure_database_in_scope(&policy, connection_id, &target_database)?;
+    }
+    ensure_mongo_database_execution_scope(&policy, connection_id, database, pipeline_json)?;
     let config = load_connection(state, connection_id).await?;
     if dbx_core::production_safety::mongo_pipeline_targets_production_database(&config, database, pipeline_json) {
         return Err(AppError::from(
@@ -315,10 +438,14 @@ async fn ensure_write_with_risk(
     }
     let policy = load_policy(state).await?;
     ensure_allowed(&policy, connection_id)?;
-    if policy.read_only {
-        return Err(AppError::from(format!("MCP_READ_ONLY: DBX MCP read-only mode is enabled. {action} blocked.")));
+    ensure_database_in_scope(&policy, connection_id, database)?;
+    let (read_only, allow_dangerous_sql) = effective_database_execution_policy(&policy, connection_id, database);
+    if read_only {
+        return Err(AppError::from(format!(
+            "MCP_READ_ONLY: MCP execution permission for database '{database}' is read-only. {action} blocked."
+        )));
     }
-    if dangerous && !policy.allow_dangerous_sql {
+    if dangerous && !allow_dangerous_sql {
         return Err(AppError::from(format!(
             "SQL_BLOCKED: High-risk operation '{action}' is disabled in DBX MCP settings."
         )));
@@ -352,16 +479,21 @@ pub async fn ensure_sql(
     let policy = load_policy(state).await?;
     ensure_allowed(&policy, connection_id)?;
     let config = load_connection(state, connection_id).await?;
+    ensure_database_in_scope(&policy, connection_id, database)?;
     if !allow_database_switch && dbx_core::sql_risk::mcp_sql_has_forbidden_database_switch(sql, config.db_type) {
         return Err(AppError::from(
             "SQL_BLOCKED: MCP does not allow USE or persistent database switching.".to_string(),
         ));
     }
     let is_write = dbx_core::query_execution_sql::is_write_sql_for_database(sql, config.db_type);
-    if policy.read_only && is_write {
-        return Err(AppError::from("MCP_READ_ONLY: DBX MCP read-only mode is enabled. SQL write blocked.".to_string()));
+    ensure_sql_database_execution_scope(&policy, &config, database, sql)?;
+    let (read_only, allow_dangerous_sql) = effective_database_execution_policy(&policy, connection_id, database);
+    if read_only && is_write {
+        return Err(AppError::from(format!(
+            "MCP_READ_ONLY: MCP execution permission for database '{database}' is read-only. SQL write blocked."
+        )));
     }
-    if !policy.allow_dangerous_sql && dbx_core::sql_risk::is_dangerous_sql_for_database(sql, config.db_type) {
+    if !allow_dangerous_sql && dbx_core::sql_risk::is_dangerous_sql_for_database(sql, config.db_type) {
         return Err(AppError::from("SQL_BLOCKED: High-risk SQL is disabled in DBX MCP settings.".to_string()));
     }
     if config.read_only {
@@ -378,7 +510,57 @@ pub async fn ensure_sql(
 
 #[cfg(test)]
 mod tests {
-    use super::{connection_read_only_error, mongo_filter_is_effectively_unbounded, mongo_pipeline_has_write_stage};
+    use super::{
+        connection_read_only_error, effective_database_execution_policy, ensure_mongo_database_execution_scope,
+        mongo_filter_is_effectively_unbounded, mongo_pipeline_has_write_stage,
+    };
+    use dbx_core::storage::{McpConnectionPolicy, McpDatabasePolicy, McpDatabaseScope, McpGlobalPolicy};
+
+    fn database_policy() -> McpGlobalPolicy {
+        McpGlobalPolicy {
+            read_only: true,
+            allow_dangerous_sql: false,
+            connection_policies: vec![McpConnectionPolicy {
+                connection_id: "conn-1".to_string(),
+                read_only: true,
+                allow_dangerous_sql: false,
+                execution_mode_configured: true,
+                database_scope: McpDatabaseScope::Selected,
+                allowed_databases: vec!["operations".to_string(), "reporting".to_string()],
+                database_policies: vec![McpDatabasePolicy {
+                    database_name: "operations".to_string(),
+                    read_only: false,
+                    allow_dangerous_sql: true,
+                }],
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn database_execution_policy_overrides_global_and_connection_defaults() {
+        let policy = database_policy();
+
+        assert_eq!(effective_database_execution_policy(&policy, "conn-1", "operations"), (false, true));
+        assert_eq!(effective_database_execution_policy(&policy, "conn-1", "reporting"), (true, false));
+    }
+
+    #[test]
+    fn database_execution_policy_blocks_cross_database_mongo_aggregate_output() {
+        let policy = database_policy();
+
+        assert!(
+            ensure_mongo_database_execution_scope(&policy, "conn-1", "operations", r#"[{"$out":"archive"}]"#,).is_ok()
+        );
+        let error = ensure_mongo_database_execution_scope(
+            &policy,
+            "conn-1",
+            "operations",
+            r#"[{"$merge":{"into":{"db":"reporting","coll":"archive"}}}]"#,
+        )
+        .unwrap_err();
+        assert!(error.message.starts_with("DATABASE_EXECUTION_POLICY_OUT_OF_SCOPE:"), "{}", error.message);
+    }
 
     #[test]
     fn connection_read_only_errors_use_the_stable_mcp_code() {
