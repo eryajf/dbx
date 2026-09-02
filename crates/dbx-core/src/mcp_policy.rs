@@ -36,7 +36,13 @@ pub fn effective_database_execution_policy(
             effective = (database_policy.read_only, !database_policy.read_only && database_policy.allow_dangerous_sql);
         }
     } else {
-        effective = apply_ceiling(effective, (rule.read_only, rule.allow_dangerous_sql));
+        // Legacy rules only carried a ceiling when the old UI had configured
+        // an execution mode; scope-only rules inherited the global mode
+        // untouched and must keep doing so instead of being narrowed by the
+        // implicit (false, false) ceiling.
+        if rule.execution_mode_configured {
+            effective = apply_ceiling(effective, (rule.read_only, rule.allow_dangerous_sql));
+        }
         if let Some(database_policy) = rule.database_policies.iter().find(|rule| rule.database_name == database) {
             effective = apply_ceiling(effective, (database_policy.read_only, database_policy.allow_dangerous_sql));
         }
@@ -179,6 +185,19 @@ mod tests {
         policy.connection_policies[0].allow_dangerous_sql = false;
         policy.connection_policies[0].database_policies.clear();
         assert_eq!(effective_database_execution_policy(&policy, "conn", "db"), (false, false));
+    }
+
+    #[test]
+    fn legacy_scope_only_rules_inherit_global_mode() {
+        let mut policy = policy(None);
+        policy.read_only = false;
+        policy.allow_dangerous_sql = true;
+        policy.connection_policies[0].execution_mode_configured = false;
+        policy.connection_policies[0].database_policies.clear();
+        // Old-UI scope-only rules (configured=false, no mode saved) inherited
+        // the global mode verbatim; the implicit (false, false) values must
+        // not narrow allow_dangerous_sql on upgrade.
+        assert_eq!(effective_database_execution_policy(&policy, "conn", "db"), (false, true));
     }
 
     #[test]
