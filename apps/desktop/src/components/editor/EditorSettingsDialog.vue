@@ -90,6 +90,7 @@ import {
   type UpdateDownloadSource,
   type CustomThemeColors,
   type CustomTheme,
+  type McpConnectionPolicy,
   type ClickTableNavigationTarget,
   type SqlCompletionTriggerMode,
   SIDEBAR_INDENT_MIN,
@@ -2215,7 +2216,16 @@ async function saveMcpPolicy(partial: {
   allowDangerousSql?: boolean;
   allowedConnectionIds?: string[] | null;
   allowedToolNames?: string[] | null;
-  connectionPolicies?: { connectionId: string; readOnly: boolean; allowDangerousSql: boolean; executionModeConfigured: boolean; databaseScope: "all" | "selected" | "none"; allowedDatabases: string[]; databasePolicies: { databaseName: string; readOnly: boolean; allowDangerousSql: boolean }[] }[];
+  connectionPolicies?: {
+    connectionId: string;
+    readOnly: boolean;
+    allowDangerousSql: boolean;
+    executionModeConfigured: boolean;
+    executionModePolicyVersion: number | null;
+    databaseScope: "all" | "selected" | "none";
+    allowedDatabases: string[];
+    databasePolicies: { databaseName: string; readOnly: boolean; allowDangerousSql: boolean }[];
+  }[];
   queryTimeoutSecs?: number | null;
 }) {
   if (mcpPolicyControlsDisabled.value) return;
@@ -2323,6 +2333,31 @@ function mcpConnectionExecutionMode(connectionId: string): McpConnectionExecutio
   return rule.allowDangerousSql ? "high_risk_write" : "safe_write";
 }
 
+function mcpExecutionModeRank(mode: McpConnectionExecutionMode): number {
+  return mode === "read_only" ? 0 : mode === "safe_write" ? 1 : 2;
+}
+
+function migrateLegacyMcpConnectionPolicy(policy: McpConnectionPolicy) {
+  const connectionMode = mcpConnectionExecutionMode(policy.connectionId);
+  const legacyMode = connectionMode === "inherit" ? mcpExecutionMode.value : connectionMode;
+  const effectiveMode = mcpExecutionModeRank(legacyMode) < mcpExecutionModeRank(mcpExecutionMode.value) ? legacyMode : mcpExecutionMode.value;
+  const databasePolicies = policy.databasePolicies.map((databasePolicy) => {
+    const databaseMode: McpConnectionExecutionMode = databasePolicy.readOnly ? "read_only" : databasePolicy.allowDangerousSql ? "high_risk_write" : "safe_write";
+    const effectiveDatabaseMode = mcpExecutionModeRank(databaseMode) < mcpExecutionModeRank(effectiveMode) ? databaseMode : effectiveMode;
+    return {
+      ...databasePolicy,
+      readOnly: effectiveDatabaseMode === "read_only",
+      allowDangerousSql: effectiveDatabaseMode === "high_risk_write",
+    };
+  });
+  return {
+    readOnly: effectiveMode === "read_only",
+    allowDangerousSql: effectiveMode === "high_risk_write",
+    executionModeConfigured: true,
+    databasePolicies,
+  };
+}
+
 function mcpExecutionModeLabel(mode: McpConnectionExecutionMode): string {
   return t(mode === "read_only" ? "settings.mcpExecutionModeReadOnly" : mode === "safe_write" ? "settings.mcpExecutionModeSafeWrite" : "settings.mcpExecutionModeHighRiskWrite");
 }
@@ -2360,14 +2395,25 @@ const filteredMcpPermissionPreviewRows = computed(() => {
 function onMcpConnectionExecutionModeChange(connectionId: string, mode: McpConnectionExecutionMode | "inherit") {
   const existing = settingsStore.mcpGlobalPolicy.connectionPolicies.find((item) => item.connectionId === connectionId);
   const rules = settingsStore.mcpGlobalPolicy.connectionPolicies.filter((item) => item.connectionId !== connectionId);
+  const migrated = existing && existing.executionModePolicyVersion !== 1 ? migrateLegacyMcpConnectionPolicy(existing) : null;
+  const selectedMode =
+    migrated && mode === "inherit"
+      ? migrated
+      : {
+          readOnly: mode === "read_only",
+          allowDangerousSql: mode === "high_risk_write",
+          executionModeConfigured: mode !== "inherit",
+          databasePolicies: migrated?.databasePolicies ?? existing?.databasePolicies ?? [],
+        };
   const next = {
     connectionId,
-    readOnly: mode === "read_only",
-    allowDangerousSql: mode === "high_risk_write",
-    executionModeConfigured: mode !== "inherit",
+    readOnly: selectedMode.readOnly,
+    allowDangerousSql: selectedMode.allowDangerousSql,
+    executionModeConfigured: selectedMode.executionModeConfigured,
+    executionModePolicyVersion: 1,
     databaseScope: existing?.databaseScope ?? ("all" as const),
     allowedDatabases: existing?.allowedDatabases ?? [],
-    databasePolicies: existing?.databasePolicies ?? [],
+    databasePolicies: selectedMode.databasePolicies,
   };
   if (next.executionModeConfigured || next.databaseScope !== "all") rules.push(next);
   void saveMcpPolicy({ connectionPolicies: rules });

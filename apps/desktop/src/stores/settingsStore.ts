@@ -64,6 +64,7 @@ export interface McpConnectionPolicy {
   readOnly: boolean;
   allowDangerousSql: boolean;
   executionModeConfigured: boolean;
+  executionModePolicyVersion: number | null;
   databaseScope: "all" | "selected" | "none";
   allowedDatabases: string[];
   databasePolicies: McpDatabasePolicy[];
@@ -146,6 +147,7 @@ export function normalizeMcpGlobalPolicy(policy: Partial<McpGlobalPolicy> | null
         readOnly: rule.readOnly === true,
         allowDangerousSql: rule.readOnly !== true && rule.allowDangerousSql === true,
         executionModeConfigured: rule.executionModeConfigured !== false,
+        executionModePolicyVersion: rule.executionModePolicyVersion === 1 ? 1 : null,
         databaseScope,
         allowedDatabases,
         databasePolicies,

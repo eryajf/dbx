@@ -1471,16 +1471,8 @@ fn effective_policy_for_database(
     database: &str,
 ) -> McpGlobalPolicy {
     let mut policy = policy.clone();
-    if let Some(rule) = policy.connection_policies.iter().find(|rule| rule.connection_id == connection.id) {
-        if rule.execution_mode_configured {
-            policy.read_only = rule.read_only;
-            policy.allow_dangerous_sql = !rule.read_only && rule.allow_dangerous_sql;
-        }
-        if let Some(database_policy) = rule.database_policies.iter().find(|rule| rule.database_name == database) {
-            policy.read_only = database_policy.read_only;
-            policy.allow_dangerous_sql = !database_policy.read_only && database_policy.allow_dangerous_sql;
-        }
-    }
+    (policy.read_only, policy.allow_dangerous_sql) =
+        dbx_core::mcp_policy::effective_database_execution_policy(&policy, &connection.id, database);
     // This returned value is carried through the request only; retaining a
     // complete policy document here could accidentally be reused for another
     // connection by a future caller.
@@ -1499,23 +1491,8 @@ fn ensure_sql_database_execution_scope(
     active_database: &str,
     sql: &str,
 ) -> Result<(), CallToolResult> {
-    let Some(rule) = policy.connection_policies.iter().find(|rule| rule.connection_id == connection.id) else {
-        return Ok(());
-    };
-    if rule.database_policies.is_empty()
-        || !sql_references_disallowed_database(
-            sql,
-            &connection.db_type,
-            active_database,
-            &[active_database.to_string()],
-        )
-    {
-        return Ok(());
-    }
-    Err(tool_error(
-        "DATABASE_EXECUTION_POLICY_OUT_OF_SCOPE",
-        "SQL cannot reference another database while database-specific MCP execution permissions are configured.",
-    ))
+    dbx_core::mcp_policy::ensure_sql_database_execution_scope(policy, connection, active_database, sql)
+        .map_err(|error| tool_error("DATABASE_EXECUTION_POLICY_OUT_OF_SCOPE", error))
 }
 
 fn mcp_permissions(
@@ -1613,20 +1590,15 @@ fn validate_mongo_command(
         ));
     }
     if let MongoCommand::Aggregate { pipeline, .. } = &command {
+        dbx_core::mcp_policy::ensure_mongo_database_execution_scope(policy, &connection.id, database, pipeline)
+            .map_err(|error| {
+                let (code, message) = error
+                    .strip_prefix("QUERY_ERROR: ")
+                    .map_or(("DATABASE_EXECUTION_POLICY_OUT_OF_SCOPE", error.as_str()), |message| ("QUERY_ERROR", message));
+                tool_error(code, message)
+            })?;
         for target_database in mongo_aggregate_target_databases(pipeline, database)? {
             ensure_database_in_scope(database_scope, &target_database)?;
-            if target_database != database
-                && policy
-                    .connection_policies
-                    .iter()
-                    .find(|rule| rule.connection_id == connection.id)
-                    .is_some_and(|rule| !rule.database_policies.is_empty())
-            {
-                return Err(tool_error(
-                    "DATABASE_EXECUTION_POLICY_OUT_OF_SCOPE",
-                    "MongoDB aggregation cannot target another database while database-specific MCP execution permissions are configured.",
-                ));
-            }
         }
     }
     let effective_policy = effective_policy_for_database(policy, connection, database);
@@ -1663,36 +1635,8 @@ fn validate_mongo_command(
 
 #[allow(clippy::result_large_err)]
 fn mongo_aggregate_target_databases(pipeline: &str, active_database: &str) -> Result<Vec<String>, CallToolResult> {
-    let stages = serde_json::from_str::<serde_json::Value>(pipeline)
-        .ok()
-        .and_then(|value| value.as_array().cloned())
-        .ok_or_else(|| tool_error("QUERY_ERROR", "MongoDB aggregate pipeline must be a JSON array."))?;
-    let mut databases = Vec::new();
-    for stage in stages {
-        let Some(stage) = stage.as_object() else { continue };
-        for key in ["$out", "$merge"] {
-            let Some(target) = stage.get(key) else { continue };
-            let target_database = match target {
-                serde_json::Value::String(_) => active_database.to_string(),
-                serde_json::Value::Object(target) => target
-                    .get("db")
-                    .or_else(|| {
-                        target.get("into").and_then(serde_json::Value::as_object).and_then(|into| into.get("db"))
-                    })
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(active_database)
-                    .to_string(),
-                _ => {
-                    return Err(tool_error(
-                        "QUERY_ERROR",
-                        "MongoDB aggregate output target must be a string or object.",
-                    ))
-                }
-            };
-            databases.push(target_database);
-        }
-    }
-    Ok(databases)
+    dbx_core::mcp_policy::mongo_pipeline_output_databases(pipeline, active_database)
+        .map_err(|error| tool_error("QUERY_ERROR", error.strip_prefix("QUERY_ERROR: ").unwrap_or(&error)))
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
@@ -2332,6 +2276,7 @@ mod tests {
                 read_only: false,
                 allow_dangerous_sql: false,
                 execution_mode_configured: true,
+                execution_mode_policy_version: Some(dbx_core::mcp_policy::MCP_EXECUTION_POLICY_VERSION),
                 database_scope: McpDatabaseScope::Selected,
                 allowed_databases: vec!["operations".to_string(), "reporting".to_string()],
                 database_policies: vec![
@@ -2383,6 +2328,7 @@ mod tests {
                     allowed_databases: vec!["aa".to_string(), "aaa".to_string(), "abc".to_string()],
                     database_policies: Vec::new(),
                     execution_mode_configured: false,
+                    execution_mode_policy_version: None,
                 }],
                 ..Default::default()
             },

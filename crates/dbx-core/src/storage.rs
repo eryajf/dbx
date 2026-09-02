@@ -238,9 +238,8 @@ pub struct McpGlobalPolicy {
     /// allowlist and is enforced independently of connection permissions.
     #[serde(default)]
     pub allowed_tool_names: Option<Vec<String>>,
-    /// Per-connection rules may only reduce the global execution ceiling.
-    /// Keeping this in the global document preserves compatibility with the
-    /// existing policy API while allowing each exposed connection to be safer.
+    /// Per-connection execution defaults and database overrides. Rules without
+    /// the current execution policy version remain legacy ceilings.
     #[serde(default)]
     pub connection_policies: Vec<McpConnectionPolicy>,
     #[serde(default)]
@@ -259,17 +258,21 @@ pub struct McpConnectionPolicy {
     /// permits writes.
     #[serde(default)]
     pub read_only: bool,
-    /// Enables high-risk SQL only when the MCP-wide policy also enables it.
-    /// The default is deliberately false, so adding a connection rule narrows
-    /// a full-access global policy to safe writes unless chosen otherwise.
+    /// Enables high-risk SQL for this connection. Legacy rules require this
+    /// to remain within the global ceiling; versioned rules use it as the
+    /// connection default and still honor independent connection protections.
     #[serde(default)]
     pub allow_dangerous_sql: bool,
     /// Whether the operation ceiling is explicitly overridden for this
-    /// connection. Missing on older saved policies defaults to true so their
-    /// existing safe-write/read-only behavior is preserved; database-only
-    /// rules leave it false and inherit the global ceiling.
+    /// connection. Missing on older saved policies defaults to true for
+    /// deserialization compatibility; the version marker determines whether
+    /// those fields use legacy ceiling or current override semantics.
     #[serde(default = "default_mcp_connection_execution_mode_configured")]
     pub execution_mode_configured: bool,
+    /// Rules without this marker retain the legacy ceiling behavior. New UI
+    /// writes use version 1 for scoped override semantics.
+    #[serde(default)]
+    pub execution_mode_policy_version: Option<u8>,
     /// Limits which databases below this connection can be reached by MCP.
     /// The default preserves existing installations: all databases remain
     /// available until a user explicitly narrows the scope.
@@ -431,6 +434,15 @@ impl McpGlobalPolicy {
                         }
                         current.execution_mode_configured = true;
                     }
+                    current.execution_mode_policy_version =
+                        match (current.execution_mode_policy_version, rule.execution_mode_policy_version) {
+                            (Some(left), Some(right))
+                                if left == crate::mcp_policy::MCP_EXECUTION_POLICY_VERSION && right == left =>
+                            {
+                                Some(left)
+                            }
+                            _ => None,
+                        };
                     let (scope, databases) = intersect_mcp_database_scopes(
                         current.database_scope,
                         &current.allowed_databases,
@@ -447,6 +459,7 @@ impl McpGlobalPolicy {
                     read_only: rule.read_only,
                     allow_dangerous_sql: rule.allow_dangerous_sql,
                     execution_mode_configured: rule.execution_mode_configured,
+                    execution_mode_policy_version: rule.execution_mode_policy_version,
                     database_scope: rule.database_scope,
                     allowed_databases: normalize_mcp_database_names(&rule.allowed_databases),
                     database_policies: normalize_mcp_database_policies(&rule.database_policies),

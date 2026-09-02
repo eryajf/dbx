@@ -81,6 +81,7 @@ function policyFor(connectionId: string): McpConnectionPolicy {
       readOnly: false,
       allowDangerousSql: false,
       executionModeConfigured: false,
+      executionModePolicyVersion: null,
       databaseScope: "all",
       allowedDatabases: [],
       databasePolicies: [],
@@ -90,7 +91,9 @@ function policyFor(connectionId: string): McpConnectionPolicy {
 
 function updateSelectedPolicy(patch: Partial<McpConnectionPolicy>) {
   if (props.disabled || !selectedConnectionId.value) return;
-  const next = { ...policyFor(selectedConnectionId.value), ...patch };
+  const existing = policyFor(selectedConnectionId.value);
+  const migration = existing.executionModePolicyVersion === 1 ? {} : { ...promoteLegacyConnectionDefault(existing), executionModePolicyVersion: 1 as const };
+  const next = { ...existing, ...migration, ...patch };
   const policies = props.connectionPolicies.filter((policy) => policy.connectionId !== selectedConnectionId.value);
   emit("update:connectionPolicies", [...policies, next]);
 }
@@ -152,8 +155,37 @@ function executionModeLabel(mode: ExecutionMode): string {
   return t(mode === "read_only" ? "settings.mcpExecutionModeReadOnly" : mode === "safe_write" ? "settings.mcpExecutionModeSafeWrite" : "settings.mcpExecutionModeHighRiskWrite");
 }
 
+function executionModeRank(mode: DatabaseExecutionMode): number {
+  return mode === "read_only" ? 0 : mode === "safe_write" ? 1 : mode === "high_risk_write" ? 2 : 3;
+}
+
+function promoteLegacyConnectionDefault(policy: McpConnectionPolicy): Pick<McpConnectionPolicy, "readOnly" | "allowDangerousSql" | "executionModeConfigured" | "databasePolicies"> {
+  if (policy.executionModePolicyVersion === 1) {
+    return { readOnly: policy.readOnly, allowDangerousSql: policy.allowDangerousSql, executionModeConfigured: policy.executionModeConfigured, databasePolicies: policy.databasePolicies };
+  }
+  const legacyMode = connectionExecutionMode();
+  const effectiveMode = executionModeRank(legacyMode) < executionModeRank(props.globalExecutionMode) ? legacyMode : props.globalExecutionMode;
+  const databasePolicies = policy.databasePolicies.map((databasePolicy) => {
+    const databaseMode = databasePolicy.readOnly ? "read_only" : databasePolicy.allowDangerousSql ? "high_risk_write" : "safe_write";
+    const effectiveDatabaseMode = executionModeRank(databaseMode) < executionModeRank(effectiveMode) ? databaseMode : effectiveMode;
+    return {
+      ...databasePolicy,
+      readOnly: effectiveDatabaseMode === "read_only",
+      allowDangerousSql: effectiveDatabaseMode === "high_risk_write",
+    };
+  });
+  return {
+    readOnly: effectiveMode === "read_only",
+    allowDangerousSql: effectiveMode === "high_risk_write",
+    executionModeConfigured: true,
+    databasePolicies,
+  };
+}
+
 function setDatabaseExecutionMode(database: string, mode: DatabaseExecutionMode) {
-  const policies = selectedDatabasePolicies.value.filter((policy) => policy.databaseName !== database);
+  const existing = policyFor(selectedConnectionId.value);
+  const migrated = promoteLegacyConnectionDefault(existing);
+  const policies = migrated.databasePolicies.filter((policy) => policy.databaseName !== database);
   if (mode !== "inherit") {
     policies.push({
       databaseName: database,
@@ -161,7 +193,7 @@ function setDatabaseExecutionMode(database: string, mode: DatabaseExecutionMode)
       allowDangerousSql: mode === "high_risk_write",
     });
   }
-  updateSelectedPolicy({ databasePolicies: policies });
+  updateSelectedPolicy({ ...promoteLegacyConnectionDefault(existing), databasePolicies: policies, executionModePolicyVersion: 1 });
 }
 
 function addManualDatabase() {

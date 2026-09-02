@@ -225,6 +225,8 @@ Use **Settings → MCP** to define the effective scope in this order:
 
 The most specific execution setting wins, but an allowed tool still cannot bypass a hidden connection, database scope, connection read-only status, production protection, or the database account's own privileges. Requests for a database outside the selected scope are rejected with `DATABASE_OUT_OF_SCOPE`. When database-specific execution permissions exist, cross-database SQL and MongoDB aggregation writes are rejected to prevent bypassing those limits.
 
+During upgrade, saved connection rules without an execution policy version keep the previous ceiling semantics and cannot widen the global permission. Only a rule saved by the current Settings UI is marked for scoped override semantics; editing an existing legacy rule first carries its effective ceiling forward before enabling the new behavior.
+
 Updated servers do not let `DBX_MCP_ALLOW_WRITES` or `DBX_MCP_ALLOW_DANGEROUS_SQL` widen the DBX policy. For upgrade compatibility, `DBX_MCP_ALLOW_WRITES=0` (or `false`) still keeps MCP read-only until a central policy is saved for the first time. After that, the central policy is authoritative and the legacy permission variables are ignored. Legacy connection-scope variables can only narrow the DBX allowlist.
 
 | Variable | Purpose |
