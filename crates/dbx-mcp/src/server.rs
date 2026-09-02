@@ -1594,7 +1594,9 @@ fn validate_mongo_command(
             .map_err(|error| {
                 let (code, message) = error
                     .strip_prefix("QUERY_ERROR: ")
-                    .map_or(("DATABASE_EXECUTION_POLICY_OUT_OF_SCOPE", error.as_str()), |message| ("QUERY_ERROR", message));
+                    .map_or(("DATABASE_EXECUTION_POLICY_OUT_OF_SCOPE", error.as_str()), |message| {
+                        ("QUERY_ERROR", message)
+                    });
                 tool_error(code, message)
             })?;
         for target_database in mongo_aggregate_target_databases(pipeline, database)? {
