@@ -110,6 +110,9 @@ const isClassicLayout = computed(() => settingsStore.editorSettings.appLayout ==
 const isVerticalLayout = computed(() => settingsStore.editorSettings.tabPlacement === "left" || settingsStore.editorSettings.tabPlacement === "right");
 const isWrapLayout = computed(() => !isVerticalLayout.value && settingsStore.editorSettings.tabLayout === "wrap");
 const isManualTabOrder = computed(() => settingsStore.editorSettings.tabSortMode === "manual");
+// The icon-only collapse only exists in the vertical toolbar; horizontal
+// placements must ignore the persisted collapse state entirely.
+const isTabBarCollapsed = computed(() => isVerticalLayout.value && !!props.tabBarCollapsed);
 const tabBarStyle = computed<CSSProperties | undefined>(() => {
   if (!isVerticalLayout.value) return undefined;
   if (props.tabBarCollapsed) return { width: "3.5rem", flex: "0 0 3.5rem" };
@@ -1230,10 +1233,10 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
               >
                 <span class="tab-group-header-content">
                   <span class="tab-group-marker" aria-hidden="true" />
-                  <Pin v-if="tab.pinned && !tabBarCollapsed" class="tab-group-pin" aria-hidden="true" />
+                  <Pin v-if="tab.pinned && !isTabBarCollapsed" class="tab-group-pin" aria-hidden="true" />
                   <ChevronDown class="tab-group-chevron" :class="isTabGroupCollapsed(tab) ? '-rotate-90' : ''" aria-hidden="true" />
-                  <span v-if="!tabBarCollapsed" class="tab-group-label">{{ tabGroupLabel(tab) }}</span>
-                  <span v-if="isTabGroupCollapsed(tab) && !tabBarCollapsed" class="tab-group-count">{{ tabsInDisplayGroup(tab).length }}</span>
+                  <span v-if="!isTabBarCollapsed" class="tab-group-label">{{ tabGroupLabel(tab) }}</span>
+                  <span v-if="isTabGroupCollapsed(tab) && !isTabBarCollapsed" class="tab-group-count">{{ tabsInDisplayGroup(tab).length }}</span>
                 </span>
               </button>
             </CustomContextMenu>
@@ -1288,9 +1291,9 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
                           <Code2 v-else class="h-3.5 w-3.5" />
                         </span>
                       </TabExecutionStatus>
-                      <span v-if="tabBarCollapsed && isDirtyTab(tab)" class="compact-dirty-tab-marker" aria-hidden="true" />
+                      <span v-if="isTabBarCollapsed && isDirtyTab(tab)" class="compact-dirty-tab-marker" aria-hidden="true" />
                       <input
-                        v-if="editingTabId === tab.id && !tabBarCollapsed"
+                        v-if="editingTabId === tab.id && !isTabBarCollapsed"
                         v-model="editingTitle"
                         :data-tab-title-input="tab.id"
                         :aria-label="t('contextMenu.renameTab')"
@@ -1301,12 +1304,12 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
                         @keydown.escape.prevent="cancelRenameTab"
                         @blur="commitRenameTab(tab)"
                       />
-                      <span v-else-if="!tabBarCollapsed" class="inline-flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+                      <span v-else-if="!isTabBarCollapsed" class="inline-flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
                         <span v-if="isDirtyTab(tab)" aria-hidden="true" class="dirty-tab-marker">*</span>
                         <span class="min-w-0 flex-1 truncate" :style="tabTitleStyle(tab)">{{ tabTitleText(tab) }}</span>
                       </span>
-                      <ReadOnlySessionControl v-if="!tabBarCollapsed" :connection-id="tab.connectionId" compact />
-                      <button v-if="!tabBarCollapsed" class="rounded hover:bg-muted-foreground/20 p-0.5 shrink-0" @click.stop="queryStore.closeTab(tab.id)">
+                      <ReadOnlySessionControl v-if="!isTabBarCollapsed" :connection-id="tab.connectionId" compact />
+                      <button v-if="!isTabBarCollapsed" class="rounded hover:bg-muted-foreground/20 p-0.5 shrink-0" @click.stop="queryStore.closeTab(tab.id)">
                         <X class="h-3 w-3" />
                       </button>
                     </div>
@@ -1342,8 +1345,8 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
                 <span class="shrink-0 text-sky-600 dark:text-sky-400">
                   <Settings class="h-3.5 w-3.5" />
                 </span>
-                <span v-if="!tabBarCollapsed" class="min-w-0 truncate flex-1">{{ t("settings.title") }}</span>
-                <button v-if="!tabBarCollapsed" class="rounded hover:bg-muted-foreground/20 p-0.5 shrink-0" @click.stop="emit('close-settings-page')">
+                <span v-if="!isTabBarCollapsed" class="min-w-0 truncate flex-1">{{ t("settings.title") }}</span>
+                <button v-if="!isTabBarCollapsed" class="rounded hover:bg-muted-foreground/20 p-0.5 shrink-0" @click.stop="emit('close-settings-page')">
                   <X class="h-3 w-3" />
                 </button>
               </div>
@@ -1370,11 +1373,11 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
                 <span class="shrink-0 text-amber-600 dark:text-amber-400">
                   <Package class="h-3.5 w-3.5" />
                 </span>
-                <span v-if="!tabBarCollapsed" class="min-w-0 truncate flex-1">{{ t("toolbar.driverManager") }}</span>
-                <span v-if="!tabBarCollapsed && (agentDriverUpdateCount ?? 0) > 0" class="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-medium leading-none text-white" :aria-label="t('toolbar.updatableDriverCount')">
+                <span v-if="!isTabBarCollapsed" class="min-w-0 truncate flex-1">{{ t("toolbar.driverManager") }}</span>
+                <span v-if="!isTabBarCollapsed && (agentDriverUpdateCount ?? 0) > 0" class="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-medium leading-none text-white" :aria-label="t('toolbar.updatableDriverCount')">
                   {{ (agentDriverUpdateCount ?? 0) > 99 ? "99+" : agentDriverUpdateCount }}
                 </span>
-                <button v-if="!tabBarCollapsed" class="rounded hover:bg-muted-foreground/20 p-0.5 shrink-0" @click.stop="emit('close-driver-store')">
+                <button v-if="!isTabBarCollapsed" class="rounded hover:bg-muted-foreground/20 p-0.5 shrink-0" @click.stop="emit('close-driver-store')">
                   <X class="h-3 w-3" />
                 </button>
               </div>
@@ -1473,10 +1476,10 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
               >
                 <span class="tab-group-header-content">
                   <span class="tab-group-marker" aria-hidden="true" />
-                  <Pin v-if="!tabBarCollapsed" class="tab-group-pin" aria-hidden="true" />
+                  <Pin v-if="!isTabBarCollapsed" class="tab-group-pin" aria-hidden="true" />
                   <ChevronDown class="tab-group-chevron" :class="isTabGroupCollapsed(tab) ? '-rotate-90' : ''" aria-hidden="true" />
-                  <span v-if="!tabBarCollapsed" class="tab-group-label">{{ tabGroupLabel(tab) }}</span>
-                  <span v-if="isTabGroupCollapsed(tab) && !tabBarCollapsed" class="tab-group-count">{{ tabsInDisplayGroup(tab).length }}</span>
+                  <span v-if="!isTabBarCollapsed" class="tab-group-label">{{ tabGroupLabel(tab) }}</span>
+                  <span v-if="isTabGroupCollapsed(tab) && !isTabBarCollapsed" class="tab-group-count">{{ tabsInDisplayGroup(tab).length }}</span>
                 </span>
               </button>
             </CustomContextMenu>
@@ -1531,9 +1534,9 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
                           <Code2 v-else class="h-3.5 w-3.5" />
                         </span>
                       </TabExecutionStatus>
-                      <span v-if="tabBarCollapsed && isDirtyTab(tab)" class="compact-dirty-tab-marker" aria-hidden="true" />
+                      <span v-if="isTabBarCollapsed && isDirtyTab(tab)" class="compact-dirty-tab-marker" aria-hidden="true" />
                       <input
-                        v-if="editingTabId === tab.id && !tabBarCollapsed"
+                        v-if="editingTabId === tab.id && !isTabBarCollapsed"
                         v-model="editingTitle"
                         :data-tab-title-input="tab.id"
                         :aria-label="t('contextMenu.renameTab')"
@@ -1544,15 +1547,15 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
                         @keydown.escape.prevent="cancelRenameTab"
                         @blur="commitRenameTab(tab)"
                       />
-                      <span v-else-if="!tabBarCollapsed" class="inline-flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden text-foreground">
+                      <span v-else-if="!isTabBarCollapsed" class="inline-flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden text-foreground">
                         <span v-if="isDirtyTab(tab)" aria-hidden="true" class="dirty-tab-marker">*</span>
                         <span class="min-w-0 flex-1 truncate" :style="tabTitleStyle(tab)">{{ tabTitleText(tab) }}</span>
                       </span>
-                      <ReadOnlySessionControl v-if="!tabBarCollapsed" :connection-id="tab.connectionId" compact />
-                      <button v-if="!tabBarCollapsed" class="rounded p-0.5 text-primary hover:bg-muted-foreground/20 shrink-0" :aria-label="t('contextMenu.unfixTab')" :title="t('contextMenu.unfixTab')" @click.stop="queryStore.togglePinnedTab(tab.id)">
+                      <ReadOnlySessionControl v-if="!isTabBarCollapsed" :connection-id="tab.connectionId" compact />
+                      <button v-if="!isTabBarCollapsed" class="rounded p-0.5 text-primary hover:bg-muted-foreground/20 shrink-0" :aria-label="t('contextMenu.unfixTab')" :title="t('contextMenu.unfixTab')" @click.stop="queryStore.togglePinnedTab(tab.id)">
                         <Pin class="h-3 w-3 fill-current" aria-hidden="true" />
                       </button>
-                      <button v-if="!tabBarCollapsed" class="rounded hover:bg-muted-foreground/20 p-0.5 shrink-0" @click.stop="queryStore.closeTab(tab.id)">
+                      <button v-if="!isTabBarCollapsed" class="rounded hover:bg-muted-foreground/20 p-0.5 shrink-0" @click.stop="queryStore.closeTab(tab.id)">
                         <X class="h-3 w-3" />
                       </button>
                     </div>
@@ -1624,7 +1627,7 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
         </Popover>
       </div>
     </div>
-    <div v-if="isVerticalLayout && !tabBarCollapsed" class="panel-resize-handle" :class="settingsStore.editorSettings.tabPlacement === 'right' ? 'panel-resize-handle--left' : 'panel-resize-handle--right'" @mousedown="emit('start-resize', $event)" />
+    <div v-if="!isTabBarCollapsed" class="panel-resize-handle" :class="settingsStore.editorSettings.tabPlacement === 'right' ? 'panel-resize-handle--left' : 'panel-resize-handle--right'" @mousedown="emit('start-resize', $event)" />
   </div>
 
   <Dialog :open="tabGroupEditorOpen" @update:open="tabGroupEditorOpen = $event">

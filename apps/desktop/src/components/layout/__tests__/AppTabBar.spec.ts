@@ -202,11 +202,20 @@ describe("AppTabBar collapsible groups", () => {
     expect(tabBarSource).toContain('return { width: "3.5rem", flex: "0 0 3.5rem" };');
     expect(tabBarSource).toContain('<component :is="tabBarCollapseIcon"');
     expect(tabBarSource).toContain("@click=\"emit('toggle-collapse')\"");
-    expect(tabBarSource).toContain('v-if="isVerticalLayout && !tabBarCollapsed" class="panel-resize-handle"');
+    expect(tabBarSource).toContain('v-if="!isTabBarCollapsed" class="panel-resize-handle"');
     expect(tabBarSource).toContain(".vertical-tab-layout--collapsed .app-tab-pill");
     expect(tabBarSource).toContain(".vertical-tab-layout.vertical-tab-layout--collapsed .tab-group-tab::before");
-    expect(tabBarSource.match(/v-if="tabBarCollapsed && isDirtyTab\(tab\)"/g)).toHaveLength(2);
+    expect(tabBarSource.match(/v-if="isTabBarCollapsed && isDirtyTab\(tab\)"/g)).toHaveLength(2);
     expect(tabBarSource).toMatch(/\(collapsed\) => \{\s*if \(collapsed\) tabSearchQuery\.value = "";/);
+  });
+
+  it("keeps horizontal placements immune to the persisted vertical collapse state", () => {
+    expect(tabBarSource).toContain("const isTabBarCollapsed = computed(() => isVerticalLayout.value && !!props.tabBarCollapsed);");
+    expect(tabBarSource).not.toContain('v-else-if="!tabBarCollapsed"');
+    expect(tabBarSource).not.toContain('v-if="!tabBarCollapsed" class="min-w-0 truncate');
+    expect(tabBarSource).not.toContain('v-if="tabBarCollapsed && isDirtyTab');
+    // The only raw-prop guards left render inside the vertical-only toolbar.
+    expect(tabBarSource.match(/!tabBarCollapsed/g)).toHaveLength(3);
   });
 
   it("keeps only grouping and collapse in the compact vertical toolbar", () => {
@@ -278,7 +287,7 @@ describe("AppTabBar collapsible groups", () => {
 
   it("removes the unexplained fixed-tab divider from vertical placement", () => {
     expect(tabBarSource).toContain("isVerticalLayout ? 'max-h-[40%] flex-col bg-background pt-1'");
-    expect(tabBarSource).toContain('<Pin v-if="!tabBarCollapsed" class="tab-group-pin" aria-hidden="true" />');
+    expect(tabBarSource).toContain('<Pin v-if="!isTabBarCollapsed" class="tab-group-pin" aria-hidden="true" />');
   });
 
   it("uses a soft active shadow and a single indented rail for sidebar groups", () => {
