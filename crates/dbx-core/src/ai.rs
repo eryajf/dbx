@@ -3,7 +3,7 @@ use futures::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
@@ -313,6 +313,14 @@ pub struct AiChatSelectionState {
     pub effort_preferences: Vec<AiModelEffortPreference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_mode: Option<AiAssistantMode>,
+    /// Prompt template ids auto-applied when the AI panel opens, keyed by
+    /// connection db_type. BTreeMap keeps serialized key order stable.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub default_templates_by_db_type: BTreeMap<String, Vec<String>>,
+    /// Prompt template ids from the most recent send, keyed by connection
+    /// db_type; used as fallback when no defaults are configured.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub last_used_templates_by_db_type: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for AiChatSelectionState {
@@ -322,6 +330,8 @@ impl Default for AiChatSelectionState {
             active: None,
             effort_preferences: Vec::new(),
             default_mode: None,
+            default_templates_by_db_type: BTreeMap::new(),
+            last_used_templates_by_db_type: BTreeMap::new(),
         }
     }
 }
@@ -1261,11 +1271,13 @@ fn decorate_chat_completion_body(body: &mut serde_json::Value, config: &AiConfig
 /// Kimi K2.5+ models (including K2.7-Code) handle thinking flags differently
 /// and reject the OpenAI-compatible `extra_body.chat_template_kwargs` toggle.
 ///
-/// Matches `kimi-k2.5`, `kimi-k2.6`, `kimi-k2.7-code`, K3+, and future versions,
-/// while excluding older K2 variants (`kimi-k2`, `kimi-k2-thinking`, etc.).
-/// Regex equivalent: /kimi-k(?:2\.[5-9]\d*|[3-9]\d*)/
+/// Matches current Kimi IDs and legacy catalog aliases while excluding older K2
+/// variants (`kimi-k2`, `kimi-k2-thinking`, etc.).
 fn is_kimi_model(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
+    if matches!(model.as_str(), "k3" | "kimi-for-coding" | "kimi-for-coding-highspeed") {
+        return true;
+    }
     if let Some(rest) = model.strip_prefix("kimi-k") {
         if rest.starts_with("2.") && rest.len() > 2 {
             // K2.x — the digit after "2." must be >= 5 (so K2.5+)
@@ -6679,6 +6691,9 @@ mod tests {
         assert!(is_kimi_model("kimi-k2.6"));
         assert!(is_kimi_model("kimi-k2.5"));
         assert!(is_kimi_model("kimi-k3"));
+        assert!(is_kimi_model("K3"));
+        assert!(is_kimi_model("kimi-for-coding"));
+        assert!(is_kimi_model("kimi-for-coding-highspeed"));
 
         // Older K2 variants should not skip OpenAI-compatible thinking toggles.
         assert!(!is_kimi_model("kimi-k2"));
@@ -6910,8 +6925,8 @@ mod tests {
     }
 
     #[test]
-    fn omits_extra_body_for_kimi_test_connection_body() {
-        let config = AiConfig {
+    fn omits_extra_body_for_kimi_model_aliases() {
+        let mut config = AiConfig {
             provider: AiProvider::OpenaiCompatible,
             api_key: "key".to_string(),
             auth_method: AiAuthMethod::Bearer,
@@ -6944,17 +6959,20 @@ mod tests {
             qoder_cli_path: None,
             qoder_cli_env: Default::default(),
         };
-        let mut body = serde_json::json!({
-            "model": &config.model,
-            "messages": [{ "role": "user", "content": TEST_PROMPT }],
-            "max_tokens": 16,
-            "stream": true,
-        });
+        for model in ["kimi-k2.5", "K3", "kimi-for-coding", "kimi-for-coding-highspeed"] {
+            config.model = model.to_string();
+            let mut body = serde_json::json!({
+                "model": &config.model,
+                "messages": [{ "role": "user", "content": TEST_PROMPT }],
+                "max_tokens": 16,
+                "stream": true,
+            });
 
-        apply_chat_completion_thinking_toggle(&mut body, &config);
+            apply_chat_completion_thinking_toggle(&mut body, &config);
 
-        assert!(body.get("extra_body").is_none());
-        assert!(body.get("reasoning_effort").is_none());
+            assert!(body.get("extra_body").is_none(), "{model}");
+            assert!(body.get("reasoning_effort").is_none(), "{model}");
+        }
     }
 
     #[test]

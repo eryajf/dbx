@@ -48,6 +48,7 @@ import type {
   SshConfigHostEntry,
   TunnelProfile,
 } from "@/types/database";
+import type { DetachedTabHandoff } from "@/lib/app/detachedTabHandoff";
 import { normalizeRustMongoCommand, type MongoCommand } from "@/lib/mongo/mongoShellCommand";
 import { BackendErrorException, type BackendError } from "@/lib/backend/errorUtils";
 import { decodeMeilisearchDocumentPage, decodeMeilisearchSearchResult, type MeilisearchDocumentPage, type MeilisearchDocumentPageWire, type MeilisearchSearchResult, type MeilisearchSearchWireResult } from "@/lib/backend/meilisearchTransport";
@@ -152,6 +153,7 @@ import type {
   ElasticsearchDeleteByQueryResult,
 } from "@/lib/backend/tauri";
 import type { QueryEditability } from "@/lib/sql/sqlAnalysis";
+import type { CsvQuoteMode } from "@/lib/export/csvQuoteMode";
 import { isTerminalTransferProgress } from "@/lib/backend/transferProgress";
 import type {
   DataGridColumnDistinctValuesSqlOptions,
@@ -1897,6 +1899,20 @@ export async function saveOpenTabsState(payload: OpenTabsStatePayload): Promise<
   await saveBrowserAppState("open_tabs", payload);
 }
 
+export async function saveDetachedTabHandoff(_tabId: string, _handoff: DetachedTabHandoff): Promise<void> {}
+
+export async function loadDetachedTabHandoff(_tabId: string): Promise<DetachedTabHandoff | null> {
+  return null;
+}
+
+export async function listDetachedTabHandoffs(): Promise<DetachedTabHandoff[]> {
+  return [];
+}
+
+export async function deleteDetachedTabHandoff(_tabId: string): Promise<void> {}
+
+export async function approveDetachedWindowClose(): Promise<void> {}
+
 export async function loadSavedSqlEditorPositions(): Promise<unknown[] | null> {
   const value = await loadBrowserAppState("saved_sql_editor_positions");
   return Array.isArray(value) ? value : null;
@@ -2580,9 +2596,9 @@ export async function cancelQueryResultExport(exportId: string, executionId?: st
   });
 }
 
-export async function exportQueryResultCsv(filePath: string, columns: string[], rows: readonly (readonly XlsxCellValue[])[]): Promise<void> {
+export async function exportQueryResultCsv(filePath: string, columns: string[], rows: readonly (readonly XlsxCellValue[])[], csvQuoteMode: CsvQuoteMode = "all"): Promise<void> {
   const { formatCsv } = await import("@/lib/export/exportFormats");
-  const content = formatCsv(columns, rows as (string | number | boolean | null)[][]);
+  const content = formatCsv(columns, rows as (string | number | boolean | null)[][], csvQuoteMode);
   const fileName = filePath.split(/[\\/]/).pop() || "export.csv";
   const blob = new Blob(["\uFEFF", content], {
     type: "text/csv;charset=utf-8",

@@ -32,6 +32,7 @@ import {
   Search,
   Settings,
   Sun,
+  Star,
   SunMoon,
   Terminal,
   Trash2,
@@ -40,6 +41,7 @@ import {
 } from "@lucide/vue";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import PasswordInput from "@/components/ui/PasswordInput.vue";
@@ -88,6 +90,7 @@ import {
   type TabPlacement,
   type TabSortMode,
   type UpdateDownloadSource,
+  type CsvQuoteMode,
   type CustomThemeColors,
   type CustomTheme,
   type McpConnectionPolicy,
@@ -207,6 +210,7 @@ import { MAX_QUERY_RESULT_MAX_ROWS } from "@/lib/dataGrid/queryResultRowLimit";
 import type { PromptTemplate } from "@/types/promptTemplate";
 import { GLOBAL_INSTRUCTIONS_MAX, PROMPT_TEMPLATE_CONTENT_MAX, PROMPT_TEMPLATE_NAME_MAX, promptTemplateCharacterCount } from "@/types/promptTemplate";
 import { METADATA_CACHE_HARD_MAX_MEMORY_MB, METADATA_CACHE_MIN_MEMORY_MB, normalizeMetadataCacheMemoryMb } from "@/lib/metadata/metadataRuntimeCache";
+import { databaseManifestEntry, manifestDatabaseTypes } from "@/lib/database/databaseDriverManifest";
 
 const { t } = useI18n();
 const { toast } = useToast();
@@ -545,6 +549,7 @@ const editSidebarShowTooltips = ref(settingsStore.editorSettings.sidebarShowTool
 const editSidebarIndent = ref(settingsStore.editorSettings.sidebarIndent);
 const editSidebarFontSize = ref(settingsStore.editorSettings.sidebarFontSize);
 const editExportBatchSize = ref(settingsStore.editorSettings.exportBatchSize);
+const editCsvQuoteMode = ref<CsvQuoteMode>(settingsStore.editorSettings.csvQuoteMode);
 const editGlobalDateTimeDisplayFormat = ref(settingsStore.editorSettings.globalDateTimeDisplayFormat);
 const editGlobalDateTimeExportFormat = ref(settingsStore.editorSettings.globalDateTimeExportFormat);
 const editGlobalDateTimeImportFormat = ref(settingsStore.editorSettings.globalDateTimeImportFormat);
@@ -695,6 +700,7 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     sidebarCopyTableNameIncludeSchema: editSidebarCopyTableNameIncludeSchema.value,
     redisKeyTemplates: normalizeRedisKeyTemplates(editRedisKeyTemplates.value),
     exportBatchSize: editExportBatchSize.value,
+    csvQuoteMode: editCsvQuoteMode.value,
     globalDateTimeDisplayFormat: editGlobalDateTimeDisplayFormat.value,
     globalDateTimeExportFormat: editGlobalDateTimeExportFormat.value,
     globalDateTimeImportFormat: editGlobalDateTimeImportFormat.value,
@@ -1099,6 +1105,7 @@ function syncEditorSettingsDraftFromStore() {
   editSidebarIndent.value = settingsStore.editorSettings.sidebarIndent;
   editSidebarFontSize.value = settingsStore.editorSettings.sidebarFontSize;
   editExportBatchSize.value = settingsStore.editorSettings.exportBatchSize;
+  editCsvQuoteMode.value = settingsStore.editorSettings.csvQuoteMode;
   editGlobalDateTimeDisplayFormat.value = settingsStore.editorSettings.globalDateTimeDisplayFormat;
   editGlobalDateTimeExportFormat.value = settingsStore.editorSettings.globalDateTimeExportFormat;
   editGlobalDateTimeImportFormat.value = settingsStore.editorSettings.globalDateTimeImportFormat;
@@ -1395,6 +1402,7 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editTableColumnTemplateRows.value = tableColumnTemplateRowsFromSettings(DEFAULT_EDITOR_SETTINGS.tableColumnTemplateFields);
     editRedisKeyTemplates.value = normalizeRedisKeyTemplates(DEFAULT_EDITOR_SETTINGS.redisKeyTemplates).join("\n");
     editExportBatchSize.value = DEFAULT_EDITOR_SETTINGS.exportBatchSize;
+    editCsvQuoteMode.value = DEFAULT_EDITOR_SETTINGS.csvQuoteMode;
     editGlobalDateTimeDisplayFormat.value = DEFAULT_EDITOR_SETTINGS.globalDateTimeDisplayFormat;
     editGlobalDateTimeExportFormat.value = DEFAULT_EDITOR_SETTINGS.globalDateTimeExportFormat;
     editGlobalDateTimeImportFormat.value = DEFAULT_EDITOR_SETTINGS.globalDateTimeImportFormat;
@@ -1504,6 +1512,7 @@ function resetAllDefaults() {
   editSidebarCopyTableNameIncludeSchema.value = DEFAULT_EDITOR_SETTINGS.sidebarCopyTableNameIncludeSchema;
   editRedisKeyTemplates.value = normalizeRedisKeyTemplates(DEFAULT_EDITOR_SETTINGS.redisKeyTemplates).join("\n");
   editExportBatchSize.value = DEFAULT_EDITOR_SETTINGS.exportBatchSize;
+  editCsvQuoteMode.value = DEFAULT_EDITOR_SETTINGS.csvQuoteMode;
   editGlobalDateTimeDisplayFormat.value = DEFAULT_EDITOR_SETTINGS.globalDateTimeDisplayFormat;
   editGlobalDateTimeExportFormat.value = DEFAULT_EDITOR_SETTINGS.globalDateTimeExportFormat;
   editGlobalDateTimeImportFormat.value = DEFAULT_EDITOR_SETTINGS.globalDateTimeImportFormat;
@@ -2283,6 +2292,8 @@ const mcpToolOptions = [
   { name: "dbx_list_databases", labelKey: "settings.mcpToolListDatabases" },
   { name: "dbx_list_tables", labelKey: "settings.mcpToolListTables" },
   { name: "dbx_describe_table", labelKey: "settings.mcpToolDescribeTable" },
+  { name: "dbx_list_routines", labelKey: "settings.mcpToolListRoutines" },
+  { name: "dbx_get_routine_source", labelKey: "settings.mcpToolGetRoutineSource" },
   { name: "dbx_get_schema_context", labelKey: "settings.mcpToolGetSchemaContext" },
   { name: "dbx_execute_query", labelKey: "settings.mcpToolExecuteQuery" },
   { name: "dbx_open_session", labelKey: "settings.mcpToolOpenSession" },
@@ -3353,12 +3364,37 @@ async function saveTemplateForm() {
 async function confirmDeleteTemplate(tpl: PromptTemplate) {
   try {
     await promptTemplateStore.remove(tpl.id);
+    // Keep the per-db_type default/last-used records free of the deleted id.
+    settingsStore.removeTemplateFromDefaultAndLastUsed(tpl.id);
     toast(t("ai.promptTemplateDeleted"));
   } catch (e: any) {
     toast(e?.message || String(e), 5000);
   } finally {
     templateDeleteConfirm.value = null;
   }
+}
+
+// Per-db_type default templates (issue #7649): a template can be marked as the
+// auto-applied default for any database type; the AI panel resolves these on
+// mount/namespace switch. Stored in the AI chat selection, not on the template row.
+const templateDefaultsOpenId = ref("");
+const dbTypeOptions = manifestDatabaseTypes();
+function defaultDbTypesForTemplate(templateId: string): string[] {
+  return Object.entries(settingsStore.aiDefaultTemplatesByDbType)
+    .filter(([, ids]) => ids.includes(templateId))
+    .map(([dbType]) => dbType)
+    .sort();
+}
+function templateHasDefault(dbType: string, templateId: string): boolean {
+  return settingsStore.aiDefaultTemplatesByDbType[dbType]?.includes(templateId) ?? false;
+}
+function toggleTemplateDefault(dbType: string, templateId: string) {
+  const current = settingsStore.aiDefaultTemplatesByDbType[dbType] ?? [];
+  const next = current.includes(templateId) ? current.filter((id) => id !== templateId) : [...current, templateId];
+  settingsStore.setDefaultTemplatesForDbType(dbType, next);
+}
+function dbTypeLabel(dbType: string): string {
+  return databaseManifestEntry(dbType as DatabaseType)?.label ?? dbType;
 }
 
 async function saveGlobalInstructions() {
@@ -6488,6 +6524,23 @@ onUnmounted(() => {
                 <div class="text-sm font-medium text-muted-foreground">
                   {{ t("settings.exportSection") }}
                 </div>
+                <div class="flex items-start justify-between gap-4">
+                  <div class="min-w-0 space-y-0.5">
+                    <Label for="csv-quote-mode">{{ t("settings.csvQuoteMode") }}</Label>
+                    <p class="text-xs text-muted-foreground">
+                      {{ t("settings.csvQuoteModeDescription") }}
+                    </p>
+                  </div>
+                  <Select v-model="editCsvQuoteMode">
+                    <SelectTrigger id="csv-quote-mode" class="h-8 w-44 shrink-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">{{ t("settings.csvQuoteModeAll") }}</SelectItem>
+                      <SelectItem value="necessary">{{ t("settings.csvQuoteModeNecessary") }}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div class="space-y-2">
                   <Label>{{ t("settings.exportBatchSize") }}</Label>
                   <div class="flex items-center gap-3">
@@ -7324,8 +7377,34 @@ onUnmounted(() => {
                         {{ tpl.name }}
                       </div>
                       <div class="text-xs text-muted-foreground truncate">{{ tpl.content.slice(0, 100) }}{{ tpl.content.length > 100 ? "..." : "" }}</div>
+                      <div v-if="defaultDbTypesForTemplate(tpl.id).length > 0" class="mt-1 flex flex-wrap gap-1">
+                        <Badge v-for="dbType in defaultDbTypesForTemplate(tpl.id)" :key="dbType" variant="secondary" class="px-1.5 py-0 text-[10px]">
+                          {{ dbTypeLabel(dbType) }}
+                        </Badge>
+                      </div>
                     </div>
                     <div class="flex items-center gap-1 shrink-0 ml-2">
+                      <Popover :open="templateDefaultsOpenId === tpl.id" @update:open="(open) => (templateDefaultsOpenId = open ? tpl.id : '')">
+                        <PopoverTrigger as-child>
+                          <Button type="button" size="sm" variant="ghost" :class="defaultDbTypesForTemplate(tpl.id).length > 0 ? 'text-amber-500' : ''" :title="t('ai.templateSetDefault')" :aria-label="t('ai.templateSetDefault')">
+                            <Star class="h-3.5 w-3.5" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="end" class="w-60 p-2">
+                          <p class="mb-1 px-1 text-xs font-medium">{{ t("ai.templateDefaultsTitle") }}</p>
+                          <div class="max-h-48 overflow-auto">
+                            <button v-for="dbType in dbTypeOptions" :key="dbType" type="button" class="flex w-full items-center gap-2 rounded-sm px-1 py-1 text-xs hover:bg-muted" @click="toggleTemplateDefault(dbType, tpl.id)">
+                              <div class="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border" :class="templateHasDefault(dbType, tpl.id) ? 'border-primary bg-primary text-primary-foreground' : ''">
+                                <Check v-if="templateHasDefault(dbType, tpl.id)" class="h-3 w-3" />
+                              </div>
+                              {{ dbTypeLabel(dbType) }}
+                            </button>
+                          </div>
+                          <p v-if="defaultDbTypesForTemplate(tpl.id).length === 0" class="mt-1 px-1 text-[10px] text-muted-foreground">
+                            {{ t("ai.templateDefaultsEmpty") }}
+                          </p>
+                        </PopoverContent>
+                      </Popover>
                       <Button type="button" size="sm" variant="ghost" @click="openEditTemplate(tpl)">{{ t("common.edit") }}</Button>
                       <Button type="button" size="sm" variant="ghost" class="text-destructive" @click="templateDeleteConfirm = tpl">{{ t("common.delete") }}</Button>
                     </div>

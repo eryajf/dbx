@@ -2242,7 +2242,7 @@ fn generate_postgres_sequence_sync_sql(columns: &[db::ColumnInfo], table: &str, 
         .map(|column| {
             let quoted_column = quote_identifier(&column.name, &DatabaseType::Postgres);
             format!(
-                "SELECT setval(pg_get_serial_sequence({}, {}), GREATEST(COALESCE(MAX({quoted_column}), 0), 1), MAX({quoted_column}) IS NOT NULL) FROM {full_table}",
+                "SELECT setval(pg_get_serial_sequence({}, {})::regclass, GREATEST(COALESCE(MAX({quoted_column}::bigint), 0), 1), MAX({quoted_column}::bigint) IS NOT NULL) FROM {full_table}",
                 quote_string_literal(&full_table),
                 quote_string_literal(&column.name)
             )
@@ -2613,10 +2613,15 @@ pub fn escape_value_typed(val: &serde_json::Value, db_type: &DatabaseType, colum
                 _ => format!("'{escaped}'"),
             }
         }
-        serde_json::Value::Array(arr) => match db_type {
-            DatabaseType::ClickHouse | DatabaseType::Databend => format_ch_array_sql_literal(arr),
-            _ => format_pg_array_sql_literal(arr),
-        },
+        serde_json::Value::Array(arr) => {
+            if *db_type == DatabaseType::Postgres && is_postgres_vector_type(column_type) {
+                return format_postgres_vector_sql_literal(val);
+            }
+            match db_type {
+                DatabaseType::ClickHouse | DatabaseType::Databend => format_ch_array_sql_literal(arr),
+                _ => format_pg_array_sql_literal(arr),
+            }
+        }
         _ => {
             let s = val.to_string();
             format!("'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
@@ -2828,6 +2833,46 @@ pub fn format_pg_array_sql_literal(arr: &[serde_json::Value]) -> String {
     let elements: Vec<String> = arr.iter().map(format_pg_array_element).collect();
     let inner = format!("{{{}}}", elements.join(","));
     format!("'{}'", inner.replace('\\', "\\\\").replace('\'', "''"))
+}
+
+pub(crate) fn is_postgres_vector_type(column_type: Option<&str>) -> bool {
+    column_type
+        .map(|column_type| {
+            let normalized = column_type.trim().trim_matches('"').to_ascii_lowercase();
+            if normalized.trim_end().ends_with("[]") {
+                return false;
+            }
+            let base = normalized.split(['(', ' ', '\t', '\n']).next().unwrap_or("").trim_matches('"');
+            matches!(base, "vector" | "halfvec") || base.ends_with(".vector") || base.ends_with(".halfvec")
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn format_postgres_vector_sql_literal(value: &serde_json::Value) -> String {
+    if value.is_null() {
+        return "NULL".to_string();
+    }
+    let text = match value {
+        // pgvector vector/halfvec are scalar extension types whose importable
+        // literal grammar uses square brackets, unlike PostgreSQL arrays.
+        serde_json::Value::Array(arr) => {
+            let elements = arr.iter().map(format_postgres_vector_element).collect::<Vec<_>>();
+            format!("[{}]", elements.join(","))
+        }
+        serde_json::Value::String(text) => text.to_string(),
+        _ => value.to_string(),
+    };
+    quote_postgres_string_literal(&text)
+}
+
+fn format_postgres_vector_element(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.trim().to_string(),
+        serde_json::Value::Number(number) => number.to_string(),
+        serde_json::Value::Bool(value) => value.to_string(),
+        serde_json::Value::Null => "NULL".to_string(),
+        _ => value.to_string(),
+    }
 }
 
 fn format_pg_array_element(val: &serde_json::Value) -> String {
@@ -4958,11 +5003,10 @@ fn transfer_ddl_statements(sql: &str, db_type: &DatabaseType) -> Vec<String> {
 }
 
 /// Strips inline `CONSTRAINT ... FOREIGN KEY ... REFERENCES ...` lines from a
-/// `CREATE TABLE` statement, fixing up the now-dangling trailing comma on the
-/// preceding line. Dialect-agnostic: relies only on the ` FOREIGN KEY ` clause
-/// text, which both Postgres and MySQL-family `SHOW CREATE TABLE` output share,
-/// and on foreign key constraints always being the last items before the closing
-/// paren (true for both dialects' DDL dumps).
+/// `CREATE TABLE` statement, fixing up a trailing comma only when removing the
+/// foreign key leaves one immediately before the table's closing parenthesis.
+/// Dialect-agnostic: relies only on the definition-line shape shared by Postgres
+/// and MySQL-family DDL dumps.
 ///
 /// Only genuine constraint definition lines match (`CONSTRAINT <name> FOREIGN
 /// KEY (` / bare `FOREIGN KEY (`); a column line whose COMMENT or DEFAULT text
@@ -4973,18 +5017,26 @@ fn strip_inline_foreign_key_constraint_lines(statement: &str) -> String {
     }
 
     let mut lines: Vec<String> = Vec::new();
+    let mut removed_foreign_key = false;
     for line in statement.lines() {
         if INLINE_FOREIGN_KEY_CONSTRAINT_LINE_RE.is_match(line) {
-            if let Some(previous) = lines.last_mut() {
-                let trimmed_len = previous.trim_end_matches(char::is_whitespace).len();
-                if previous[..trimmed_len].ends_with(',') {
-                    previous.truncate(trimmed_len - 1);
-                }
-            }
+            removed_foreign_key = true;
             continue;
         }
         lines.push(line.to_string());
     }
+
+    if removed_foreign_key {
+        if let Some(closing_index) = lines.iter().rposition(|line| line.trim_start().starts_with(')')) {
+            if let Some(previous) = lines[..closing_index].iter_mut().rfind(|line| !line.trim().is_empty()) {
+                let trimmed_len = previous.trim_end_matches(char::is_whitespace).len();
+                if previous[..trimmed_len].ends_with(',') {
+                    previous.remove(trimmed_len - 1);
+                }
+            }
+        }
+    }
+
     lines.join("\n")
 }
 
@@ -5094,35 +5146,30 @@ async fn execute_on_pool_once(
 ) -> Result<db::QueryResult, String> {
     // Read-only check: block transfer operations in readonly mode
     crate::query::check_read_only_for_connection(state, pool_key, sql).await?;
-    let connections = state.connections.read().await;
-    let pool = connections.get(pool_key).ok_or("Connection not found")?;
+    let pool_handle = state.pool_handle(pool_key).await;
+    let pool = pool_handle.as_ref().ok_or("Connection not found")?;
 
     match pool {
         PoolKind::Mysql(p, mode) => {
             let p = p.clone();
             let bare = *mode == crate::connection::MysqlMode::Bare;
-            drop(connections);
             db::mysql::execute_query_with_max_rows(&p, sql, bare, max_rows, Default::default()).await
         }
         PoolKind::Postgres(p) => {
             let p = p.clone();
-            drop(connections);
             db::postgres::execute_query_with_max_rows(&p, sql, max_rows).await
         }
         PoolKind::Sqlite(p) => {
             let p = p.clone();
-            drop(connections);
             db::sqlite::execute_query_with_max_rows(&p, sql, max_rows).await
         }
         PoolKind::ClickHouse(client) => {
             let client = client.clone();
             let database = database_from_pool_key(pool_key).unwrap_or("default").to_string();
-            drop(connections);
             db::clickhouse_driver::execute_query_with_max_rows(&client, &database, sql, max_rows).await
         }
         PoolKind::SqlServer(client) => {
             let client = client.clone();
-            drop(connections);
             let mut client = client.lock().await;
             let result = db::sqlserver::execute_query_with_max_rows(&mut client, sql, max_rows).await;
             drop(client);
@@ -5132,7 +5179,6 @@ async fn execute_on_pool_once(
             let client = client.clone();
             let database = database_from_pool_key(pool_key).map(str::to_string);
             let sql = sql.to_string();
-            drop(connections);
             let mut client = client.lock().await;
             let params = agent_execute_query_params(
                 &sql,
@@ -5159,7 +5205,6 @@ async fn execute_on_pool_once(
         PoolKind::DuckDbWorker(client) => {
             let client = client.clone();
             let sql = sql.to_string();
-            drop(connections);
             client.execute(None, sql, max_rows, None, None).await
         }
         _ => Err("Unsupported database type for transfer".to_string()),
@@ -5223,63 +5268,56 @@ pub async fn get_columns_for_transfer(
     table: &str,
     catalog: Option<&str>,
 ) -> Result<Vec<db::ColumnInfo>, String> {
-    let connections = state.connections.read().await;
+    let pool_handle = state.pool_handle(pool_key).await;
 
     #[cfg(feature = "duckdb-sidecar")]
-    if let Some(PoolKind::DuckDbWorker(client)) = connections.get(pool_key) {
+    if let Some(PoolKind::DuckDbWorker(client)) = pool_handle.as_ref() {
         let client = client.clone();
         let database = database.to_string();
         let schema = schema.to_string();
         let table = table.to_string();
-        drop(connections);
         return client.list_columns(database, schema, table).await;
     }
 
-    if let Some(PoolKind::ClickHouse(client)) = connections.get(pool_key) {
+    if let Some(PoolKind::ClickHouse(client)) = pool_handle.as_ref() {
         let client = client.clone();
         let database = database.to_string();
         let table = table.to_string();
-        drop(connections);
         return db::clickhouse_driver::get_columns(&client, &database, &table).await;
     }
-    if let Some(PoolKind::SqlServer(client)) = connections.get(pool_key) {
+    if let Some(PoolKind::SqlServer(client)) = pool_handle.as_ref() {
         let client = client.clone();
         let schema = schema.to_string();
         let table = table.to_string();
-        drop(connections);
         let mut client = client.lock().await;
         return db::sqlserver::get_columns(&mut client, &schema, &table).await;
     }
-    if let Some(PoolKind::InfluxDb(client)) = connections.get(pool_key) {
+    if let Some(PoolKind::InfluxDb(client)) = pool_handle.as_ref() {
         let client = client.clone();
         let database = database.to_string();
         let table = table.to_string();
-        drop(connections);
         return db::influxdb_driver::get_columns(&client, &database, &table).await;
     }
-    if let Some(PoolKind::InfluxDb3(client)) = connections.get(pool_key) {
+    if let Some(PoolKind::InfluxDb3(client)) = pool_handle.as_ref() {
         let client = client.clone();
         let database = database.to_string();
         let table = table.to_string();
-        drop(connections);
         return db::influxdb3_driver::get_columns(&client, &database, &table).await;
     }
-    if let Some(PoolKind::Agent(client)) = connections.get(pool_key) {
+    if let Some(PoolKind::Agent(client)) = pool_handle.as_ref() {
         let client = client.clone();
         let database = database.to_string();
         let schema = schema.to_string();
         let table = table.to_string();
-        drop(connections);
         let mut client = client.lock().await;
         return client.get_columns(&database, &schema, &table, None).await;
     }
-    if let Some(PoolKind::ExternalDriver { config, session, .. }) = connections.get(pool_key) {
+    if let Some(PoolKind::ExternalDriver { config, session, .. }) = pool_handle.as_ref() {
         let config = config.clone();
         let session = session.clone();
         let database = database.to_string();
         let schema = schema.to_string();
         let table = table.to_string();
-        drop(connections);
         return session
             .invoke_with_timeout(
                 "getColumns",
@@ -5293,14 +5331,13 @@ pub async fn get_columns_for_transfer(
             )
             .await;
     }
-    let pool = connections.get(pool_key).ok_or("Pool not found")?;
+    let pool = pool_handle.as_ref().ok_or("Pool not found")?;
     let schema = schema.to_string();
     let table = table.to_string();
     match pool {
         PoolKind::Mysql(p, _) => {
             let p = p.clone();
             let catalog = normalize_external_catalog_name(catalog).map(str::to_string);
-            drop(connections);
             if let Some(catalog) = catalog {
                 // Use 3-part qualified column lookup for Doris/StarRocks external catalogs
                 db::doris::get_catalog_columns(&p, &catalog, &schema, &table).await
@@ -5310,12 +5347,10 @@ pub async fn get_columns_for_transfer(
         }
         PoolKind::Postgres(p) => {
             let p = p.clone();
-            drop(connections);
             db::postgres::get_columns(&p, &schema, &table).await
         }
         PoolKind::Sqlite(p) => {
             let p = p.clone();
-            drop(connections);
             db::sqlite::get_columns(&p, &schema, &table).await
         }
         _ => Err("Unsupported database type".to_string()),
@@ -5329,21 +5364,19 @@ async fn get_postgres_indexes_for_transfer(
     schema: &str,
     table: &str,
 ) -> Result<Vec<db::IndexInfo>, String> {
-    let connections = state.connections.read().await;
-    if let Some(PoolKind::Agent(client)) = connections.get(pool_key) {
+    let pool_handle = state.pool_handle(pool_key).await;
+    if let Some(PoolKind::Agent(client)) = pool_handle.as_ref() {
         let client = client.clone();
         let database = database.to_string();
         let schema = schema.to_string();
         let table = table.to_string();
-        drop(connections);
         let mut client = client.lock().await;
         return client.list_indexes(&database, &schema, &table, None).await;
     }
-    let Some(PoolKind::Postgres(pool)) = connections.get(pool_key) else {
+    let Some(PoolKind::Postgres(pool)) = pool_handle.as_ref() else {
         return Err("PostgreSQL pool not found".to_string());
     };
     let pool = pool.clone();
-    drop(connections);
     db::postgres::list_indexes(&pool, schema, table).await
 }
 
@@ -5354,21 +5387,19 @@ async fn get_postgres_foreign_keys_for_transfer(
     schema: &str,
     table: &str,
 ) -> Result<Vec<db::ForeignKeyInfo>, String> {
-    let connections = state.connections.read().await;
-    if let Some(PoolKind::Agent(client)) = connections.get(pool_key) {
+    let pool_handle = state.pool_handle(pool_key).await;
+    if let Some(PoolKind::Agent(client)) = pool_handle.as_ref() {
         let client = client.clone();
         let database = database.to_string();
         let schema = schema.to_string();
         let table = table.to_string();
-        drop(connections);
         let mut client = client.lock().await;
         return client.list_foreign_keys(&database, &schema, &table, None).await;
     }
-    let Some(PoolKind::Postgres(pool)) = connections.get(pool_key) else {
+    let Some(PoolKind::Postgres(pool)) = pool_handle.as_ref() else {
         return Err("PostgreSQL pool not found".to_string());
     };
     let pool = pool.clone();
-    drop(connections);
     db::postgres::list_foreign_keys(&pool, schema, table).await
 }
 
@@ -5383,8 +5414,8 @@ async fn get_postgres_owned_sequences_for_transfer(
     }
 
     let pool = {
-        let connections = state.connections.read().await;
-        match connections.get(pool_key) {
+        let pool_handle = state.pool_handle(pool_key).await;
+        match pool_handle.as_ref() {
             Some(PoolKind::Postgres(pool)) => pool.clone(),
             _ => return Ok(Vec::new()),
         }
@@ -5430,8 +5461,8 @@ async fn get_postgres_sequence_snapshots_for_transfer(
     schema: &str,
 ) -> Result<Vec<PostgresSequenceSnapshot>, String> {
     let pool = {
-        let connections = state.connections.read().await;
-        match connections.get(pool_key) {
+        let pool_handle = state.pool_handle(pool_key).await;
+        match pool_handle.as_ref() {
             Some(PoolKind::Postgres(pool)) => pool.clone(),
             _ => return Ok(Vec::new()),
         }
@@ -6763,8 +6794,8 @@ pub async fn sort_tables_by_fk_dependency_with_foreign_keys(
     let postgres_pool = if db_type == DatabaseType::Postgres {
         let pool_key = state.get_or_create_pool(connection_id, Some(database)).await?;
         {
-            let connections = state.connections.read().await;
-            native_postgres_dependency_pool(connections.get(&pool_key))
+            let pool_handle = state.pool_handle(&pool_key).await;
+            native_postgres_dependency_pool(pool_handle.as_ref())
         }
     } else {
         None
@@ -7184,12 +7215,11 @@ async fn fetch_hive_server_transfer_batch(
         let configs = state.configs.read().await;
         configs.get(&request.source_connection_id).map(|config| config.query_timeout_secs).unwrap_or(0)
     };
-    let connections = state.connections.read().await;
-    let Some(PoolKind::Agent(client)) = connections.get(pool_key) else {
+    let pool_handle = state.pool_handle(pool_key).await;
+    let Some(PoolKind::Agent(client)) = pool_handle.as_ref() else {
         return Err("Impala transfer requires an Agent connection".to_string());
     };
     let client = client.clone();
-    drop(connections);
 
     let mut client = client.lock().await;
     let result = if cursor.started {
@@ -7226,12 +7256,11 @@ async fn close_hive_server_transfer_cursor(state: &AppState, pool_key: &str, cur
     let Some(session_id) = cursor.session_id.take() else {
         return;
     };
-    let connections = state.connections.read().await;
-    let Some(PoolKind::Agent(client)) = connections.get(pool_key) else {
+    let pool_handle = state.pool_handle(pool_key).await;
+    let Some(PoolKind::Agent(client)) = pool_handle.as_ref() else {
         return;
     };
     let client = client.clone();
-    drop(connections);
     let mut client = client.lock().await;
     if let Err(error) = client.close_table_read_session::<bool>(&session_id).await {
         log::warn!("[transfer] failed to close Impala transfer cursor: {error}");
@@ -7433,10 +7462,11 @@ where
                     // SHOW CREATE TABLE catalog.database.table using the
                     // existing source pool (bare MySQL — addresses any catalog).
                     let pool = {
-                        let connections = state.connections.read().await;
-                        let pool =
-                            connections.get(source_pool_key).ok_or_else(|| "Source pool not found".to_string())?;
-                        let PoolKind::Mysql(p, _) = pool else {
+                        let pool = state
+                            .pool_handle(source_pool_key)
+                            .await
+                            .ok_or_else(|| "Source pool not found".to_string())?;
+                        let PoolKind::Mysql(p, _) = &pool else {
                             return Err("Source pool must be MySQL-family for catalog DDL".to_string());
                         };
                         p.clone()
@@ -8256,6 +8286,7 @@ where
             }
             db::ObjectSourceKind::Sequence
             | db::ObjectSourceKind::Synonym
+            | db::ObjectSourceKind::Job
             | db::ObjectSourceKind::Package
             | db::ObjectSourceKind::PackageBody => object.source.clone(),
             db::ObjectSourceKind::Trigger
@@ -8637,10 +8668,14 @@ mod tests {
     #[tokio::test]
     async fn postgres_transfer_metadata_routes_agent_pools() {
         let (state, dir) = test_app_state().await;
-        state.connections.write().await.insert(
-            "source:source_db".to_string(),
-            PoolKind::agent(crate::db::agent_driver::AgentDriverClient::test_stub()),
-        );
+        state
+            .update_connection_pools(|connections| {
+                connections.insert(
+                    "source:source_db".to_string(),
+                    PoolKind::agent(crate::db::agent_driver::AgentDriverClient::test_stub()),
+                );
+            })
+            .await;
 
         let index_error =
             get_postgres_indexes_for_transfer(&state, "source:source_db", "source_db", "source_schema", "items")
@@ -10554,6 +10589,30 @@ mod tests {
     }
 
     #[test]
+    fn postgres_transfer_ddl_preserves_constraint_after_inline_foreign_key() {
+        let ddl = "CREATE TABLE \"source_7931\".\"dbx_child\" (\n  \"id\" integer NOT NULL,\n  \"parent_id\" integer NOT NULL,\n  \"status\" integer NOT NULL,\n  CONSTRAINT \"dbx_child_parent_fk\" FOREIGN KEY (\"parent_id\") REFERENCES \"source_7931\".\"dbx_parent\"(\"id\"),\n  CONSTRAINT \"dbx_child_status_check\" CHECK (status >= 0)\n);";
+
+        let statements = transfer_ddl_statements(ddl, &DatabaseType::Postgres);
+
+        assert_eq!(
+            statements,
+            vec!["CREATE TABLE \"source_7931\".\"dbx_child\" (\n  \"id\" integer NOT NULL,\n  \"parent_id\" integer NOT NULL,\n  \"status\" integer NOT NULL,\n  CONSTRAINT \"dbx_child_status_check\" CHECK (status >= 0)\n)".to_string()]
+        );
+    }
+
+    #[test]
+    fn postgres_transfer_ddl_removes_multiple_inline_foreign_keys_without_damaging_retained_items() {
+        let ddl = "CREATE TABLE \"public\".\"assignments\" (\n  \"id\" integer NOT NULL,\n  \"owner_id\" integer NOT NULL,\n  \"reviewer_id\" integer NOT NULL,\n  CONSTRAINT \"assignments_owner_fk\" FOREIGN KEY (\"owner_id\") REFERENCES \"users\"(\"id\"),\n  CONSTRAINT \"assignments_owner_check\" CHECK (owner_id > 0),\n  CONSTRAINT \"assignments_reviewer_fk\" FOREIGN KEY (\"reviewer_id\") REFERENCES \"users\"(\"id\"),\n  CONSTRAINT \"assignments_owner_reviewer_unique\" UNIQUE (\"owner_id\", \"reviewer_id\")\n);";
+
+        let statements = transfer_ddl_statements(ddl, &DatabaseType::Postgres);
+
+        assert_eq!(
+            statements,
+            vec!["CREATE TABLE \"public\".\"assignments\" (\n  \"id\" integer NOT NULL,\n  \"owner_id\" integer NOT NULL,\n  \"reviewer_id\" integer NOT NULL,\n  CONSTRAINT \"assignments_owner_check\" CHECK (owner_id > 0),\n  CONSTRAINT \"assignments_owner_reviewer_unique\" UNIQUE (\"owner_id\", \"reviewer_id\")\n)".to_string()]
+        );
+    }
+
+    #[test]
     fn transfer_create_table_result_treats_existing_table_as_preexisting() {
         assert!(!transfer_create_table_created(
             Err("ERROR: relation \"items\" already exists (SQLSTATE 42P07)".to_string()),
@@ -11599,8 +11658,68 @@ mod tests {
         assert_eq!(
             sql,
             vec![
-                "SELECT setval(pg_get_serial_sequence('\"public\".\"users\"', 'id'), GREATEST(COALESCE(MAX(\"id\"), 0), 1), MAX(\"id\") IS NOT NULL) FROM \"public\".\"users\"".to_string(),
-                "SELECT setval(pg_get_serial_sequence('\"public\".\"users\"', 'identity_id'), GREATEST(COALESCE(MAX(\"identity_id\"), 0), 1), MAX(\"identity_id\") IS NOT NULL) FROM \"public\".\"users\"".to_string()
+                "SELECT setval(pg_get_serial_sequence('\"public\".\"users\"', 'id')::regclass, GREATEST(COALESCE(MAX(\"id\"::bigint), 0), 1), MAX(\"id\"::bigint) IS NOT NULL) FROM \"public\".\"users\"".to_string(),
+                "SELECT setval(pg_get_serial_sequence('\"public\".\"users\"', 'identity_id')::regclass, GREATEST(COALESCE(MAX(\"identity_id\"::bigint), 0), 1), MAX(\"identity_id\"::bigint) IS NOT NULL) FROM \"public\".\"users\"".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn postgres_sequence_sync_sql_casts_text_and_numeric_columns_to_bigint() {
+        let sql = generate_postgres_sequence_sync_sql(
+            &[
+                db::ColumnInfo {
+                    name: "text_id".to_string(),
+                    data_type: "text".to_string(),
+                    is_nullable: false,
+                    column_default: Some("nextval('public.dbx_text_id_seq'::regclass)::text".to_string()),
+                    is_primary_key: true,
+                    extra: None,
+                    comment: None,
+                    numeric_precision: None,
+                    numeric_scale: None,
+                    character_maximum_length: None,
+                    enum_values: None,
+                    ..Default::default()
+                },
+                db::ColumnInfo {
+                    name: "numeric_id".to_string(),
+                    data_type: "numeric".to_string(),
+                    is_nullable: false,
+                    column_default: Some("nextval('public.dbx_numeric_id_seq'::regclass)".to_string()),
+                    is_primary_key: false,
+                    extra: None,
+                    comment: None,
+                    numeric_precision: None,
+                    numeric_scale: None,
+                    character_maximum_length: None,
+                    enum_values: None,
+                    ..Default::default()
+                },
+                db::ColumnInfo {
+                    name: "plain_text".to_string(),
+                    data_type: "text".to_string(),
+                    is_nullable: true,
+                    column_default: None,
+                    is_primary_key: false,
+                    extra: None,
+                    comment: None,
+                    numeric_precision: None,
+                    numeric_scale: None,
+                    character_maximum_length: None,
+                    enum_values: None,
+                    ..Default::default()
+                },
+            ],
+            "seq_test",
+            "public",
+        );
+
+        assert_eq!(
+            sql,
+            vec![
+                "SELECT setval(pg_get_serial_sequence('\"public\".\"seq_test\"', 'text_id')::regclass, GREATEST(COALESCE(MAX(\"text_id\"::bigint), 0), 1), MAX(\"text_id\"::bigint) IS NOT NULL) FROM \"public\".\"seq_test\"".to_string(),
+                "SELECT setval(pg_get_serial_sequence('\"public\".\"seq_test\"', 'numeric_id')::regclass, GREATEST(COALESCE(MAX(\"numeric_id\"::bigint), 0), 1), MAX(\"numeric_id\"::bigint) IS NOT NULL) FROM \"public\".\"seq_test\"".to_string(),
             ]
         );
     }
@@ -11715,7 +11834,7 @@ mod tests {
         assert_eq!(
             sequence_sync_sql,
             vec![
-                "SELECT setval(pg_get_serial_sequence('\"archive\".\"it_quick_entry\"', 'id'), GREATEST(COALESCE(MAX(\"id\"), 0), 1), MAX(\"id\") IS NOT NULL) FROM \"archive\".\"it_quick_entry\"".to_string()
+                "SELECT setval(pg_get_serial_sequence('\"archive\".\"it_quick_entry\"', 'id')::regclass, GREATEST(COALESCE(MAX(\"id\"::bigint), 0), 1), MAX(\"id\"::bigint) IS NOT NULL) FROM \"archive\".\"it_quick_entry\"".to_string()
             ]
         );
     }
@@ -12131,6 +12250,50 @@ mod tests {
             r#"INSERT INTO "public"."files" ("path") VALUES
 (E'C:\\tmp\\file.txt')"#
         );
+    }
+
+    #[test]
+    fn postgres_insert_preserves_pgvector_literals_and_array_controls() {
+        let sql = generate_insert_typed(
+            &[
+                String::from("embedding"),
+                String::from("qualified_embedding"),
+                String::from("compact_embedding"),
+                String::from("scores"),
+                String::from("embedding_history"),
+            ],
+            &[
+                Some(String::from("vector(3)")),
+                Some(String::from("public.vector(3)")),
+                Some(String::from("extensions.halfvec(3)")),
+                Some(String::from("real[]")),
+                Some(String::from("vector(3)[]")),
+            ],
+            &[vec![
+                json!([1.25, -2.5, 3.75]),
+                json!([0, 0.875, -0.014]),
+                json!(["0.5", "-0.25", "4"]),
+                json!([1.25, -2.5, 3.75]),
+                json!([[1.25, -2.5, 3.75], [0, 0.875, -0.014]]),
+            ]],
+            "pgvector_probe",
+            "target_7955",
+            &DatabaseType::Postgres,
+            None,
+        );
+
+        assert_eq!(
+            sql,
+            r#"INSERT INTO "target_7955"."pgvector_probe" ("embedding", "qualified_embedding", "compact_embedding", "scores", "embedding_history") VALUES
+('[1.25,-2.5,3.75]', '[0,0.875,-0.014]', '[0.5,-0.25,4]', '{1.25,-2.5,3.75}', '{{1.25,-2.5,3.75},{0,0.875,-0.014}}')"#
+        );
+    }
+
+    #[test]
+    fn postgres_vector_literal_keeps_null_and_preformatted_string_behavior() {
+        assert_eq!(escape_value_typed(&serde_json::Value::Null, &DatabaseType::Postgres, Some("vector(3)")), "NULL");
+        assert_eq!(escape_value_typed(&json!("[1,2,3]"), &DatabaseType::Postgres, Some("halfvec(3)")), "'[1,2,3]'");
+        assert_eq!(escape_value_typed(&json!([1, 2, 3]), &DatabaseType::Postgres, Some("integer[]")), "'{1,2,3}'");
     }
 
     #[test]

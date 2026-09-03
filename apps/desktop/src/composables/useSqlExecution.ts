@@ -27,6 +27,7 @@ import type { ConnectionConfig, DatabaseType, QueryTab } from "@/types/database"
 import type { MultiDbExecutionTarget, MultiDbResultRunExecution, MultiDbTargetExecutionResult } from "@/types/sqlExecution";
 import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import type { SqlExecutionTargetContext } from "@/lib/database/sqlExecutionTargetRegistry";
+import { translateBackendError } from "@/i18n/backend-errors";
 
 const DANGER_RE = /^\s*(DROP|DELETE|TRUNCATE|ALTER|UPDATE|MERGE|REPLACE)\b/i;
 
@@ -348,7 +349,7 @@ export function useSqlExecution(deps: {
       sql,
       execution_time_ms: elapsed,
       success,
-      error: failure ? String(failure.rows?.[0]?.[0] ?? "") : undefined,
+      error: failure ? (failure.error ? translateBackendError(t, failure.error, failure.rows?.[0]?.[0]) : String(failure.rows?.[0]?.[0] ?? "")) : undefined,
       activity_kind: classifySqlActivityKind(sql),
       operation: primarySqlOperation(sql),
       affected_rows: success ? tab.result?.affected_rows : undefined,
@@ -484,7 +485,7 @@ export function useSqlExecution(deps: {
       }
       focusSqlServerDataResult(executionTabId, connection.db_type, latest);
       const failure = firstQueryExecutionError(latest);
-      const errorMessage = failure ? String(failure.rows?.[0]?.[0] ?? t("common.failed")) : undefined;
+      const errorMessage = failure ? (failure.error ? translateBackendError(t, failure.error, failure.rows?.[0]?.[0]) : String(failure.rows?.[0]?.[0] ?? t("common.failed"))) : undefined;
       const success = !failure;
       const resultStatus = success ? "success" : "failed";
       captureWorkerResult(resultStatus, errorMessage);
@@ -541,9 +542,8 @@ export function useSqlExecution(deps: {
     return t("explain.emptySql");
   }
 
-  async function tryExplain(sqlOverride?: SqlExecutionOverride) {
+  async function runExplain(sql: string) {
     const tab = deps.activeTab.value;
-    const { sql } = await resolvedExecutableSql(sqlOverride);
     if (!tab || !sql.trim()) {
       toast(t("explain.emptySql"));
       return;
@@ -560,6 +560,19 @@ export function useSqlExecution(deps: {
 
     const current = deps.activeTab.value;
     if (current?.explainError) toast(current.explainError, 5000);
+  }
+
+  async function tryExplain(sqlOverride?: SqlExecutionOverride) {
+    const tab = deps.activeTab.value;
+    const { sql, sourceOffset } = await resolvedExecutableSql(sqlOverride);
+    if (!tab || !sql.trim()) {
+      toast(t("explain.emptySql"));
+      return;
+    }
+    // Resolve SQL template variables exactly like tryExecute so EXPLAIN never runs the raw
+    // placeholders (e.g. `EXPLAIN (FORMAT JSON) SELECT :var;` fails on PostgreSQL).
+    if (supportsSqlTemplateParameters(deps.activeConnection.value, sql) && prepareSqlParameterDialog(sql, sourceOffset, {}, (resolvedSql) => runExplain(resolvedSql))) return;
+    await runExplain(sql);
   }
 
   async function onDangerConfirm() {

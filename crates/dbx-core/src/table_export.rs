@@ -10,15 +10,22 @@ use tokio_util::sync::CancellationToken;
 use crate::connection::MysqlMode;
 use crate::connection::{config_for_pool_key, task_client_session_id, AppState, PoolKind};
 #[cfg(test)]
+use crate::csv_export::format_csv;
+#[cfg(test)]
 use crate::csv_export::format_tsv_rows;
-use crate::csv_export::{format_csv, format_tsv, push_table_csv_row, push_tsv_row};
+use crate::csv_export::{
+    format_csv_with_quote_mode, format_tsv, push_table_csv_row, push_table_csv_row_with_quote_mode, push_tsv_row,
+    CsvQuoteMode,
+};
 pub use crate::database_export::ExportStatus;
 use crate::database_export::{
     build_export_insert_statements, is_export_cancelled, is_internal_export_column, BuildExportInsertStatementsOptions,
 };
 use crate::db::agent_driver::AgentTableReadStartParams;
 use crate::models::connection::DatabaseType;
-use crate::query::{close_query_session, execute_sql_statement_with_options, QueryExecutionOptions};
+use crate::query::{
+    close_query_session, execute_sql_statement_with_options, query_timeout_duration, QueryExecutionOptions,
+};
 use crate::transfer::{
     count_sql_with_where_and_identifier_quote, execute_read_on_pool, execute_read_on_pool_with_max_rows,
     keyset_pagination_sql_with_identifier_quote, pagination_sql_with_filter_order_and_identifier_quote,
@@ -46,6 +53,8 @@ pub struct TableExportRequest {
     pub file_path: String,
     /// "csv", "xlsx", "json", "markdown", "sql", or "txt"
     pub format: String,
+    #[serde(default)]
+    pub csv_quote_mode: CsvQuoteMode,
     #[serde(default)]
     pub columns: Option<Vec<String>>,
     #[serde(default)]
@@ -100,11 +109,17 @@ fn format_csv_rows(rows: &[Vec<Value>]) -> String {
     out
 }
 
-fn write_table_text_row<W: Write>(file: &mut W, csv: bool, row: &[Value], buffer: &mut String) -> Result<(), String> {
+fn write_table_text_row<W: Write>(
+    file: &mut W,
+    csv: bool,
+    row: &[Value],
+    buffer: &mut String,
+    csv_quote_mode: CsvQuoteMode,
+) -> Result<(), String> {
     buffer.clear();
     buffer.push('\n');
     if csv {
-        push_table_csv_row(buffer, row);
+        push_table_csv_row_with_quote_mode(buffer, row, csv_quote_mode);
     } else {
         push_tsv_row(buffer, row);
     }
@@ -116,12 +131,13 @@ fn write_table_text_rows<W: Write>(
     csv: bool,
     rows: &[Vec<Value>],
     buffer: &mut String,
+    csv_quote_mode: CsvQuoteMode,
 ) -> Result<(), String> {
     buffer.clear();
     for row in rows {
         buffer.push('\n');
         if csv {
-            push_table_csv_row(buffer, row);
+            push_table_csv_row_with_quote_mode(buffer, row, csv_quote_mode);
         } else {
             push_tsv_row(buffer, row);
         }
@@ -519,8 +535,8 @@ enum TableExportCursorSession {
 }
 
 async fn table_export_cursor_kind(state: &AppState, pool_key: &str) -> Option<TableExportCursorKind> {
-    let connections = state.connections.read().await;
-    match connections.get(pool_key) {
+    let pool_handle = state.pool_handle(pool_key).await;
+    match pool_handle.as_ref() {
         Some(PoolKind::Agent(_)) => Some(TableExportCursorKind::Agent),
         Some(PoolKind::ExternalDriver { .. }) => Some(TableExportCursorKind::ExternalDriver),
         _ => None,
@@ -668,6 +684,7 @@ async fn fetch_table_export_batch(
                 let sql = table_cursor_sql(request, sql_context, query_col_names, column_types, primary_keys);
                 let max_rows = request.row_limit.unwrap_or(i32::MAX as usize);
                 let query_timeout = table_export_query_timeout_secs(state, pool_key).await;
+                let rpc_timeout = query_timeout_duration(Some(query_timeout));
                 let params = AgentTableReadStartParams {
                     sql,
                     database: Some(request.database.clone()),
@@ -677,14 +694,20 @@ async fn fetch_table_export_batch(
                     fetch_size: Some(active_batch_size),
                     timeout_secs: (query_timeout > 0).then_some(query_timeout),
                 };
-                let connections = state.connections.read().await;
-                let Some(PoolKind::Agent(client)) = connections.get(pool_key) else {
+                let pool_handle = state.pool_handle(pool_key).await;
+                let Some(PoolKind::Agent(client)) = pool_handle.as_ref() else {
                     return Err("Agent table read requires an agent connection".to_string());
                 };
                 let client = client.clone();
-                drop(connections);
                 let mut client = client.lock().await;
-                match client.start_table_read::<QueryResult>(params).await {
+                match client
+                    .start_table_read_with_timeout_and_cancel::<QueryResult>(
+                        params,
+                        rpc_timeout,
+                        Some(cancel_token.clone()),
+                    )
+                    .await
+                {
                     Ok(result) => {
                         *cursor_session = result.session_id.clone().map(TableExportCursorSession::Agent);
                         if result.session_id.is_none() && !result.has_more {
@@ -731,14 +754,22 @@ async fn fetch_table_export_batch(
     if let Some(session) = cursor_session.clone() {
         return match session {
             TableExportCursorSession::Agent(session_id) => {
-                let connections = state.connections.read().await;
-                let Some(PoolKind::Agent(client)) = connections.get(pool_key) else {
+                let pool_handle = state.pool_handle(pool_key).await;
+                let Some(PoolKind::Agent(client)) = pool_handle.as_ref() else {
                     return Err("Table read session requires an agent connection".to_string());
                 };
                 let client = client.clone();
-                drop(connections);
                 let mut client = client.lock().await;
-                match client.fetch_table_read_page::<QueryResult>(&session_id, active_batch_size).await {
+                let query_timeout = table_export_query_timeout_secs(state, pool_key).await;
+                match client
+                    .fetch_table_read_page_with_timeout_and_cancel::<QueryResult>(
+                        &session_id,
+                        active_batch_size,
+                        query_timeout_duration(Some(query_timeout)),
+                        Some(cancel_token.clone()),
+                    )
+                    .await
+                {
                     Ok(result) => {
                         *cursor_session =
                             result.session_id.clone().or(Some(session_id)).map(TableExportCursorSession::Agent);
@@ -848,12 +879,11 @@ async fn close_table_export_cursor_if_open(
     };
     match session {
         TableExportCursorSession::Agent(session_id) => {
-            let connections = state.connections.read().await;
-            let Some(PoolKind::Agent(client)) = connections.get(pool_key) else {
+            let pool_handle = state.pool_handle(pool_key).await;
+            let Some(PoolKind::Agent(client)) = pool_handle.as_ref() else {
                 return;
             };
             let client = client.clone();
-            drop(connections);
             let mut client = client.lock().await;
             let _ = client.close_table_read_session::<bool>(&session_id).await;
         }
@@ -893,12 +923,11 @@ async fn stream_native_table_rows(
     cancel_token: CancellationToken,
     on_row: impl FnMut(&[Value]) -> Result<(), String>,
 ) -> Result<bool, String> {
-    let connections = state.connections.read().await;
-    match connections.get(pool_key) {
+    let pool_handle = state.pool_handle(pool_key).await;
+    match pool_handle.as_ref() {
         Some(PoolKind::Mysql(pool, mode)) => {
             let pool = pool.clone();
             let bare = *mode == MysqlMode::Bare;
-            drop(connections);
             crate::db::mysql::stream_query_rows(
                 &pool,
                 sql,
@@ -913,13 +942,11 @@ async fn stream_native_table_rows(
         }
         Some(PoolKind::Postgres(pool)) => {
             let pool = pool.clone();
-            drop(connections);
             crate::db::postgres::stream_query_rows(&pool, sql, row_limit, cancelled, on_row).await?;
             Ok(true)
         }
         Some(PoolKind::SqlServer(client)) => {
             let client = client.clone();
-            drop(connections);
             let mut on_row = on_row;
             let mut client = client.lock().await;
             crate::db::sqlserver::stream_first_result_set(&mut client, sql, row_limit, Some(cancel_token), |item| {
@@ -964,7 +991,7 @@ async fn try_export_native_table_stream(
                 std::fs::File::create(&request.file_path).map_err(|e| format!("Failed to create file: {e}"))?,
             );
             file.write_all(b"\xEF\xBB\xBF").map_err(|e| format!("Failed to write BOM: {e}"))?;
-            let header = format_csv(col_names, &[]);
+            let header = format_csv_with_quote_mode(col_names, &[], request.csv_quote_mode);
             let header = header.strip_suffix('\n').unwrap_or(&header);
             file.write_all(header.as_bytes()).map_err(|e| format!("Failed to write CSV: {e}"))?;
             let mut row_buffer = String::new();
@@ -983,7 +1010,7 @@ async fn try_export_native_table_stream(
                         column_types,
                         request.date_time_format.as_deref(),
                     );
-                    write_table_text_row(&mut file, true, formatted.as_ref(), &mut row_buffer)?;
+                    write_table_text_row(&mut file, true, formatted.as_ref(), &mut row_buffer, request.csv_quote_mode)?;
                     rows_exported += 1;
                     if rows_exported.is_multiple_of(progress_interval) {
                         on_progress(TableExportProgress {
@@ -1027,7 +1054,13 @@ async fn try_export_native_table_stream(
                         column_types,
                         request.date_time_format.as_deref(),
                     );
-                    write_table_text_row(&mut file, false, formatted.as_ref(), &mut row_buffer)?;
+                    write_table_text_row(
+                        &mut file,
+                        false,
+                        formatted.as_ref(),
+                        &mut row_buffer,
+                        request.csv_quote_mode,
+                    )?;
                     rows_exported += 1;
                     if rows_exported.is_multiple_of(progress_interval) {
                         on_progress(TableExportProgress {
@@ -1584,12 +1617,19 @@ async fn export_table_data_core_inner(
 
                 if is_first_batch {
                     // First batch: write header + rows via format_csv
-                    let csv_content = format_csv(&col_names, formatted_rows.as_ref());
+                    let csv_content =
+                        format_csv_with_quote_mode(&col_names, formatted_rows.as_ref(), request.csv_quote_mode);
                     file.write_all(csv_content.as_bytes()).map_err(|e| format!("Failed to write CSV: {e}"))?;
                     is_first_batch = false;
                 } else {
                     // Subsequent batches: write rows only (prepend newline for separation)
-                    write_table_text_rows(&mut file, true, formatted_rows.as_ref(), &mut text_buffer)?;
+                    write_table_text_rows(
+                        &mut file,
+                        true,
+                        formatted_rows.as_ref(),
+                        &mut text_buffer,
+                        request.csv_quote_mode,
+                    )?;
                 }
 
                 rows_exported += row_count as u64;
@@ -1671,10 +1711,22 @@ async fn export_table_data_core_inner(
                 );
 
                 if is_first_batch {
-                    write_table_text_rows(&mut file, false, formatted_rows.as_ref(), &mut text_buffer)?;
+                    write_table_text_rows(
+                        &mut file,
+                        false,
+                        formatted_rows.as_ref(),
+                        &mut text_buffer,
+                        request.csv_quote_mode,
+                    )?;
                     is_first_batch = false;
                 } else {
-                    write_table_text_rows(&mut file, false, formatted_rows.as_ref(), &mut text_buffer)?;
+                    write_table_text_rows(
+                        &mut file,
+                        false,
+                        formatted_rows.as_ref(),
+                        &mut text_buffer,
+                        request.csv_quote_mode,
+                    )?;
                 }
 
                 rows_exported += row_count as u64;
@@ -2188,10 +2240,14 @@ mod tests {
         let export_id = format!("export-{}", uuid::Uuid::new_v4());
         let pool_key =
             format!("{}:session:{}", config.id, table_export_client_session_id(&export_id).replace(':', "_"));
-        state.connections.write().await.insert(
-            pool_key,
-            PoolKind::ExternalDriver { driver_id: "jdbc".to_string(), config: Arc::new(config), session },
-        );
+        state
+            .update_connection_pools(|connections| {
+                connections.insert(
+                    pool_key,
+                    PoolKind::ExternalDriver { driver_id: "jdbc".to_string(), config: Arc::new(config), session },
+                );
+            })
+            .await;
 
         let output = dir.join("export.csv");
         let request = TableExportRequest {
@@ -2212,6 +2268,7 @@ mod tests {
             batch_size: Some(batch_size),
             row_limit,
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2316,7 +2373,7 @@ mod tests {
         let mut output = Vec::new();
         let mut buffer = String::new();
 
-        write_table_text_row(&mut output, true, &row, &mut buffer).expect("write csv row");
+        write_table_text_row(&mut output, true, &row, &mut buffer, CsvQuoteMode::All).expect("write csv row");
         assert_eq!(String::from_utf8(output).expect("utf8 csv"), "\n\"\",\"\",\"line\n\"\"two\"\"\"");
     }
 
@@ -2393,6 +2450,7 @@ mod tests {
             batch_size: Some(50),
             row_limit: None,
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2449,6 +2507,7 @@ mod tests {
             batch_size: Some(50),
             row_limit: None,
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2483,6 +2542,7 @@ mod tests {
             batch_size: Some(50),
             row_limit: None,
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2512,6 +2572,7 @@ mod tests {
             batch_size: Some(50),
             row_limit: None,
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2549,6 +2610,7 @@ mod tests {
             batch_size: Some(25),
             row_limit: None,
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2598,6 +2660,7 @@ mod tests {
             batch_size: Some(500),
             row_limit: Some(1000),
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2641,6 +2704,7 @@ mod tests {
             batch_size: Some(50),
             row_limit: None,
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2712,6 +2776,7 @@ mod tests {
             batch_size: Some(100),
             row_limit: None,
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2765,6 +2830,7 @@ mod tests {
             batch_size: Some(100),
             row_limit: None,
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2820,6 +2886,7 @@ mod tests {
             batch_size: Some(100),
             row_limit: None,
             date_time_format: None,
+            csv_quote_mode: CsvQuoteMode::All,
             numeric_column_right_align: false,
             column_comments: None,
             auto_filter: None,
@@ -2942,7 +3009,7 @@ mod tests {
         );
         assert_eq!(progress.last().and_then(|event| event.total_rows), Some(3));
         assert!(matches!(progress.last().map(|event| &event.status), Some(ExportStatus::Done)));
-        assert!(fixture.state.connections.read().await.is_empty());
+        assert!(fixture.state.with_connection_pools(|pools| pools.is_empty()).await);
 
         cleanup_external_driver_export_fixture(fixture);
     }
@@ -2999,7 +3066,7 @@ mod tests {
 
         run_external_driver_export(&fixture).await.expect("row-limited JDBC export should succeed");
         assert_eq!(std::fs::read_to_string(&fixture.calls).unwrap(), "executeQueryPage\ncloseQuerySession\n");
-        assert!(fixture.state.connections.read().await.is_empty());
+        assert!(fixture.state.with_connection_pools(|pools| pools.is_empty()).await);
 
         cleanup_external_driver_export_fixture(fixture);
     }
@@ -3052,7 +3119,7 @@ mod tests {
             std::fs::read_to_string(&fixture.calls).unwrap(),
             "executeQueryPage\nfetchQueryPage\ncloseQuerySession\n"
         );
-        assert!(fixture.state.connections.read().await.is_empty());
+        assert!(fixture.state.with_connection_pools(|pools| pools.is_empty()).await);
 
         cleanup_external_driver_export_fixture(fixture);
     }
@@ -3087,7 +3154,7 @@ mod tests {
 
         assert!(cancel_requested_at.elapsed() < Duration::from_secs(2));
         assert!(matches!(progress.last().map(|event| &event.status), Some(ExportStatus::Cancelled)));
-        assert!(fixture.state.connections.read().await.is_empty());
+        assert!(fixture.state.with_connection_pools(|pools| pools.is_empty()).await);
         clear_export_cancelled(&fixture.request.export_id).await;
         cleanup_external_driver_export_fixture(fixture);
     }
@@ -3126,7 +3193,7 @@ mod tests {
 
         assert!(cancel_requested_at.elapsed() < Duration::from_secs(2));
         assert!(matches!(progress.last().map(|event| &event.status), Some(ExportStatus::Cancelled)));
-        assert!(fixture.state.connections.read().await.is_empty());
+        assert!(fixture.state.with_connection_pools(|pools| pools.is_empty()).await);
         clear_export_cancelled(&fixture.request.export_id).await;
         cleanup_external_driver_export_fixture(fixture);
     }
