@@ -207,6 +207,7 @@ export interface EtcdAccessCapabilities {
 
 const unrestrictedEtcdAccess: EtcdAccessCapabilities = { admin: true, writable: true, writePermissions: null };
 const restrictedEtcdAccess: EtcdAccessCapabilities = { admin: false, writable: false, writePermissions: [] };
+const fallbackEtcdV2Access: EtcdAccessCapabilities = { admin: false, writable: true, writePermissions: null };
 
 function usesShardingSphereLogicalTables(databaseInfo: DatabaseConnectionInfo | undefined): boolean {
   return databaseInfo?.productVersion?.toLowerCase().includes(SHARDINGSPHERE_PROXY_VERSION_MARKER) === true;
@@ -682,7 +683,7 @@ export const useConnectionStore = defineStore("connection", () => {
     // auth-enabled cluster, so keep privileged controls hidden until the
     // agent reports the effective identity and authentication status.
     if (username === "root") return unrestrictedEtcdAccess;
-    return etcdAccessCapabilities.value[connectionId] ?? restrictedEtcdAccess;
+    return etcdAccessCapabilities.value[connectionId] ?? (config.driver_profile === "etcd-v2" ? fallbackEtcdV2Access : restrictedEtcdAccess);
   }
 
   function canWriteEtcdKey(connectionId: string, key: string, keyBytes?: api.KvValue | null): boolean {
@@ -695,10 +696,16 @@ export const useConnectionStore = defineStore("connection", () => {
   async function resolveEtcdAccessCapabilities(connectionId: string, config: ConnectionConfig | undefined): Promise<EtcdAccessCapabilities> {
     const username = config?.username?.trim() || "";
     if (username === "root") return unrestrictedEtcdAccess;
+    // The v2 auth API cannot resolve the identity behind the active HTTP
+    // connection. Query an explicitly configured user, while anonymous v2
+    // connections retain their historical Key access and rely on the server
+    // as the authorization boundary.
+    if (config?.driver_profile === "etcd-v2" && !username) return fallbackEtcdV2Access;
     // An empty user asks the agent for the authenticated identity. This also
     // covers client-certificate CN authentication without duplicating X.509
     // parsing in the UI.
-    const user = await api.etcdAuthCall<api.EtcdAuthUserDetail>(connectionId, "user_get", {});
+    const userParams = config?.driver_profile === "etcd-v2" ? { user: username } : {};
+    const user = await api.etcdAuthCall<api.EtcdAuthUserDetail>(connectionId, "user_get", userParams);
     if (user.authEnabled === false) return unrestrictedEtcdAccess;
     if (user.roles.includes("root")) return unrestrictedEtcdAccess;
     const roles = await Promise.all(user.roles.map((role) => api.etcdAuthCall<api.EtcdAuthRoleDetail>(connectionId, "role_get", { role })));
@@ -728,10 +735,13 @@ export const useConnectionStore = defineStore("connection", () => {
       try {
         access = await resolveEtcdAccessCapabilities(connectionId, currentConfig);
       } catch {
-        // Initial discovery fails closed. Once a capability snapshot has been
-        // confirmed, however, a transient Auth RPC failure must not overwrite
-        // it and make controls flicker between writable/admin and read-only.
-        access = etcdAccessCapabilities.value[connectionId] ?? restrictedEtcdAccess;
+        // Initial v3 discovery fails closed. Once a capability snapshot has
+        // been confirmed, however, a transient Auth RPC failure must not
+        // overwrite it and make controls flicker between states.
+        // The v2 API cannot discover an implicit current user, so preserve its
+        // pre-capability behavior on discovery errors and let etcd authorize
+        // each Key mutation. Administrative views remain hidden.
+        access = etcdAccessCapabilities.value[connectionId] ?? (currentConfig.driver_profile === "etcd-v2" ? fallbackEtcdV2Access : restrictedEtcdAccess);
       }
       if (generation === (etcdAccessCapabilityGenerations.get(connectionId) ?? 0) && connectedIds.value.has(connectionId) && connectionConfigFingerprint(getConfig(connectionId) ?? currentConfig) === configFingerprint) {
         etcdAccessCapabilities.value = { ...etcdAccessCapabilities.value, [connectionId]: access };

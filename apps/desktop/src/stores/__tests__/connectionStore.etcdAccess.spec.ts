@@ -180,4 +180,38 @@ describe("connectionStore etcd access", () => {
     expect(root.children?.map((child) => child.type)).toEqual(["etcd-root", "etcd-access-control", "etcd-dashboard"]);
     expect(store.getEtcdAccessCapabilities("etcd-reader")).toEqual({ admin: true, writable: true, writePermissions: null });
   });
+
+  it("queries the configured user when resolving etcd v2 capabilities", async () => {
+    const writePermission: EtcdAuthPermission = { access: "write", key: utf8("/editable/"), rangeEnd: utf8("/editable0"), resource: "prefix" };
+    const { root, etcdAuthCall, store } = await loadEtcdTree(["v2-writer"], [writePermission], {
+      connection: { driver_profile: "etcd-v2" },
+    });
+
+    expect(etcdAuthCall).toHaveBeenCalledWith("etcd-reader", "user_get", { user: "reader" });
+    expect(root.children?.map((child) => child.type)).toEqual(["etcd-root"]);
+    expect(store.canWriteEtcdKey("etcd-reader", "/editable/key")).toBe(true);
+    expect(store.canWriteEtcdKey("etcd-reader", "/readonly/key")).toBe(false);
+  });
+
+  it("keeps anonymous etcd v2 Key operations available without probing an empty user", async () => {
+    const { root, etcdAuthCall, store } = await loadEtcdTree([], [readPermission], {
+      connection: { driver_profile: "etcd-v2", username: "", password: "" },
+    });
+
+    expect(etcdAuthCall).not.toHaveBeenCalled();
+    expect(root.children?.map((child) => child.type)).toEqual(["etcd-root"]);
+    expect(store.getEtcdAccessCapabilities("etcd-reader")).toEqual({ admin: false, writable: true, writePermissions: null });
+  });
+
+  it("preserves etcd v2 Key operations when auth capability discovery is unavailable", async () => {
+    const { etcdAuthCall, store } = await loadEtcdTree(["v2-writer"], [readPermission], {
+      connection: { driver_profile: "etcd-v2" },
+      loadRoot: false,
+    });
+    etcdAuthCall.mockRejectedValueOnce(new Error("v2 auth endpoint unavailable"));
+
+    await store.ensureEtcdAccessCapabilities("etcd-reader", { force: true, verifyHealth: false });
+
+    expect(store.getEtcdAccessCapabilities("etcd-reader")).toEqual({ admin: false, writable: true, writePermissions: null });
+  });
 });
