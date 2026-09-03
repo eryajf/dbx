@@ -4304,6 +4304,7 @@ export default withEnglishFallback({
     relationshipUpdated: "关系已更新",
   },
   etcd: {
+    adminPermissionRequired: "此 etcd 页面仅对 root 角色开放。",
     prefixPlaceholder: "搜索 Key 路径，例如 /app/ 或 service",
     newKey: "新建键（Key）",
     loadingKeys: "正在加载 Key...",

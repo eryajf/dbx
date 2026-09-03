@@ -49,6 +49,8 @@ type etcdSession struct {
 	clientMu           sync.Mutex
 	client             *clientv3.Client
 	connectedEndpoints []string
+	username           string
+	authEnabled        bool
 
 	watchesMu          sync.Mutex
 	watches            map[string]*watchState

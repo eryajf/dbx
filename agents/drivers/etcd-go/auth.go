@@ -1,12 +1,131 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
+
+// etcdReadRange is a half-open Key range that the current user can read.
+// It is derived from the user's roles rather than asking etcd to enumerate
+// the global Key space, which a restricted account is not allowed to do.
+type etcdReadRange struct {
+	start string
+	end   string
+}
+
+// etcd uses a single NUL byte as an unbounded range end, meaning every Key
+// greater than or equal to the range start. It is a protocol sentinel, not a
+// byte-string upper bound, so ordinary lexical comparison is incorrect.
+const unboundedRangeEnd = "\x00"
+
+// readableKeyRanges returns whether the user can read every Key and otherwise
+// the smallest set of non-overlapping read ranges granted by its roles.
+func (s *etcdSession) readableKeyRanges() (bool, []etcdReadRange, error) {
+	s.clientMu.Lock()
+	username := s.username
+	authEnabled := s.authEnabled
+	s.clientMu.Unlock()
+	client, clientErr := s.activeClient()
+	if clientErr == nil {
+		authEnabled = s.refreshAuthEnabled(client)
+	}
+	if !authEnabled || username == "root" {
+		return true, nil, nil
+	}
+	if username == "" {
+		return false, nil, nil
+	}
+	if clientErr != nil {
+		return false, nil, clientErr
+	}
+	ctx, cancel := s.beginOperation()
+	defer s.endOperation(cancel)
+	user, err := client.Auth.UserGet(ctx, username)
+	if err != nil {
+		return false, nil, err
+	}
+
+	ranges := make([]etcdReadRange, 0)
+	for _, roleName := range user.Roles {
+		if roleName == "root" {
+			return true, nil, nil
+		}
+		role, err := client.Auth.RoleGet(ctx, roleName)
+		if err != nil {
+			return false, nil, err
+		}
+		for _, permission := range role.Perm {
+			if strings.EqualFold(permission.PermType.String(), "WRITE") {
+				continue
+			}
+			start := string(permission.Key)
+			end := string(permission.RangeEnd)
+			if isAllKeyPermission(start, end) {
+				return true, nil, nil
+			}
+			if end == "" {
+				// An exact Key permission is represented as a one-Key range.
+				end = start + "\x00"
+			}
+			ranges = append(ranges, etcdReadRange{start: start, end: end})
+		}
+	}
+	return false, normalizeReadRanges(ranges), nil
+}
+
+func isAllKeyPermission(start, end string) bool {
+	return (start == "" && (end == "" || end == unboundedRangeEnd)) || (start == unboundedRangeEnd && end == unboundedRangeEnd)
+}
+
+func isUnboundedRangeEnd(end string) bool {
+	return end == unboundedRangeEnd
+}
+
+func rangeStartAtOrAfterEnd(start, end string) bool {
+	return !isUnboundedRangeEnd(end) && bytes.Compare([]byte(start), []byte(end)) >= 0
+}
+
+func rangeEndGreater(left, right string) bool {
+	if left == right {
+		return false
+	}
+	if isUnboundedRangeEnd(left) {
+		return true
+	}
+	if isUnboundedRangeEnd(right) {
+		return false
+	}
+	return bytes.Compare([]byte(left), []byte(right)) > 0
+}
+
+func normalizeReadRanges(ranges []etcdReadRange) []etcdReadRange {
+	sort.Slice(ranges, func(i, j int) bool {
+		return bytes.Compare([]byte(ranges[i].start), []byte(ranges[j].start)) < 0
+	})
+	result := make([]etcdReadRange, 0, len(ranges))
+	for _, candidate := range ranges {
+		if candidate.end == "" || rangeStartAtOrAfterEnd(candidate.start, candidate.end) {
+			continue
+		}
+		if len(result) > 0 {
+			last := &result[len(result)-1]
+			if isUnboundedRangeEnd(last.end) || bytes.Compare([]byte(candidate.start), []byte(last.end)) <= 0 {
+				if rangeEndGreater(candidate.end, last.end) {
+					last.end = candidate.end
+				}
+				continue
+			}
+		}
+		result = append(result, candidate)
+	}
+	return result
+}
 
 func (s *etcdSession) authUserList(params map[string]json.RawMessage) (any, error) {
 	client, err := s.activeClient()
@@ -23,13 +142,27 @@ func (s *etcdSession) authUserList(params map[string]json.RawMessage) (any, erro
 }
 
 func (s *etcdSession) authUserGet(params map[string]json.RawMessage) (any, error) {
-	user, err := requiredString(params, "user")
-	if err != nil {
-		return nil, err
+	user := strings.TrimSpace(stringOrDefault(params, "user", ""))
+	currentUserRequest := user == ""
+	s.clientMu.Lock()
+	authUsername := s.username
+	authEnabled := s.authEnabled
+	s.clientMu.Unlock()
+	client, clientErr := s.activeClient()
+	if currentUserRequest && clientErr == nil {
+		authEnabled = s.refreshAuthEnabled(client)
 	}
-	client, err := s.activeClient()
-	if err != nil {
-		return nil, err
+	if user == "" {
+		user = authUsername
+	}
+	if currentUserRequest && !authEnabled {
+		return map[string]any{"user": user, "roles": []string{}, "authEnabled": false}, nil
+	}
+	if user == "" {
+		return nil, errors.New("user is required")
+	}
+	if clientErr != nil {
+		return nil, clientErr
 	}
 	ctx, cancel := s.beginOperation()
 	defer s.endOperation(cancel)
@@ -37,7 +170,7 @@ func (s *etcdSession) authUserGet(params map[string]json.RawMessage) (any, error
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"user": user, "roles": response.Roles}, nil
+	return map[string]any{"user": user, "roles": response.Roles, "authEnabled": true}, nil
 }
 
 func (s *etcdSession) authUserAdd(params map[string]json.RawMessage) (any, error) {

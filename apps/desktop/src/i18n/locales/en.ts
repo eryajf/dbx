@@ -4320,6 +4320,7 @@ export default {
     relationshipUpdated: "Relationship updated",
   },
   etcd: {
+    adminPermissionRequired: "This etcd view requires the root role.",
     prefixPlaceholder: "Search Key path, e.g. /app/ or service",
     newKey: "New Key",
     loadingKeys: "Loading keys...",
