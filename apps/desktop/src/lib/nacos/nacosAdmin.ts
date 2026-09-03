@@ -62,6 +62,20 @@ export interface NacosEndpointNormalizationOptions {
   contextPath?: string;
 }
 
+export interface NacosMetadataTableRow {
+  key: string;
+  value: string;
+}
+
+/** Makes a metadata object readable in a two-column view without losing nested values. */
+export function nacosMetadataTableRows(metadata: unknown): NacosMetadataTableRow[] {
+  if (!metadata || typeof metadata !== "object") return [];
+  return Object.entries(metadata as Record<string, unknown>).map(([key, value]) => ({
+    key,
+    value: typeof value === "string" ? value : (JSON.stringify(value) ?? String(value)),
+  }));
+}
+
 /** Validates a browser-only Nacos console URL without mixing credentials into a saved connection profile. */
 export function normalizeNacosConsoleUrl(input: string): string {
   let url: URL;

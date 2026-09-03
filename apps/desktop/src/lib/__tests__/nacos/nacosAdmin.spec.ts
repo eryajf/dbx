@@ -20,6 +20,7 @@ import {
   isNacosConfigDeleteSnapshotInScope,
   mergeNacosNamespacePermissionAssignments,
   nacosConfigFileExtension,
+  nacosMetadataTableRows,
   nacosMetricsCandidates,
   normalizeNacosMetricsUrl,
   normalizeNacosConsoleUrl,
@@ -92,6 +93,16 @@ describe("nacosAdmin helpers", () => {
     expect(() => normalizeNacosMetricsUrl("http://user:secret@localhost/metrics")).toThrow(/credentials/);
     expect(() => normalizeNacosMetricsUrl("http://localhost/metrics#fragment")).toThrow(/fragment/);
     expect(() => normalizeNacosMetricsUrl("http://localhost/metrics#")).toThrow(/fragment/);
+  });
+
+  it("formats instance metadata for a readable table without flattening nested values", () => {
+    expect(nacosMetadataTableRows({ role: "manual-test", source: "dbx-ui", ports: [8080, 8848], nested: { enabled: true } })).toEqual([
+      { key: "role", value: "manual-test" },
+      { key: "source", value: "dbx-ui" },
+      { key: "ports", value: "[8080,8848]" },
+      { key: "nested", value: '{"enabled":true}' },
+    ]);
+    expect(nacosMetadataTableRows(["legacy-value"])).toEqual([{ key: "0", value: "legacy-value" }]);
   });
 
   it("resolves browser console URLs without inferring Nacos 3 ports", () => {
