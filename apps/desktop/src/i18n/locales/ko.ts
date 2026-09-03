@@ -4128,6 +4128,7 @@ export default withEnglishFallback({
         healthy: "정상",
       },
     },
+    adminPermissionRequired: "이 etcd 페이지는 root 역할에만 공개됩니다.",
   },
   consul,
   sqlServerTrace,

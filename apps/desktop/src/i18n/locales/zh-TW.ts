@@ -7527,6 +7527,7 @@ export default withEnglishFallback({
       leaseGrantCancelled: "已取消等待；etcd 可能仍在處理該授權請求，請重新整理確認是否已建立 Lease。",
       leaseCreated: "已建立 Lease {id}",
     },
+    adminPermissionRequired: "此 etcd 頁面僅對 root 角色開放。",
   },
   consul,
   sqlServerTrace,

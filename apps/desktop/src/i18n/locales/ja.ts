@@ -4562,6 +4562,7 @@ export default withEnglishFallback({
       leaseGrantCancelled: "待機をキャンセルしました。etcdがまだこの付与リクエストを処理している可能性があります。リースが作成されたかどうかリフレッシュして確認してください。",
       leaseCreated: "リース {id} を作成しました",
     },
+    adminPermissionRequired: "この etcd ページは root ロールのみに開放されています。",
   },
   redis: {
     setDatabaseAlias: "データベースの別名を設定",

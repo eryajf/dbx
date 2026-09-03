@@ -4497,6 +4497,7 @@ export default withEnglishFallback({
       leaseGrantCancelled: "Espera cancelada; etcd puede estar procesando aún la solicitud de concesión; actualice para confirmar si se ha creado el Lease.",
       leaseCreated: "Lease {id} creado",
     },
+    adminPermissionRequired: "Esta página de etcd solo está abierta al rol root.",
   },
   consul,
   sqlServerTrace,
