@@ -148,6 +148,9 @@ const NUMERIC_COLUMN_TYPE_BASES = new Set([
   "smallmoneyn",
   "binary_float",
   "binary_double",
+  // Elasticsearch numeric mapping types.
+  "half_float",
+  "scaled_float",
 ]);
 
 export function isNumericColumnType(dataType: string | undefined): boolean {
@@ -194,6 +197,12 @@ const INTEGER_COLUMN_TYPE_BASES = new Set([
   "uint128",
   "uint256",
   "year",
+  // Elasticsearch integer mapping types.
+  "byte",
+  "short",
+  "long",
+  "unsigned_long",
+  "token_count",
 ]);
 
 const STRING_COLUMN_TYPE_BASES = new Set([
@@ -221,11 +230,20 @@ const STRING_COLUMN_TYPE_BASES = new Set([
   "character varying",
   "national character",
   "national character varying",
+  // Elasticsearch text-like mapping types.
+  "keyword",
+  "constant_keyword",
+  "wildcard",
+  "match_only_text",
+  "search_as_you_type",
+  "completion",
+  "ip",
+  "version",
 ]);
 
 const BOOLEAN_COLUMN_TYPE_BASES = new Set(["bool", "boolean", "bit"]);
-const TEMPORAL_COLUMN_TYPE_BASES = new Set(["date", "date32", "daten", "time", "time64", "timen", "timetz", "datetime", "datetime2", "datetime4", "datetime64", "datetimen", "datetimeoffset", "datetimeoffsetn", "smalldatetime", "timestamp", "timestampdty", "timestamptz", "interval"]);
-const STRUCTURED_COLUMN_TYPE_BASES = new Set(["json", "jsonb", "jsonpath", "xml", "xmltype", "array", "map", "tuple", "struct", "row", "object", "document", "variant"]);
+const TEMPORAL_COLUMN_TYPE_BASES = new Set(["date", "date_nanos", "date32", "daten", "time", "time64", "timen", "timetz", "datetime", "datetime2", "datetime4", "datetime64", "datetimen", "datetimeoffset", "datetimeoffsetn", "smalldatetime", "timestamp", "timestampdty", "timestamptz", "interval"]);
+const STRUCTURED_COLUMN_TYPE_BASES = new Set(["json", "jsonb", "jsonpath", "xml", "xmltype", "array", "map", "tuple", "struct", "row", "object", "nested", "flattened", "document", "variant"]);
 const IDENTIFIER_COLUMN_TYPE_BASES = new Set(["uuid", "uniqueidentifier", "rowid", "urowid"]);
 const BINARY_COLUMN_TYPE_BASES = new Set(["bytea", "blob", "tinyblob", "mediumblob", "longblob", "binary", "varbinary", "image", "raw", "long raw", "bfile"]);
 const SPATIAL_COLUMN_TYPE_BASES = new Set(["geometry", "geography", "sdo_geometry", "point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection"]);

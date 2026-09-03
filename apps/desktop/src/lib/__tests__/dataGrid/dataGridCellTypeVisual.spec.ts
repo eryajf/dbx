@@ -25,6 +25,11 @@ describe("data grid type visual kind", () => {
     ["UUID", "identifier"],
     ["BYTEA", "binary"],
     ["SDO_GEOMETRY", "spatial"],
+    ["keyword", "string"],
+    ["unsigned_long", "integer"],
+    ["scaled_float", "numeric"],
+    ["date_nanos", "temporal"],
+    ["nested", "structured"],
     ["inet", "unknown"],
   ])("maps %s to %s", (dataType, expected) => {
     expect(resolveDataGridTypeVisualKind(dataType)).toBe(expected);
