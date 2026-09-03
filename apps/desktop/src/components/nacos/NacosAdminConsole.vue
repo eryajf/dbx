@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId,
 import { Compartment, type Extension } from "@codemirror/state";
 import { StreamLanguage, ensureSyntaxTree } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
-import { Archive, ArrowLeftRight, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clipboard, Columns3, Download, FileClock, FileInput, FileText, Loader2, Network, Plus, RefreshCw, Save, Search, Send, Server, Trash2, X } from "@lucide/vue";
+import { Archive, ArrowLeftRight, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clipboard, Columns3, Download, ExternalLink, FileClock, FileInput, FileText, Loader2, Maximize2, Minimize2, Network, Plus, RefreshCw, Save, Search, Send, Server, Trash2, X } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import ProductionContextBadge from "@/components/common/ProductionContextBadge.vue";
@@ -40,6 +40,7 @@ import {
   isNacosConfigDeleteSnapshotInScope,
   resolveNacosConfigCopyText,
   resolveNacosConfigSaveCompletion,
+  resolveNacosConsoleUrl,
   type NacosConfigDeleteSnapshot,
 } from "@/lib/nacos/nacosAdmin";
 import { createNacosNamespaceRequestGuard, subscribeNacosNamespacesChanged, type NacosNamespacesChangedDetail } from "@/lib/nacos/nacosNamespaceCache";
@@ -91,6 +92,11 @@ const props = defineProps<{
   targetKeyword?: string;
   targetRequestId?: number;
   readOnly?: boolean;
+  zenMode?: boolean;
+}>();
+
+const emit = defineEmits<{
+  toggleZenMode: [];
 }>();
 
 type AdminTab = "configs" | "services";
@@ -278,6 +284,15 @@ function isSelectedConfigListItem(item: NacosConfigItem) {
 }
 
 const namespace = computed(() => props.namespace ?? connectionInfo.value?.namespace ?? "");
+const nacosConsoleUrl = computed(() => {
+  const config = connectionStore.getConfig(props.connectionId)?.external_config;
+  if (!config || typeof config !== "object" || Array.isArray(config)) return undefined;
+  try {
+    return resolveNacosConsoleUrl(config as import("@/types/nacos").NacosAdminConfig);
+  } catch {
+    return undefined;
+  }
+});
 const nacosProductionContext = computed(() => productionContextForDatabase(connectionStore.getConfig(props.connectionId), namespace.value));
 const batchTargetConnections = computed<NacosConfigTransferTarget[]>(() =>
   connectionStore.connections
@@ -2398,6 +2413,19 @@ onBeforeUnmount(() => {
   configEditorZoomCommitScheduler.dispose();
   destroyConfigEditor();
 });
+
+function openNacosConsole() {
+  const url = nacosConsoleUrl.value;
+  if (!url) {
+    toast(t("nacos.consoleUrlMissing"), 5000);
+    return;
+  }
+  if (isTauriRuntime()) {
+    void import("@tauri-apps/plugin-shell").then(({ open }) => open(url)).catch(() => toast(t("nacos.consoleOpenFailed"), 5000));
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
 </script>
 
 <template>
@@ -2414,6 +2442,15 @@ onBeforeUnmount(() => {
       </div>
       <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
         <span v-if="connectionError" class="max-w-96 truncate text-xs text-destructive">{{ connectionError }}</span>
+        <Button size="sm" variant="outline" class="h-8 gap-1.5" :title="nacosConsoleUrl ? t('nacos.openConsole') : t('nacos.consoleUrlMissing')" :aria-label="t('nacos.openConsole')" :disabled="!nacosConsoleUrl" @click="openNacosConsole">
+          <ExternalLink class="h-3.5 w-3.5" />
+          {{ t("nacos.openConsole") }}
+        </Button>
+        <Button size="sm" variant="outline" class="h-8 gap-1.5" :title="props.zenMode ? t('nacos.exitZenMode') : t('nacos.enterZenMode')" :aria-label="props.zenMode ? t('nacos.exitZenMode') : t('nacos.enterZenMode')" @click="emit('toggleZenMode')">
+          <Minimize2 v-if="props.zenMode" class="h-3.5 w-3.5" />
+          <Maximize2 v-else class="h-3.5 w-3.5" />
+          {{ props.zenMode ? t("nacos.exitZenMode") : t("nacos.enterZenMode") }}
+        </Button>
         <Button v-if="connectionError" size="sm" variant="outline" class="h-8 w-8 px-0" :title="t('nacos.retryConnectionInfo')" :aria-label="t('nacos.retryConnectionInfo')" :disabled="infoLoading" @click="loadInfo">
           <Loader2 v-if="infoLoading" class="h-3.5 w-3.5 animate-spin" />
           <RefreshCw v-else class="h-3.5 w-3.5" />

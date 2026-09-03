@@ -9,6 +9,14 @@ describe("NacosAdminConsole config workbench layout", () => {
     expect(source).toContain('type AdminTab = "configs" | "services";');
   });
 
+  it("offers browser-console and Zen-mode actions in the workspace toolbar", () => {
+    expect(source).toContain("resolveNacosConsoleUrl");
+    expect(source).toContain("function openNacosConsole()");
+    expect(source).toContain('t("nacos.openConsole")');
+    expect(source).toContain("emit('toggleZenMode')");
+    expect(source).toContain('props.zenMode ? t("nacos.exitZenMode") : t("nacos.enterZenMode")');
+  });
+
   it("keeps the editor as the final and primary workbench surface", () => {
     const contextBar = source.indexOf('class="nacos-config-context-bar');
     const inspector = source.indexOf('class="nacos-config-inspector');

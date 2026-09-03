@@ -332,12 +332,16 @@ let pendingTabHistoryNavigationId: string | null = null;
 watch(
   () => activeTab.value?.mode,
   (mode) => {
-    if (mode !== "data") isZenMode.value = false;
+    if (!supportsZenMode(mode)) isZenMode.value = false;
   },
 );
 
+function supportsZenMode(mode: QueryTab["mode"] | undefined) {
+  return mode === "data" || mode === "nacos";
+}
+
 function toggleZenMode() {
-  if (activeTab.value?.mode !== "data") return;
+  if (!supportsZenMode(activeTab.value?.mode)) return;
   isZenMode.value = !isZenMode.value;
 }
 
@@ -2680,7 +2684,7 @@ async function handleKeydown(e: KeyboardEvent) {
     setSidebarOpen(!sidebarOpen.value);
     return;
   }
-  if (isToggleZenModeShortcut(e, shortcuts) && activeTab.value?.mode === "data") {
+  if (isToggleZenModeShortcut(e, shortcuts) && supportsZenMode(activeTab.value?.mode)) {
     e.preventDefault();
     e.stopPropagation();
     toggleZenMode();
@@ -3173,6 +3177,7 @@ onUnmounted(() => {
                       :selected-sql="selectedSql"
                       :cursor-pos="cursorPos"
                       :block-dangerous-redis-commands="blockDangerousRedisCommands"
+                      :zen-mode="isZenMode"
                       @update:active-output-view="activeOutputView = $event"
                       @fix-with-ai="fixWithAi"
                       @send-selection-to-ai="sendSelectionToAi"
@@ -3230,6 +3235,7 @@ onUnmounted(() => {
                       @structure-editor-close="activeTab && queryStore.closeTab(activeTab.id)"
                       @open-settings="openSettings"
                       @open-connection-settings="openConnectionSettings"
+                      @toggle-zen-mode="toggleZenMode"
                     />
                   </KeepAlive>
                 </div>
