@@ -2944,6 +2944,7 @@ export default withEnglishFallback({
     compactTabTitle: "Accorcia Titoli Schede",
     fullTabTitle: "Mostra titoli completi delle schede",
     closeTab: "Chiudi Scheda",
+    closeTabGroup: "Chiudi Gruppo di Schede",
     closeFixedTab: "Chiudi Scheda Fissa",
     closeOtherTabs: "Chiudi Altre Schede",
     closeOtherRegularTabs: "Chiudi Altre Schede Normali",

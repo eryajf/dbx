@@ -2943,6 +2943,7 @@ export default withEnglishFallback({
     compactTabTitle: "縮短標籤標題",
     fullTabTitle: "完整分頁標題",
     closeTab: "關閉分頁",
+    closeTabGroup: "關閉本群組分頁",
     closeFixedTab: "關閉固定分頁",
     closeOtherTabs: "關閉其他分頁",
     closeOtherRegularTabs: "關閉其他普通分頁",

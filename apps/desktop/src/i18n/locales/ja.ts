@@ -2968,6 +2968,7 @@ export default withEnglishFallback({
     compactTabTitle: "タブタイトルを短縮",
     fullTabTitle: "タブの完全なタイトルを表示",
     closeTab: "タブを閉じる",
+    closeTabGroup: "このグループのタブを閉じる",
     closeFixedTab: "固定タブを閉じる",
     closeOtherTabs: "他のタブを閉じる",
     closeOtherRegularTabs: "他の通常タブを閉じる",

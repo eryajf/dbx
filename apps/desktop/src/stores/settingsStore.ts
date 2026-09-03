@@ -571,6 +571,10 @@ const TAB_PLACEMENTS = ["top", "bottom", "left", "right"] as const;
 export type TabPlacement = (typeof TAB_PLACEMENTS)[number];
 const TAB_GROUP_MODES = ["none", "database-type", "connection"] as const;
 export type TabGroupMode = (typeof TAB_GROUP_MODES)[number];
+export interface TabGroupCustomization {
+  name?: string;
+  color?: string;
+}
 const TAB_SORT_MODES = ["manual", "created-asc", "title-asc"] as const;
 export type TabSortMode = (typeof TAB_SORT_MODES)[number];
 const DATA_GRID_RENDER_MODES = ["dom", "canvas"] as const;
@@ -706,6 +710,7 @@ export interface EditorSettings {
   tabLayout: TabLayoutMode;
   tabPlacement: TabPlacement;
   tabGroupMode: TabGroupMode;
+  tabGroupCustomizations: Record<string, TabGroupCustomization>;
   tabSortMode: TabSortMode;
   appLayout: "separated" | "classic";
   pageSize: number;
@@ -933,6 +938,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   tabLayout: "scroll",
   tabPlacement: "top",
   tabGroupMode: "none",
+  tabGroupCustomizations: {},
   tabSortMode: "manual",
   appLayout: "classic",
   pageSize: 100,
@@ -1083,6 +1089,20 @@ function normalizeTabPlacement(value: unknown): TabPlacement {
 
 function normalizeTabGroupMode(value: unknown): TabGroupMode {
   return TAB_GROUP_MODES.includes(value as TabGroupMode) ? (value as TabGroupMode) : DEFAULT_EDITOR_SETTINGS.tabGroupMode;
+}
+
+export function normalizeTabGroupCustomizations(value: unknown): Record<string, TabGroupCustomization> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const customizations: Record<string, TabGroupCustomization> = {};
+  for (const [rawKey, rawCustomization] of Object.entries(value as Record<string, unknown>).slice(0, 200)) {
+    const key = rawKey.trim().slice(0, 512);
+    if (!key || !rawCustomization || typeof rawCustomization !== "object" || Array.isArray(rawCustomization)) continue;
+    const customization = rawCustomization as Record<string, unknown>;
+    const name = typeof customization.name === "string" ? customization.name.trim().slice(0, 80) : "";
+    const color = typeof customization.color === "string" && /^#[0-9a-f]{6}$/i.test(customization.color.trim()) ? customization.color.trim().toLowerCase() : "";
+    if (name || color) customizations[key] = { ...(name ? { name } : {}), ...(color ? { color } : {}) };
+  }
+  return customizations;
 }
 
 function normalizeTabSortMode(value: unknown): TabSortMode {
@@ -1361,6 +1381,7 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
     tabLayout: normalizeTabLayout(settings.tabLayout),
     tabPlacement: normalizeTabPlacement(settings.tabPlacement),
     tabGroupMode: normalizeTabGroupMode(settings.tabGroupMode),
+    tabGroupCustomizations: normalizeTabGroupCustomizations(settings.tabGroupCustomizations),
     tabSortMode: normalizeTabSortMode(settings.tabSortMode),
     appLayout: settings.appLayout ?? DEFAULT_EDITOR_SETTINGS.appLayout,
     pageSize: normalizeResultPageSize(settings.pageSize),
@@ -2064,6 +2085,7 @@ export const useSettingsStore = defineStore("settings", () => {
     if (partial.tabLayout !== undefined) editorSettings.value.tabLayout = normalizeTabLayout(partial.tabLayout);
     if (partial.tabPlacement !== undefined) editorSettings.value.tabPlacement = normalizeTabPlacement(partial.tabPlacement);
     if (partial.tabGroupMode !== undefined) editorSettings.value.tabGroupMode = normalizeTabGroupMode(partial.tabGroupMode);
+    if (partial.tabGroupCustomizations !== undefined) editorSettings.value.tabGroupCustomizations = normalizeTabGroupCustomizations(partial.tabGroupCustomizations);
     if (partial.tabSortMode !== undefined) editorSettings.value.tabSortMode = normalizeTabSortMode(partial.tabSortMode);
     if (partial.appLayout !== undefined) editorSettings.value.appLayout = partial.appLayout;
     if (partial.pageSize !== undefined) editorSettings.value.pageSize = normalizeResultPageSize(partial.pageSize);

@@ -2838,6 +2838,7 @@ export default withEnglishFallback({
     compactTabTitle: "탭 제목 줄이기",
     fullTabTitle: "전체 탭 제목 표시",
     closeTab: "탭 닫기",
+    closeTabGroup: "이 그룹의 탭 닫기",
     closeFixedTab: "고정 탭 닫기",
     closeLeftTabs: "왼쪽 탭 닫기",
     closeRightTabs: "오른쪽 탭 닫기",

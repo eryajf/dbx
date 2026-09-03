@@ -2946,6 +2946,7 @@ export default withEnglishFallback({
     compactTabTitle: "Acortar títulos de pestañas",
     fullTabTitle: "Mostrar títulos completos de pestañas",
     closeTab: "Cerrar pestaña",
+    closeTabGroup: "Cerrar grupo de pestañas",
     closeFixedTab: "Cerrar pestaña fijada",
     closeOtherTabs: "Cerrar otras pestañas",
     closeOtherRegularTabs: "Cerrar otras pestañas normales",

@@ -2946,6 +2946,7 @@ export default withEnglishFallback({
     compactTabTitle: "Encurtar Títulos das Abas",
     fullTabTitle: "Mostrar títulos completos das abas",
     closeTab: "Fechar Aba",
+    closeTabGroup: "Fechar Grupo de Abas",
     closeFixedTab: "Fechar Aba Fixa",
     closeOtherTabs: "Fechar Outras Abas",
     closeOtherRegularTabs: "Fechar Outras Abas Normais",
