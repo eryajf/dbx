@@ -24,7 +24,7 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const { toast } = useToast();
 type ResponseView = "raw" | "json" | "document";
-type ElasticsearchDocument = { label: string; text: string };
+type ElasticsearchHit = { label: string; record: Record<string, unknown> };
 
 const responseView = ref<ResponseView>("json");
 const responsePanelRef = ref<HTMLElement>();
@@ -44,7 +44,7 @@ const formattedBody = computed(() => {
     return { valid: false, text: "" };
   }
 });
-const documentHits = computed<ElasticsearchDocument[]>(() => {
+const documentHits = computed<ElasticsearchHit[]>(() => {
   try {
     const response = parseJsonPreservingLargeNumbers(props.body);
     const hits = response && typeof response === "object" && !Array.isArray(response) ? (response as Record<string, unknown>).hits : undefined;
@@ -54,9 +54,9 @@ const documentHits = computed<ElasticsearchDocument[]>(() => {
       if (!hit || typeof hit !== "object" || Array.isArray(hit)) return [];
       const record = hit as Record<string, unknown>;
       const id = typeof record._id === "string" && record._id ? record._id : String(index + 1);
-      // Preserve the complete search hit, including optional fields such as
+      // Keep the complete search hit, including optional fields such as
       // highlights and inner hits, without coercing Elasticsearch long values.
-      return [{ label: id, text: stringifyJsonPreservingLargeNumbers(record, 2) }];
+      return [{ label: id, record }];
     });
   } catch {
     return [];
@@ -64,6 +64,9 @@ const documentHits = computed<ElasticsearchDocument[]>(() => {
 });
 const selectedDocumentIndex = ref(0);
 const selectedDocument = computed(() => documentHits.value[selectedDocumentIndex.value]);
+// Keep raw records and stringify only the selected hit, so a large hit list
+// does not hold a formatted copy of every document in memory at once.
+const selectedDocumentText = computed(() => (selectedDocument.value ? stringifyJsonPreservingLargeNumbers(selectedDocument.value.record, 2) : ""));
 
 const statusClass = computed(() => {
   if (props.status >= 500) return "border-destructive/40 bg-destructive/10 text-destructive";
@@ -102,7 +105,7 @@ watch(responseSearchQuery, () => {
 
 async function copyResponse() {
   try {
-    await copyToClipboard(responseView.value === "document" ? (selectedDocument.value?.text ?? props.body) : props.body);
+    await copyToClipboard(responseView.value === "document" ? selectedDocumentText.value || props.body : props.body);
     toast(t("grid.copied"), 2000);
   } catch (error: any) {
     toast(t("grid.copyFailed", { message: error?.message || String(error) }), 5000);
@@ -278,7 +281,7 @@ defineExpose({ focusSearch });
             <span class="truncate">{{ document.label }}</span>
           </button>
         </aside>
-        <RedisJsonEditor v-if="selectedDocument" ref="jsonEditorRef" :model-value="selectedDocument.text" read-only class="min-h-0 min-w-0 flex-1" />
+        <RedisJsonEditor v-if="selectedDocument" ref="jsonEditorRef" :model-value="selectedDocumentText" read-only class="min-h-0 min-w-0 flex-1" />
       </div>
       <RedisJsonEditor v-else-if="formattedBody.valid" ref="jsonEditorRef" :model-value="formattedBody.text" read-only class="min-h-0 flex-1" />
     </div>

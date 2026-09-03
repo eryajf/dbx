@@ -288,7 +288,7 @@ const documentFilterRules = ref<DocumentFilterRule[]>([]);
 const appliedDocumentFilter = ref<Record<string, unknown> | null>(null);
 const elasticsearchMappingFields = ref<ColumnInfo[]>([]);
 function elasticsearchGridColumnTypesFor(columns: readonly string[]): string[] {
-  const mappingTypes = new Map(elasticsearchMappingFields.value.map((field) => [field.name, field.data_type]));
+  const mappingTypes = elasticsearchFieldTypes.value;
   return columns.map((column) => {
     // Elasticsearch metadata fields are not part of an index mapping, but they
     // are textual identifiers in the document grid just like mapped keywords.

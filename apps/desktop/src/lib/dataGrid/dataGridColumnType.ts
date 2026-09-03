@@ -1,4 +1,4 @@
-import type { DatabaseType } from "@/types/database";
+import { isElasticsearchCompatibleDatabaseType, type DatabaseType } from "@/types/database";
 
 /**
  * Resolve the data type to display in a data-grid column header.
@@ -197,13 +197,15 @@ const INTEGER_COLUMN_TYPE_BASES = new Set([
   "uint128",
   "uint256",
   "year",
-  // Elasticsearch integer mapping types.
-  "byte",
-  "short",
-  "long",
+  // Elasticsearch integer mapping types with unambiguous names.
   "unsigned_long",
   "token_count",
 ]);
+
+// Elasticsearch integer mapping types whose names collide with other
+// databases' non-integer types (Oracle LONG is a legacy text type, Informix
+// BYTE is binary), so they only apply to Elasticsearch-compatible databases.
+const ELASTICSEARCH_ONLY_INTEGER_COLUMN_TYPE_BASES = new Set(["byte", "short", "long"]);
 
 const STRING_COLUMN_TYPE_BASES = new Set([
   "varchar",
@@ -298,6 +300,7 @@ export function resolveDataGridTypeVisualKind(dataType: string | undefined, data
   if (array) return "structured";
   if (databaseType === "sqlserver" && (base === "timestamp" || base === "rowversion")) return "binary";
   if (databaseType === "postgres" && (base === "bit" || base === "bit varying")) return "binary";
+  if (isElasticsearchCompatibleDatabaseType(databaseType) && ELASTICSEARCH_ONLY_INTEGER_COLUMN_TYPE_BASES.has(base)) return "integer";
   if (INTEGER_COLUMN_TYPE_BASES.has(base)) return "integer";
   if (isNumericColumnType(dataType)) return "numeric";
   if (BOOLEAN_COLUMN_TYPE_BASES.has(base)) return "boolean";
