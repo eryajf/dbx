@@ -7528,6 +7528,8 @@ export default withEnglishFallback({
       leaseCreated: "已建立 Lease {id}",
     },
     adminPermissionRequired: "此 etcd 頁面僅對 root 角色開放。",
+    targetKeyWriteDenied: "目標連線沒有此 Key 的寫入權限。",
+    selectedKeysWriteDenied: "目標連線沒有所選 Key 的寫入權限，未執行任何寫入。",
   },
   consul,
   sqlServerTrace,

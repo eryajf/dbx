@@ -4498,6 +4498,8 @@ export default withEnglishFallback({
       leaseCreated: "Lease {id} criado",
     },
     adminPermissionRequired: "Esta página do etcd está disponível apenas para o papel root.",
+    targetKeyWriteDenied: "A conexão de destino não tem permissão para gravar esta Key.",
+    selectedKeysWriteDenied: "A conexão de destino não tem permissão para gravar as Keys selecionadas; nenhuma alteração foi feita.",
   },
   consul,
   sqlServerTrace,

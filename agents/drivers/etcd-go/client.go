@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -132,6 +133,7 @@ func (s *etcdSession) close() error {
 	s.connectedEndpoints = nil
 	s.username = ""
 	s.authEnabled = false
+	s.readAccess = nil
 	s.clientMu.Unlock()
 	if client != nil {
 		_ = client.Close()
@@ -196,9 +198,23 @@ func (s *etcdSession) refreshAuthEnabled(client *clientv3.Client) bool {
 	s.clientMu.Lock()
 	defer s.clientMu.Unlock()
 	if err == nil && s.client == client {
+		if s.authEnabled != enabled {
+			s.readAccess = nil
+		}
 		s.authEnabled = enabled
 	}
 	return s.authEnabled
+}
+
+func isAuthenticationNotEnabled(err error) bool {
+	return errors.Is(err, rpctypes.ErrAuthNotEnabled)
+}
+
+func (s *etcdSession) disableAuth() {
+	s.clientMu.Lock()
+	s.authEnabled = false
+	s.readAccess = nil
+	s.clientMu.Unlock()
 }
 
 func connectTimeoutSeconds(connection connectionParams) int {

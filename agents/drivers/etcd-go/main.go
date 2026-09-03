@@ -21,6 +21,7 @@ const (
 	legacyAgentSessionID = "__legacy__"
 	maxAgentSessions     = 256
 	rpcTimeoutSeconds    = 30
+	readAccessCacheTTL   = 15 * time.Second
 )
 
 var capabilities = []string{
@@ -51,6 +52,7 @@ type etcdSession struct {
 	connectedEndpoints []string
 	username           string
 	authEnabled        bool
+	readAccess         *etcdReadAccess
 
 	watchesMu          sync.Mutex
 	watches            map[string]*watchState

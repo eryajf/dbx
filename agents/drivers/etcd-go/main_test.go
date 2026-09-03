@@ -9,10 +9,14 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestHandshakeAdvertisesCapabilities(t *testing.T) {
@@ -194,6 +198,48 @@ func TestReadableKeyRangesUsesAuthStatusAndEffectiveIdentity(t *testing.T) {
 	allKeys, ranges, err = missingIdentity.readableKeyRanges()
 	if err != nil || allKeys || len(ranges) != 0 {
 		t.Fatalf("enabled auth without an identity should expose no ranges: all=%v ranges=%v err=%v", allKeys, ranges, err)
+	}
+}
+
+func TestReadAccessCacheExpiresAndReturnsACopy(t *testing.T) {
+	state := newEtcdSession()
+	state.cacheReadAccess(false, []etcdReadRange{{start: "/team-a/", end: "/team-a0"}})
+
+	allKeys, ranges, ok := state.cachedReadAccess(time.Now())
+	if !ok || allKeys || len(ranges) != 1 || ranges[0].start != "/team-a/" {
+		t.Fatalf("cached read access = all=%v ranges=%#v ok=%v", allKeys, ranges, ok)
+	}
+	ranges[0].start = "/mutated/"
+	_, ranges, ok = state.cachedReadAccess(time.Now())
+	if !ok || ranges[0].start != "/team-a/" {
+		t.Fatalf("cached range was not copied: %#v", ranges)
+	}
+
+	state.clientMu.Lock()
+	state.readAccess.expiresAt = time.Now().Add(-time.Second)
+	state.clientMu.Unlock()
+	if _, _, ok := state.cachedReadAccess(time.Now()); ok {
+		t.Fatal("expired read access cache was returned")
+	}
+}
+
+func TestAuthenticationNotEnabledFallbackClearsCachedRestrictions(t *testing.T) {
+	if !isAuthenticationNotEnabled(rpctypes.ErrAuthNotEnabled) {
+		t.Fatal("authentication-not-enabled status was not recognized")
+	}
+	if isAuthenticationNotEnabled(status.Error(codes.PermissionDenied, "authentication is not enabled")) {
+		t.Fatal("permission-denied status must not disable authentication")
+	}
+
+	state := newEtcdSession()
+	state.authEnabled = true
+	state.cacheReadAccess(false, []etcdReadRange{{start: "/team-a/", end: "/team-a0"}})
+	state.disableAuth()
+	if state.authEnabled {
+		t.Fatal("authentication remained enabled after compatibility fallback")
+	}
+	if _, _, ok := state.cachedReadAccess(time.Now()); ok {
+		t.Fatal("compatibility fallback retained stale restricted ranges")
 	}
 }
 

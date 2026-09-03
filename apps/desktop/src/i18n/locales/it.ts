@@ -4496,6 +4496,8 @@ export default withEnglishFallback({
       leaseCreated: "Lease {id} creato",
     },
     adminPermissionRequired: "Questa pagina etcd è accessibile solo al ruolo root.",
+    targetKeyWriteDenied: "La connessione di destinazione non dispone dell'autorizzazione per scrivere questa Key.",
+    selectedKeysWriteDenied: "La connessione di destinazione non dispone dell'autorizzazione per scrivere le Key selezionate; non è stata eseguita alcuna modifica.",
   },
   consul,
   sqlServerTrace,

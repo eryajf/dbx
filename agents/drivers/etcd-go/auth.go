@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -19,6 +20,15 @@ type etcdReadRange struct {
 	end   string
 }
 
+// etcdReadAccess is a short-lived snapshot of the current user's readable
+// ranges. etcd remains the authorization boundary for every Key request; the
+// cache only avoids repeating AuthStatus, UserGet, and RoleGet while browsing.
+type etcdReadAccess struct {
+	allKeys   bool
+	ranges    []etcdReadRange
+	expiresAt time.Time
+}
+
 // etcd uses a single NUL byte as an unbounded range end, meaning every Key
 // greater than or equal to the range start. It is a protocol sentinel, not a
 // byte-string upper bound, so ordinary lexical comparison is incorrect.
@@ -27,6 +37,9 @@ const unboundedRangeEnd = "\x00"
 // readableKeyRanges returns whether the user can read every Key and otherwise
 // the smallest set of non-overlapping read ranges granted by its roles.
 func (s *etcdSession) readableKeyRanges() (bool, []etcdReadRange, error) {
+	if allKeys, ranges, ok := s.cachedReadAccess(time.Now()); ok {
+		return allKeys, ranges, nil
+	}
 	s.clientMu.Lock()
 	username := s.username
 	authEnabled := s.authEnabled
@@ -36,9 +49,11 @@ func (s *etcdSession) readableKeyRanges() (bool, []etcdReadRange, error) {
 		authEnabled = s.refreshAuthEnabled(client)
 	}
 	if !authEnabled || username == "root" {
+		s.cacheReadAccess(true, nil)
 		return true, nil, nil
 	}
 	if username == "" {
+		s.cacheReadAccess(false, nil)
 		return false, nil, nil
 	}
 	if clientErr != nil {
@@ -48,6 +63,11 @@ func (s *etcdSession) readableKeyRanges() (bool, []etcdReadRange, error) {
 	defer s.endOperation(cancel)
 	user, err := client.Auth.UserGet(ctx, username)
 	if err != nil {
+		if isAuthenticationNotEnabled(err) {
+			s.disableAuth()
+			s.cacheReadAccess(true, nil)
+			return true, nil, nil
+		}
 		return false, nil, err
 	}
 
@@ -58,6 +78,11 @@ func (s *etcdSession) readableKeyRanges() (bool, []etcdReadRange, error) {
 		}
 		role, err := client.Auth.RoleGet(ctx, roleName)
 		if err != nil {
+			if isAuthenticationNotEnabled(err) {
+				s.disableAuth()
+				s.cacheReadAccess(true, nil)
+				return true, nil, nil
+			}
 			return false, nil, err
 		}
 		for _, permission := range role.Perm {
@@ -67,6 +92,7 @@ func (s *etcdSession) readableKeyRanges() (bool, []etcdReadRange, error) {
 			start := string(permission.Key)
 			end := string(permission.RangeEnd)
 			if isAllKeyPermission(start, end) {
+				s.cacheReadAccess(true, nil)
 				return true, nil, nil
 			}
 			if end == "" {
@@ -76,7 +102,28 @@ func (s *etcdSession) readableKeyRanges() (bool, []etcdReadRange, error) {
 			ranges = append(ranges, etcdReadRange{start: start, end: end})
 		}
 	}
-	return false, normalizeReadRanges(ranges), nil
+	ranges = normalizeReadRanges(ranges)
+	s.cacheReadAccess(false, ranges)
+	return false, ranges, nil
+}
+
+func (s *etcdSession) cachedReadAccess(now time.Time) (bool, []etcdReadRange, bool) {
+	s.clientMu.Lock()
+	defer s.clientMu.Unlock()
+	if s.readAccess == nil || !now.Before(s.readAccess.expiresAt) {
+		return false, nil, false
+	}
+	return s.readAccess.allKeys, append([]etcdReadRange(nil), s.readAccess.ranges...), true
+}
+
+func (s *etcdSession) cacheReadAccess(allKeys bool, ranges []etcdReadRange) {
+	s.clientMu.Lock()
+	s.readAccess = &etcdReadAccess{
+		allKeys:   allKeys,
+		ranges:    append([]etcdReadRange(nil), ranges...),
+		expiresAt: time.Now().Add(readAccessCacheTTL),
+	}
+	s.clientMu.Unlock()
 }
 
 func isAllKeyPermission(start, end string) bool {
@@ -168,6 +215,10 @@ func (s *etcdSession) authUserGet(params map[string]json.RawMessage) (any, error
 	defer s.endOperation(cancel)
 	response, err := client.Auth.UserGet(ctx, user)
 	if err != nil {
+		if currentUserRequest && isAuthenticationNotEnabled(err) {
+			s.disableAuth()
+			return map[string]any{"user": user, "roles": []string{}, "authEnabled": false}, nil
+		}
 		return nil, err
 	}
 	return map[string]any{"user": user, "roles": response.Roles, "authEnabled": true}, nil

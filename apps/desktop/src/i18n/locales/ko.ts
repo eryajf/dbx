@@ -4129,6 +4129,8 @@ export default withEnglishFallback({
       },
     },
     adminPermissionRequired: "이 etcd 페이지는 root 역할에만 공개됩니다.",
+    targetKeyWriteDenied: "대상 연결에는 이 Key에 쓸 권한이 없습니다.",
+    selectedKeysWriteDenied: "대상 연결에는 선택한 Key에 쓸 권한이 없어 변경 사항이 적용되지 않았습니다.",
   },
   consul,
   sqlServerTrace,

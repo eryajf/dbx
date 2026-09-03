@@ -816,7 +816,7 @@ async function previewTransfer() {
         return { id: `source:${kvValueByteIdentity(source.key)}`, displayKey: shown, source, operation: "skipped" as const, reason: "Leased keys are skipped by default.", selected: false };
       }
       if (!canWriteConnectionKey(targetId, shown, source.key)) {
-        return { id: `source:${kvValueByteIdentity(source.key)}`, displayKey: shown, source, operation: "skipped" as const, reason: "目标连接没有此 Key 的写权限。", selected: false };
+        return { id: `source:${kvValueByteIdentity(source.key)}`, displayKey: shown, source, operation: "skipped" as const, reason: t("etcd.targetKeyWriteDenied"), selected: false };
       }
       const target = await api.etcdGet(targetId, shown, { keyBytes: source.key });
       if (generation !== transferPreviewGeneration) throw new Error("同步预览已被新的请求替换。");
@@ -854,7 +854,7 @@ async function applyTransfer() {
   const rows = [...selectedTransferRows.value];
   if (!targetId || rows.length === 0) return;
   if (!rows.every((row) => row.source && canWriteConnectionKey(targetId, row.displayKey, row.source.key))) {
-    transferError.value = "目标连接没有所选 Key 的写权限，未执行任何写入。";
+    transferError.value = t("etcd.selectedKeysWriteDenied");
     return;
   }
   // Invalidate any preview that is still resolving before writes begin.
