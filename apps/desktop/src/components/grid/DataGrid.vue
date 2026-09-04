@@ -1071,7 +1071,9 @@ const headerSortMenuOpenColumn = ref<number | null>(null);
 const headerPanelDismissGuardUntil = ref(0);
 const localFilterSearch = ref("");
 const localFilterDraft = ref<LocalColumnFilterDraft | null>(null);
-const LOCAL_FILTER_POPOVER_DEFAULT_WIDTH = 300;
+// Default sized to fully render a uuidv4 value (36 chars in text-xs mono) next to the
+// checkbox and count columns; persisted per-editor as settings.localFilterPopoverWidth.
+const LOCAL_FILTER_POPOVER_DEFAULT_WIDTH = 360;
 const LOCAL_FILTER_POPOVER_MIN_WIDTH = 240;
 const LOCAL_FILTER_POPOVER_VIEWPORT_PADDING = 16;
 
@@ -1087,7 +1089,7 @@ function clampLocalFilterPopoverWidth(width: number, maximumWidth = localFilterP
   return Math.round(Math.max(minWidth, Math.min(maxWidth, normalizedWidth)));
 }
 
-const localFilterPopoverWidth = ref(LOCAL_FILTER_POPOVER_DEFAULT_WIDTH);
+const localFilterPopoverWidth = ref(clampLocalFilterPopoverWidth(settingsStore.editorSettings.localFilterPopoverWidth));
 const localFilterPopoverOffsetX = ref(0);
 const isResizingLocalFilter = ref(false);
 let localFilterResizeDirection: "left" | "right" = "right";
@@ -1642,10 +1644,20 @@ function onLocalFilterResizeMove(event: MouseEvent) {
 function onLocalFilterResizeEnd() {
   if (!isResizingLocalFilter.value) return;
   isResizingLocalFilter.value = false;
+  settingsStore.updateEditorSettings({
+    localFilterPopoverWidth: localFilterPopoverWidth.value,
+  });
   document.body.classList.remove("select-none", "cursor-col-resize");
   window.removeEventListener("mousemove", onLocalFilterResizeMove);
   window.removeEventListener("mouseup", onLocalFilterResizeEnd);
 }
+
+watch(
+  () => settingsStore.editorSettings.localFilterPopoverWidth,
+  (width) => {
+    if (!isResizingLocalFilter.value) localFilterPopoverWidth.value = clampLocalFilterPopoverWidth(width);
+  },
+);
 
 function formatterKeysForColumn(columnIndex: number): string[] {
   const resultColumn = props.result.columns[columnIndex];
@@ -13720,8 +13732,8 @@ function openGridSnapshot() {
                             @click.stop
                             @keydown.stop
                           >
-                            <div role="separator" aria-orientation="vertical" aria-label="Resize filter panel" class="absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize" @mousedown.stop="onLocalFilterResizeStart($event, 'left')" />
-                            <div role="separator" aria-orientation="vertical" aria-label="Resize filter panel" class="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize" @mousedown.stop="onLocalFilterResizeStart($event, 'right')" />
+                            <div role="separator" aria-orientation="vertical" aria-label="Resize filter panel" class="absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-primary/30" @mousedown.stop="onLocalFilterResizeStart($event, 'left')" />
+                            <div role="separator" aria-orientation="vertical" aria-label="Resize filter panel" class="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-primary/30" @mousedown.stop="onLocalFilterResizeStart($event, 'right')" />
                             <div class="border-b bg-muted/40 px-2 py-1.5 text-center text-xs font-semibold">
                               {{ columnFilterPanelTitle(col.name) }}
                             </div>
