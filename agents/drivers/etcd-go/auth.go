@@ -74,6 +74,7 @@ func (s *etcdSession) readableKeyRanges() (bool, []etcdReadRange, error) {
 	ranges := make([]etcdReadRange, 0)
 	for _, roleName := range user.Roles {
 		if roleName == "root" {
+			s.cacheReadAccess(true, nil)
 			return true, nil, nil
 		}
 		role, err := client.Auth.RoleGet(ctx, roleName)
