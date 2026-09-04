@@ -1073,23 +1073,29 @@ const localFilterSearch = ref("");
 const localFilterDraft = ref<LocalColumnFilterDraft | null>(null);
 const LOCAL_FILTER_POPOVER_DEFAULT_WIDTH = 300;
 const LOCAL_FILTER_POPOVER_MIN_WIDTH = 240;
+const LOCAL_FILTER_POPOVER_VIEWPORT_PADDING = 16;
 
 function localFilterPopoverMaxWidth() {
   if (typeof window === "undefined") return LOCAL_FILTER_POPOVER_DEFAULT_WIDTH;
   return Math.max(0, window.innerWidth - 32);
 }
 
-function clampLocalFilterPopoverWidth(width: number) {
+function clampLocalFilterPopoverWidth(width: number, maximumWidth = localFilterPopoverMaxWidth()) {
   const normalizedWidth = Number.isFinite(width) ? width : LOCAL_FILTER_POPOVER_DEFAULT_WIDTH;
-  const minWidth = Math.min(LOCAL_FILTER_POPOVER_MIN_WIDTH, localFilterPopoverMaxWidth());
-  return Math.round(Math.max(minWidth, Math.min(localFilterPopoverMaxWidth(), normalizedWidth)));
+  const maxWidth = Math.max(0, Math.min(localFilterPopoverMaxWidth(), maximumWidth));
+  const minWidth = Math.min(LOCAL_FILTER_POPOVER_MIN_WIDTH, maxWidth);
+  return Math.round(Math.max(minWidth, Math.min(maxWidth, normalizedWidth)));
 }
 
 const localFilterPopoverWidth = ref(LOCAL_FILTER_POPOVER_DEFAULT_WIDTH);
+const localFilterPopoverOffsetX = ref(0);
 const isResizingLocalFilter = ref(false);
 let localFilterResizeDirection: "left" | "right" = "right";
 let localFilterResizeStartX = 0;
 let localFilterResizeStartWidth = LOCAL_FILTER_POPOVER_DEFAULT_WIDTH;
+let localFilterResizeStartOffsetX = 0;
+let localFilterResizeStartLeft = 0;
+let localFilterResizeStartRight = 0;
 const SERVER_COLUMN_FILTER_LIMIT = 1000;
 const SERVER_COLUMN_FILTER_DEBOUNCE_MS = 300;
 const serverFilterLoading = ref(false);
@@ -1414,6 +1420,7 @@ const canApplyTypedLocalFilterValue = computed(() => {
 
 function openLocalFilter(colIdx: number, requestedMode: LocalFilterMode = "local") {
   localFilterSearch.value = "";
+  localFilterPopoverOffsetX.value = 0;
   const mode: LocalFilterMode = requestedMode === "server" && canUseServerColumnFilter.value ? "server" : "local";
   const allKeys = mode === "server" ? [] : buildLocalFilterOptions(colIdx).map((option) => option.key);
   localFilterDraft.value = {
@@ -1592,9 +1599,11 @@ function handleLocalFilterOpenChange(value: boolean, columnIndex: number) {
 }
 
 function closeLocalFilter() {
+  onLocalFilterResizeEnd();
   localFilterOpenColumn.value = null;
   localFilterDraft.value = null;
   localFilterSearch.value = "";
+  localFilterPopoverOffsetX.value = 0;
   resetServerFilterState();
 }
 
@@ -1604,8 +1613,12 @@ function onLocalFilterResizeStart(event: MouseEvent, direction: "left" | "right"
   localFilterResizeDirection = direction;
   localFilterResizeStartX = event.clientX;
   const handle = event.currentTarget as HTMLElement | null;
-  const renderedWidth = handle?.parentElement?.getBoundingClientRect().width;
+  const popoverRect = handle?.parentElement?.getBoundingClientRect();
+  const renderedWidth = popoverRect?.width;
   localFilterResizeStartWidth = clampLocalFilterPopoverWidth(renderedWidth ?? localFilterPopoverWidth.value);
+  localFilterResizeStartOffsetX = localFilterPopoverOffsetX.value;
+  localFilterResizeStartLeft = popoverRect?.left ?? LOCAL_FILTER_POPOVER_VIEWPORT_PADDING;
+  localFilterResizeStartRight = popoverRect?.right ?? localFilterResizeStartWidth;
   localFilterPopoverWidth.value = localFilterResizeStartWidth;
   document.body.classList.add("select-none", "cursor-col-resize");
   window.addEventListener("mousemove", onLocalFilterResizeMove);
@@ -1615,7 +1628,15 @@ function onLocalFilterResizeStart(event: MouseEvent, direction: "left" | "right"
 function onLocalFilterResizeMove(event: MouseEvent) {
   if (!isResizingLocalFilter.value) return;
   const deltaX = event.clientX - localFilterResizeStartX;
-  localFilterPopoverWidth.value = clampLocalFilterPopoverWidth(localFilterResizeStartWidth + (localFilterResizeDirection === "right" ? deltaX : -deltaX));
+  if (localFilterResizeDirection === "right") {
+    const maxWidth = typeof window === "undefined" ? LOCAL_FILTER_POPOVER_DEFAULT_WIDTH : window.innerWidth - LOCAL_FILTER_POPOVER_VIEWPORT_PADDING - localFilterResizeStartLeft;
+    localFilterPopoverWidth.value = clampLocalFilterPopoverWidth(localFilterResizeStartWidth + deltaX, maxWidth);
+    return;
+  }
+  const maxWidth = localFilterResizeStartRight - LOCAL_FILTER_POPOVER_VIEWPORT_PADDING;
+  const nextWidth = clampLocalFilterPopoverWidth(localFilterResizeStartWidth - deltaX, maxWidth);
+  localFilterPopoverWidth.value = nextWidth;
+  localFilterPopoverOffsetX.value = localFilterResizeStartOffsetX + localFilterResizeStartWidth - nextWidth;
 }
 
 function onLocalFilterResizeEnd() {
@@ -13691,7 +13712,14 @@ function openGridSnapshot() {
                               <Filter class="h-3.5 w-3.5" />
                             </button>
                           </PopoverTrigger>
-                          <PopoverContent align="start" side="bottom" class="relative max-w-[calc(100vw-2rem)] gap-0 overflow-hidden rounded-md border bg-popover p-0 text-popover-foreground shadow-xl" :style="{ width: `${localFilterPopoverWidth}px` }" @click.stop @keydown.stop>
+                          <PopoverContent
+                            align="start"
+                            side="bottom"
+                            class="relative max-w-[calc(100vw-2rem)] gap-0 overflow-hidden rounded-md border bg-popover p-0 text-popover-foreground shadow-xl"
+                            :style="{ width: `${localFilterPopoverWidth}px`, marginLeft: `${localFilterPopoverOffsetX}px` }"
+                            @click.stop
+                            @keydown.stop
+                          >
                             <div role="separator" aria-orientation="vertical" aria-label="Resize filter panel" class="absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize" @mousedown.stop="onLocalFilterResizeStart($event, 'left')" />
                             <div role="separator" aria-orientation="vertical" aria-label="Resize filter panel" class="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize" @mousedown.stop="onLocalFilterResizeStart($event, 'right')" />
                             <div class="border-b bg-muted/40 px-2 py-1.5 text-center text-xs font-semibold">
