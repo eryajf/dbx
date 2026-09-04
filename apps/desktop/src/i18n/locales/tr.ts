@@ -6502,6 +6502,7 @@ export default withEnglishFallback({
     tabGroup: "Gruplama ölçütü",
     tabGroupNone: "Gruplama yok",
     tabGroupDatabaseType: "Veritabanı türüne göre grupla",
+    tabGroupDatabase: "Veritabanına göre grupla",
     tabGroupConnection: "Bağlantıya göre grupla",
     tabSort: "Sıralama ölçütü",
     tabSortManual: "Elle sıralama",

@@ -6512,6 +6512,7 @@ export default {
     tabGroup: "Group by",
     tabGroupNone: "No grouping",
     tabGroupDatabaseType: "Group by database type",
+    tabGroupDatabase: "Group by database",
     tabGroupConnection: "Group by connection",
     tabSort: "Sort by",
     tabSortManual: "Manual order",

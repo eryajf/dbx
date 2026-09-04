@@ -29,7 +29,7 @@ const sharedStyles = readFileSync(resolve(specDir, "../appTabBar.css"), "utf8");
 describe("EditorGroupTabBar semantic tab groups", () => {
   it("keeps separate collapsed state for pinned and regular clusters under the same key", () => {
     expect(source).toContain("const collapsedTabGroups = ref<Set<string>>(new Set());");
-    expect(source).toContain('return `${tab.pinned ? "fixed" : "regular"}:${tabGroupKey(tab)}`;');
+    expect(source).toContain('return `${tab.pinned ? "fixed" : "regular"}:${settingsStore.editorSettings.tabGroupMode}:${tabGroupKey(tab)}`;');
     expect(source).toContain("function toggleTabGroup(tab: QueryTab)");
     expect(source).toContain(':aria-expanded="!isTabGroupCollapsed(entry.tab)"');
   });
@@ -165,7 +165,7 @@ describe("EditorGroupTabBar vertical placement", () => {
     expect(sharedStyles).toContain('.vertical-tab-layout .app-tab-pill[data-active-tab="true"]');
     expect(sharedStyles).toContain("inset 0 0 0 1px color-mix");
     expect(sharedStyles).toContain(".vertical-tab-layout .tab-group-header:not(.tab-group-header--collapsed)::after");
-    expect(sharedStyles).toContain("margin-inline: 2.5rem 0.5rem;");
+    expect(sharedStyles).toContain("margin-inline: var(--tab-group-tab-inset) 0.5rem;");
   });
 });
 
