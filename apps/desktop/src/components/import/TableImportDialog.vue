@@ -29,6 +29,7 @@ import {
   type TableImportWizardStep,
 } from "@/lib/table/tableImport";
 import { getDataTypeOptions } from "@/lib/table/tableStructureEditorState";
+import { filterDatabaseOptions } from "@/lib/database/databaseOptionSearch";
 import { metadataSchemaForConnection, tableStructureDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import type { ColumnInfo } from "@/types/database";
 import * as api from "@/lib/backend/api";
@@ -158,7 +159,11 @@ const wizardSteps: Array<{ value: TableImportWizardStep; labelKey: string }> = [
 const selectedConnection = computed(() => (props.prefillConnectionId ? store.getConfig(props.prefillConnectionId) : undefined));
 const structureDatabaseType = computed(() => tableStructureDatabaseTypeForConnection(selectedConnection.value));
 const targetSchema = computed(() => metadataSchemaForConnection(selectedConnection.value, props.prefillDatabase || "", props.prefillSchema));
-const dataTypeOptions = computed(() => mergeDataTypeOptions(dynamicDataTypeOptions.value, getDataTypeOptions(structureDatabaseType.value), Object.values(columnDataTypes.value)));
+const inferredDataTypeOptions = computed(() => {
+  if (targetMode.value !== "create" || !preview.value) return [];
+  return Object.values(suggestImportTargetDataTypes(preview.value.columns, preview.value.rows, structureDatabaseType.value));
+});
+const dataTypeOptions = computed(() => mergeDataTypeOptions(dynamicDataTypeOptions.value, getDataTypeOptions(structureDatabaseType.value), inferredDataTypeOptions.value));
 const hasExistingTarget = computed(() => !!props.prefillTable || loadingExistingTables.value || existingTableNames.value.length > 0);
 const targetTableName = computed(() => (targetMode.value === "create" ? newTableName.value.trim() : selectedExistingTable.value));
 const existingTargetMetadataReady = computed(() => targetMode.value !== "existing" || (!loadingTarget.value && !!selectedExistingTable.value && loadedTargetTableName.value === selectedExistingTable.value));
@@ -420,17 +425,16 @@ function applySuggestedColumnDataTypes(currentPreview = preview.value) {
 const activeDataTypeColumn = ref<string | null>(null);
 const dataTypePickerOpen = ref(false);
 const dataTypePickerStyle = ref<Record<string, string>>({});
+const dataTypePickerQuery = ref("");
 const activeDataTypeOptionIndex = ref(-1);
 const dataTypePickerOptions = computed(() => {
-  const options = dataTypeOptions.value;
-  const sourceColumn = activeDataTypeColumn.value;
-  const currentValue = sourceColumn ? columnDataTypes.value[sourceColumn] : "";
-  return currentValue && !options.includes(currentValue) ? [...options, currentValue] : options;
+  return filterDatabaseOptions(dataTypeOptions.value, dataTypePickerQuery.value);
 });
 
 function closeDataTypePicker() {
   dataTypePickerOpen.value = false;
   activeDataTypeColumn.value = null;
+  dataTypePickerQuery.value = "";
   activeDataTypeOptionIndex.value = -1;
 }
 
@@ -443,8 +447,15 @@ function openDataTypePicker(sourceColumn: string, input: HTMLInputElement) {
     width: `${Math.max(rect.width, 200)}px`,
   };
   activeDataTypeColumn.value = sourceColumn;
+  dataTypePickerQuery.value = "";
   activeDataTypeOptionIndex.value = -1;
   dataTypePickerOpen.value = true;
+}
+
+function updateDataTypePickerQuery(sourceColumn: string, value: string) {
+  if (activeDataTypeColumn.value !== sourceColumn || !dataTypePickerOpen.value) return;
+  dataTypePickerQuery.value = value;
+  activeDataTypeOptionIndex.value = dataTypePickerOptions.value.length ? 0 : -1;
 }
 
 function selectDataTypeOption(value: string) {
@@ -468,7 +479,7 @@ function handleDataTypePickerKeydown(event: KeyboardEvent, sourceColumn: string,
   } else if (event.key === "ArrowUp" && options.length) {
     event.preventDefault();
     activeDataTypeOptionIndex.value = activeDataTypeOptionIndex.value <= 0 ? options.length - 1 : activeDataTypeOptionIndex.value - 1;
-  } else if (event.key === "Enter" && activeDataTypeOptionIndex.value >= 0) {
+  } else if (event.key === "Enter" && activeDataTypeOptionIndex.value >= 0 && activeDataTypeOptionIndex.value < options.length) {
     event.preventDefault();
     selectDataTypeOption(options[activeDataTypeOptionIndex.value]);
   }
@@ -1423,7 +1434,7 @@ watch(rawProgressPercent, (percent) => {
                   <div v-if="targetMode === 'create'" class="relative">
                     <input
                       data-dt-input
-                      :value="columnDataTypes[sourceColumn] || ''"
+                      :value="activeDataTypeColumn === sourceColumn && dataTypePickerOpen ? dataTypePickerQuery : columnDataTypes[sourceColumn] || ''"
                       :placeholder="t('tableImport.targetDataType')"
                       role="combobox"
                       aria-autocomplete="list"
@@ -1434,7 +1445,7 @@ watch(rawProgressPercent, (percent) => {
                       @focus="(event) => openDataTypePicker(sourceColumn, event.currentTarget as HTMLInputElement)"
                       @blur="closeDataTypePicker"
                       @keydown="(event) => handleDataTypePickerKeydown(event, sourceColumn, event.currentTarget as HTMLInputElement)"
-                      @input="(e) => updateColumnDataType(sourceColumn, (e.target as HTMLInputElement).value)"
+                      @input="(e) => updateDataTypePickerQuery(sourceColumn, (e.target as HTMLInputElement).value)"
                     />
                   </div>
                 </div>
@@ -1585,20 +1596,28 @@ watch(rawProgressPercent, (percent) => {
       <!-- 全局数据类型 popover：仅一个实例，替代每列的 SearchableSelect -->
       <Teleport to="body">
         <div v-if="activeDataTypeColumn && dataTypePickerOpen" id="table-import-data-type-options" role="listbox" :style="dataTypePickerStyle" class="pointer-events-auto z-[9999] max-h-48 overflow-auto rounded-md border bg-popover p-0.5 shadow-md">
-          <button
-            v-for="(opt, index) in dataTypePickerOptions"
-            :key="opt"
-            :id="`table-import-data-type-option-${index}`"
-            type="button"
-            role="option"
-            :aria-selected="opt === (activeDataTypeColumn ? columnDataTypes[activeDataTypeColumn] : '')"
-            class="flex h-7 w-full items-center rounded-sm px-2 text-left text-xs font-mono hover:bg-accent hover:text-accent-foreground"
-            :class="{ 'bg-accent/50': index === activeDataTypeOptionIndex || opt === (activeDataTypeColumn ? columnDataTypes[activeDataTypeColumn] : '') }"
-            @pointerenter="activeDataTypeOptionIndex = index"
-            @pointerdown.prevent="selectDataTypeOption(opt)"
-          >
-            {{ opt }}
-          </button>
+          <div v-if="loadingDataTypeOptions && !dataTypePickerOptions.length" class="px-2 py-2 text-xs text-muted-foreground">
+            {{ t("common.loading") }}
+          </div>
+          <template v-else-if="dataTypePickerOptions.length">
+            <button
+              v-for="(opt, index) in dataTypePickerOptions"
+              :key="opt"
+              :id="`table-import-data-type-option-${index}`"
+              type="button"
+              role="option"
+              :aria-selected="opt === (activeDataTypeColumn ? columnDataTypes[activeDataTypeColumn] : '')"
+              class="flex h-7 w-full items-center rounded-sm px-2 text-left text-xs font-mono hover:bg-accent hover:text-accent-foreground"
+              :class="{ 'bg-accent/50': index === activeDataTypeOptionIndex || opt === (activeDataTypeColumn ? columnDataTypes[activeDataTypeColumn] : '') }"
+              @pointerenter="activeDataTypeOptionIndex = index"
+              @pointerdown.prevent="selectDataTypeOption(opt)"
+            >
+              {{ opt }}
+            </button>
+          </template>
+          <div v-else class="px-2 py-2 text-xs text-muted-foreground">
+            {{ t("structureEditor.noMatchingType") }}
+          </div>
         </div>
       </Teleport>
 
