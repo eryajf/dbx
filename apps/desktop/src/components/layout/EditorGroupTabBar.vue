@@ -282,7 +282,7 @@ function tabConnectionLabel(tab: QueryTab) {
 function tabConnectionTargetLabel(tab: QueryTab) {
   const connection = connectionStore.getConfig(tab.connectionId);
   const host = connection?.host.trim();
-  return host ? `${host}:${connection.port}` : tab.connectionId;
+  return connection && host ? `${host}:${connection.port}` : tab.connectionId;
 }
 
 function databaseTabGroupBaseLabel(tab: QueryTab) {
@@ -424,7 +424,6 @@ function groupColorStyle(color: string): CSSProperties {
   return {
     "--tab-group-color": color,
     "--tab-group-soft": hexToRgba(color, 0.12),
-    "--tab-group-rail": hexToRgba(color, 0.3),
   } as CSSProperties;
 }
 

@@ -300,6 +300,32 @@ describe("EditorGroupTabBar group behavior", () => {
     host.remove();
   });
 
+  it("groups by database identity, disambiguating same-name databases across connections", async () => {
+    const store = useQueryStore();
+    const settings = useSettingsStore();
+    settings.editorSettings.tabGroupMode = "database";
+    const pgApp = store.createTab("pg-1", "app", "PG app", "query");
+    store.createTab("mysql-1", "app", "MY app", "query");
+    const pgConn = store.createTab("pg-1", "", "PG conn", "query");
+    const mainGroup = store.groups[0];
+    const { app, host } = mountBar(mainGroup.id, store.tabs.slice(), pgApp, pinia);
+    await settle();
+
+    const headers = Array.from(host.querySelectorAll<HTMLButtonElement>(".tab-group-header"));
+    // Sorted by group key: the same-name "app" databases stay separate clusters
+    // disambiguated by connection label, and the database-less tab clusters by connection.
+    expect(headers.map((header) => header.title)).toEqual(["app · mysql-1", "pg-1", "app · pg-1"]);
+    expect(host.querySelectorAll("[data-tab-id]").length).toBe(3);
+
+    // Collapsing one "app" cluster leaves the other same-name cluster expanded.
+    headers[0]!.click();
+    await settle();
+    expect(Array.from(host.querySelectorAll("[data-tab-id]")).map((pill) => pill.getAttribute("data-tab-id"))).toEqual([pgConn, pgApp]);
+
+    app.unmount();
+    host.remove();
+  });
+
   it("exposes the drag-back hit-test anchor and highlights itself as the detached drop target", async () => {
     const store = useQueryStore();
     const tabId = store.createTab("pg-1", "app", "PG 1", "query");
