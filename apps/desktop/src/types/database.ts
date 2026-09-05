@@ -1293,6 +1293,8 @@ export interface QueryTab {
     initialObjectFilter?: "tables" | "events";
     viewport?: ObjectBrowserViewport;
   };
+  /** Opened to view object source, including objects without editable source metadata. */
+  sourceView?: boolean;
   objectSource?: {
     schema?: string;
     name: string;
