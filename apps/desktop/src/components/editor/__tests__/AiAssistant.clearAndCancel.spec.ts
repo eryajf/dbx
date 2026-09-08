@@ -392,6 +392,13 @@ describe("AI assistant uses platform-specific conversation lifecycle", () => {
     expect(syncBody).toContain("conversations.value.sort(");
   });
 
+  it("reorders recovered conversations before restoring the most recent one", () => {
+    const recoveryBody = bodyOf("async function persistPendingInputRecovery(");
+    expect(recoveryBody).toContain(".then(() => syncPersistedConversation(snapshot))");
+    const mountedBody = bodyOf("onMounted(async () => {");
+    expect(mountedBody.indexOf("initialConversationStateLoaded = true;")).toBeLessThan(mountedBody.indexOf("restoreInitialConversation();"));
+  });
+
   it("does not replace an in-memory desktop run when the AI panel remounts", () => {
     const mountedBody = bodyOf("onMounted(async () => {");
     expect(mountedBody).toContain("const liveRun = desktopAiRun<ChatMessage>(persistedRun.conversationId);");

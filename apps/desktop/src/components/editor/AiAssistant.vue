@@ -287,6 +287,9 @@ const assistantMode = ref<AiAssistantMode>("ask");
 // The selection is loaded asynchronously. Apply it once when this panel mounts,
 // but do not let later setting changes alter an active conversation.
 let defaultModeInitialized = false;
+let initialConversationStateLoaded = false;
+let initialConversationRestored = false;
+let assistantViewMounted = false;
 watch(
   () => settings.isAiConfigLoaded,
   (loaded) => {
@@ -300,6 +303,17 @@ watch(
 const currentSessionId = ref("");
 const conversationId = ref("");
 const conversations = ref<AiConversation[]>([]);
+function restoreInitialConversation() {
+  if (!assistantViewMounted || initialConversationRestored || !initialConversationStateLoaded || !settings.isAiConfigLoaded) return;
+  initialConversationRestored = true;
+  if (settings.restoreLastConversation && conversations.value[0]) {
+    selectConversation(conversations.value[0]);
+  }
+}
+watch(
+  () => settings.isAiConfigLoaded,
+  () => restoreInitialConversation(),
+);
 const conversationSearchQuery = ref("");
 const conversationSearchInput = ref<HTMLInputElement | null>(null);
 const conversationSearchIndex = computed(() => buildAiConversationSearchIndex(conversations.value));
@@ -307,7 +321,6 @@ const filteredConversations = computed(() => filterAiConversationSearchIndex(con
 const showConversationList = ref(false);
 const showTemplateSelector = ref(false);
 const modeActionOpen = ref(false);
-let assistantViewMounted = false;
 // A normal-send FIFO run recovered at startup as an editable pending draft.
 // When the user opens that conversation, the draft is loaded into the input
 // box and this banner explains it is an unsent, resendable request.
@@ -3857,7 +3870,11 @@ async function persistPendingInputRecovery(conversation: AiConversation, message
     createdAt: conversation.createdAt,
     updatedAt,
   };
-  await saveAiRunState(snapshot, run).catch(() => {});
+  await saveAiRunState(snapshot, run)
+    // Recovery updates the conversation timestamp. Keep the in-memory list in
+    // the same order before the initial "restore latest" decision runs.
+    .then(() => syncPersistedConversation(snapshot))
+    .catch(() => {});
 }
 
 async function persistConversation() {
@@ -4236,6 +4253,10 @@ onMounted(async () => {
       }
     }
   }
+  initialConversationStateLoaded = true;
+  // Restore only after persisted background runs have been registered, so the
+  // selected conversation reflects the same runtime state as manual selection.
+  restoreInitialConversation();
   shikiCodeHighlighter.value = await createAiShikiCodeHighlighter({
     appearance: () => aiCodeAppearance.value,
   }).catch(() => undefined);
