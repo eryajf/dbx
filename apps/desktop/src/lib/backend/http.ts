@@ -77,6 +77,7 @@ import type {
   DriverInstallProgress,
   JavaRuntimeConfig,
   UpdateInfo,
+  DownloadedUpdate,
   UpdateDownloadSource,
   RedisCollectionPage,
   RedisDatabaseInfo,
@@ -4482,13 +4483,19 @@ export async function getSystemProxyUrl(): Promise<string | null> {
   return null;
 }
 
-export async function downloadUpdate(_source: UpdateDownloadSource, _latestVersion?: string): Promise<void> {
+export async function downloadUpdate(_source: UpdateDownloadSource, _latestVersion: string, _attemptId: string, _releaseNotes?: string): Promise<DownloadedUpdate> {
   throw new Error("In-app update downloads are only available in the desktop app.");
 }
 
 export async function cancelUpdateDownload(): Promise<void> {}
 
-export async function installDownloadedUpdate(): Promise<void> {
+export async function getDownloadedUpdate(): Promise<DownloadedUpdate | null> {
+  return null;
+}
+
+export async function discardDownloadedUpdate(_cacheId: string): Promise<void> {}
+
+export async function installDownloadedUpdate(_cacheId: string, _expectedVersion: string): Promise<void> {
   throw new Error("In-app update installation is only available in the desktop app.");
 }
 

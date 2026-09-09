@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { blockingDesktopAiRunsForUpdate } from "@/lib/ai/desktopAiRunRegistry";
+import { setupUpdatePreparation, prepareUpdateWithDraftRecovery, isUpdatePreparationActive } from "@/lib/app/updatePreparation";
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent, provide } from "vue";
 import { useI18n } from "vue-i18n";
 import { ChevronsRight, FileText } from "@lucide/vue";
@@ -202,6 +204,9 @@ const { isDark, themeMode, applyTheme, setThemeMode } = useTheme();
 const { activeCount: activeBackgroundTaskCount } = useExportTracker();
 const trackedUpdateTaskCount = computed(() => countActiveUpdateBlockingTasks(activeBackgroundTaskCount.value, queryStore.tabs));
 const {
+  initialize: initializeUpdater,
+  dispose: disposeUpdater,
+  isPreparingUpdate,
   checkingUpdates,
   updateInfo,
   updateCheckMessage,
@@ -226,6 +231,10 @@ const {
   restartApp,
 } = useAppUpdater({
   getActiveTaskCount: () => trackedUpdateTaskCount.value,
+  prepareForUpdate: async () => {
+    if (!updatePreparation) throw new Error(t("updates.preparationNotReady"));
+    return prepareUpdateWithDraftRecovery(() => updatePreparation!.prepare());
+  },
 });
 const { setupFileDrop } = useFileDrop();
 const { openInStreamingExecutorOnTooLarge } = useLargeSqlFileStreamingFallback();
@@ -234,6 +243,55 @@ const isDesktop = isTauriRuntime();
 const windowContext = resolveWindowContext();
 const isDetachedWindowContext = windowContext.kind === "detached-tab";
 const detachedContextTabId = windowContext.kind === "detached-tab" ? windowContext.tabId : undefined;
+let updateWindowReady = false;
+let updatePreparation: Awaited<ReturnType<typeof setupUpdatePreparation>> | undefined;
+async function initializeUpdatePreparation() {
+  if (!isDesktop || updatePreparation) return;
+  updatePreparation = await setupUpdatePreparation({
+    translate: (key) => t(key),
+    assertSafe() {
+      if (!updateWindowReady) throw new Error(t("updates.preparationNotReady"));
+      if (trackedUpdateTaskCount.value > 0 || blockingDesktopAiRunsForUpdate().length > 0 || queryStore.tabs.some((tab) => tab.isCancelling || tab.isExplaining || tab.txnSessionId)) {
+        throw new Error(t("updates.preparationTasks"));
+      }
+      if (queryStore.tabs.some((tab) => (tab.pendingDataChangeCount ?? 0) > 0 || tab.hasPendingDataEditorDraft)) {
+        throw new Error(t("updates.preparationDrafts"));
+      }
+      if (
+        pendingAppCloseAction.value ||
+        showConnectionDialog.value ||
+        showSaveSqlDialog.value ||
+        showQueryEditorDdlDialog.value ||
+        showQueryEditorObjectSourceDialog.value ||
+        showSqlParameterDialog.value ||
+        showDangerDialog.value ||
+        showMultiDbExecuteDialog.value ||
+        [
+          dialogs.showTransferDialog,
+          dialogs.showSqlFileDialog,
+          dialogs.showTableImportDialog,
+          dialogs.showTableDataGenerateDialog,
+          dialogs.showDatabaseExportDialog,
+          dialogs.showSchemaDiffDialog,
+          dialogs.showDataCompareDialog,
+          dialogs.showConfigPassphraseDialog,
+          dialogs.showConfigConnectionSelectDialog,
+          dialogs.showConfigUnencryptedExportConfirm,
+          dialogs.showImportLayoutConfirm,
+          dialogs.configExportBusy,
+          dialogs.applyingImportSelection,
+        ].some((state) => state.value)
+      ) {
+        throw new Error(t("updates.preparationConfig"));
+      }
+    },
+    async persist() {
+      await nextTick();
+      await queryStore.flushPendingPersist();
+    },
+  });
+}
+
 const activeAiRunCount = computed(() => (isDesktop ? activeDesktopAiRuns().length : 0));
 /** Runs waiting for a write confirmation — the panel-entry badge shows these
  *  with a higher-priority indicator (parent PRD §4 line 71 / §9). */
@@ -265,7 +323,7 @@ const driverStoreActive = ref(false);
 const driverStoreActiveTab = ref<"agent" | "jdbc" | "storage" | "runtime">("agent");
 const settingsReturnSurface = ref<"query" | "driverStore" | "welcome">("welcome");
 const showDriverStore = computed(() => driverStoreTabOpen.value && driverStoreActive.value);
-const showSettingsPage = computed(() => settingsPageTabOpen.value && settingsStore.settingsPageActive);
+const showSettingsPage = computed(() => Boolean(settingsPageTabOpen.value && settingsStore.settingsPageActive));
 const showQuickOpen = ref(false);
 const showTabSwitcher = ref(false);
 const tabSwitcherIndex = ref(0);
@@ -1531,6 +1589,7 @@ function cancelPendingAppClose() {
 }
 
 async function finishPendingAppClose(action: AppCloseAction) {
+  if (isUpdatePreparationActive()) return;
   if (action === "quit" && !aiRunsQuitConfirmed && blockingAiRunCount.value > 0) {
     pendingAppCloseAction.value = action;
     showAiRunsClosePrompt.value = true;
@@ -1583,6 +1642,7 @@ function continuePendingAppCloseAfterSave() {
 }
 
 function requestAppClose(action: AppCloseAction, options: AppCloseRequestOptions = {}) {
+  if (isUpdatePreparationActive()) return;
   pendingCloseActionChoice.value = !!options.requireCloseActionChoice;
   if (queryStore.hasDirtyTabs) {
     pendingAppCloseAction.value = action;
@@ -3205,6 +3265,11 @@ async function initApp() {
       });
     }
     await settingsStore.initDesktopSettings().catch(() => {});
+    if (isDesktop) {
+      updateWindowReady = true;
+      await initializeUpdatePreparation();
+      await initializeUpdater();
+    }
 
     void promptTemplateStore.init();
 
@@ -3270,7 +3335,6 @@ function openDriverStoreFromEvent(event: Event) {
 
 function runUpdateNotificationChecks() {
   if (!updateNotificationsEnabled.value) return;
-  checkUpdates({ silent: true });
   void refreshAgentDriverUpdateCount();
   void refreshMcpUpdateStatus();
 }
@@ -3295,12 +3359,17 @@ onMounted(async () => {
   console.log("[STARTUP] onMounted begin");
   const mountStart = performance.now();
   if (isDetachedWindowContext) {
+    await initializeUpdatePreparation();
     await setupDetachedWindowEvents();
-    await initDetachedWindow().catch((error) => {
-      console.error("[STARTUP] detached window initialization failed", error);
-      toast(error?.message || String(error), 5000);
-      void finishDetachedWindowClose();
-    });
+    await initDetachedWindow()
+      .then(() => {
+        updateWindowReady = true;
+      })
+      .catch((error) => {
+        console.error("[STARTUP] detached window initialization failed", error);
+        toast(error?.message || String(error), 5000);
+        void finishDetachedWindowClose();
+      });
     return;
   }
   requestAnimationFrame(() => {
@@ -3379,6 +3448,8 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  disposeUpdater();
+  updatePreparation?.dispose();
   detachedEventUnlisteners.forEach((unlisten) => unlisten());
   detachedEventUnlisteners = [];
   cleanupTauriListeners();
@@ -3427,6 +3498,7 @@ onUnmounted(() => {
           :has-update-available="toolbarHasUpdateAvailable"
           :is-downloading-update="isDownloadingUpdate"
           :download-progress="downloadProgress"
+          :update-version="updateInfo?.latest_version"
           :update-ready-to-install="updateDownloaded"
           :update-ready="updateReady"
           :agent-driver-update-count="toolbarAgentDriverUpdateCount"
@@ -3806,6 +3878,7 @@ onUnmounted(() => {
           :is-downloading-update="isDownloadingUpdate"
           :download-progress="downloadProgress"
           :update-downloaded="updateDownloaded"
+          :is-preparing-update="isPreparingUpdate"
           :is-installing-update="isInstallingUpdate"
           :update-ready="updateReady"
           :is-ignoring-update="isIgnoringUpdate"
