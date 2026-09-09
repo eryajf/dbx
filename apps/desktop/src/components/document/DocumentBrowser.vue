@@ -78,6 +78,7 @@ import {
   buildMongoUpdateDocument,
   formatMongoShellLiteral,
   mongoDocumentDisplayValue,
+  mongoDocumentGridValue,
   mongoDocumentGridColumnTypes,
   mongoDocumentIdForGrid,
   parseMongoDocumentInputValue,
@@ -414,7 +415,12 @@ function documentGridColumns(documentsToRender: JsonRecord[]): string[] {
 
 function documentGridRow(doc: JsonRecord, columns: string[], kind: DocumentStoreKind): QueryResult["rows"][number] {
   return columns.map((column) => {
-    const value = mongoDocumentDisplayValue(doc[column]);
+    const rawValue = doc[column];
+    // MongoDB distinguishes a missing field from an explicit BSON null. Keep a
+    // missing field visually blank; the NULL grid sentinel is reserved for an
+    // existing field whose BSON value is null.
+    if (kind === "mongodb" && rawValue === undefined) return "";
+    const value = kind === "mongodb" ? mongoDocumentGridValue(rawValue) : mongoDocumentDisplayValue(rawValue);
     if (value === undefined || value === null) return null;
     if (column === "_id") return kind === "mongodb" ? mongoDocumentIdForGrid(value) : documentStoreValueForGrid(value, kind);
     if (typeof value === "object") return documentStoreValueForGrid(value, kind);
@@ -2418,6 +2424,7 @@ defineExpose({ focusSearch });
       context="results"
       page-size-preference="table-open"
       :database-type="props.databaseType"
+      :mongo-collection-grid="documentStoreProvider.kind === 'mongodb'"
       :mongo-update-target="mongoUpdateTarget"
       :editable="documentStoreEditable"
       :custom-save-handler="customSaveHandler"

@@ -97,6 +97,7 @@ import type { BuildSingleColumnAlterSqlOptions } from "@/lib/table/tableStructur
 import { buildTableSelectSql, qualifyTableReferencesInSql, quoteTableDataIdentifier } from "@/lib/table/tableSelectSql";
 import { uuid } from "@/lib/common/utils";
 import { generateCellValues, type CellValueGenerationKind } from "@/lib/dataGrid/cellValueGeneration";
+import { MONGO_DOCUMENT_GRID_NULL, mongoDocumentGridDisplayText, mongoDocumentGridEditorText, mongoDocumentGridExternalValue, mongoDocumentGridInputValue } from "@/lib/mongo/mongoDocumentValues";
 import { compactHeaderColumnType, formatMetadataColumnTypeLabel, isNumericColumnType, resolveDataGridTypeVisualKind, resolveHeaderColumnType, resolveResultColumnType } from "@/lib/dataGrid/dataGridColumnType";
 import { dataGridCellTextClass, dataGridTypeVisualClass } from "@/lib/dataGrid/dataGridCellTextVisual";
 import { DATA_GRID_TYPE_COLOR_KEYS, resolveActiveDataGridTypeColors } from "@/lib/dataGrid/dataGridTypeColorScheme";
@@ -160,7 +161,7 @@ import {
   type BinaryCellDownloadMode,
 } from "@/lib/dataGrid/binaryCellDownload";
 import { buildBinaryHexViewRows } from "@/lib/dataGrid/binaryHexViewer";
-import { canFormatCellDetailJson, cellDetailEditorText, defaultCellDetailTab, isGeometryColumnType, linkedCellDetailTarget, looksLikeJsonContainerText, visibleCellDetailTabs, type CellDetailTab } from "@/lib/dataGrid/cellDetailPresentation";
+import { canFormatCellDetailJson, defaultCellDetailTab, isGeometryColumnType, linkedCellDetailTarget, looksLikeJsonContainerText, visibleCellDetailTabs, type CellDetailTab } from "@/lib/dataGrid/cellDetailPresentation";
 import {
   buildDataGridCellDetail,
   buildDataGridColumnDetail,
@@ -507,6 +508,8 @@ interface DataGridProps {
   manualTransactionSessionId?: string;
   onManualTransactionMutation?: () => void;
   mongoUpdateTarget?: MongoCopyUpdateTarget;
+  /** Enables MongoDB collection-grid presentation for BSON null values. */
+  mongoCollectionGrid?: boolean;
   queryEditabilityReason?: QueryEditabilityReason;
   allowInsertRows?: boolean;
   allowDeleteRows?: boolean;
@@ -3521,6 +3524,8 @@ const editor = useDataGridEditor({
   dataGridQuickEntryEnabled: computed(() => settingsStore.editorSettings.dataGridQuickEntry),
   confirmDangerousRowDeletion: computed(() => settingsStore.editorSettings.confirmDangerousSqlExecution),
   initialEditColumn: firstVisibleColumnIndex,
+  cellEditorText: cellEditorTextForValue,
+  normalizeEditorInput: (value) => (props.mongoCollectionGrid ? mongoDocumentGridInputValue(value) : value),
   getRowItem,
   pageSize,
   currentPage,
@@ -3797,6 +3802,10 @@ function cellEditContentNeedsExpandedEditor(options: { displayText: string; edit
 }
 
 function cellEditorTextForValue(value: CellValue | undefined, columnIndex: number): string {
+  if (props.mongoCollectionGrid) {
+    const documentGridText = mongoDocumentGridEditorText(value);
+    if (documentGridText !== undefined) return documentGridText;
+  }
   return dataGridCellEditorText({
     value: value ?? null,
     databaseType: resolvedDatabaseType.value,
@@ -5493,6 +5502,9 @@ const detailEdit = useDataGridCellDetailEdit({
   databaseType: resolvedDatabaseType,
   resultRows: computed(() => props.result.rows),
   getColumnInfo: (columnIndex) => tableColumnForGridColumn(columnIndex) ?? resultColumnInfoForGridColumn(columnIndex),
+  cellEditorText: cellEditorTextForValue,
+  normalizeEditorInput: (value) => (props.mongoCollectionGrid ? mongoDocumentGridInputValue(value) : value),
+  nullValue: () => (props.mongoCollectionGrid ? MONGO_DOCUMENT_GRID_NULL : null),
   getRowItem,
   hydrateLargeValueCell,
   applyCellValue,
@@ -5811,6 +5823,10 @@ function primitiveCellFormatKey(value: CellValue, columnIndex?: number): string 
 }
 
 function formatCell(value: CellValue, columnIndex?: number, originalBytes?: number, limitDisplay = true): string {
+  if (props.mongoCollectionGrid) {
+    const documentGridText = mongoDocumentGridDisplayText(value);
+    if (documentGridText !== undefined) return documentGridText;
+  }
   const formatter = columnIndex === undefined ? undefined : resolvedColumnFormatters.value[columnIndex];
   if (formatter?.kind === "foreign-key-display" && columnIndex !== undefined) {
     const display = formatForeignKeyCellDisplay(value, columnIndex);
@@ -7013,6 +7029,8 @@ const {
   columnComments: visibleColumnComments,
   allColumnComments,
   displayValue: formatCellCached,
+  cellClipboardText: (value) => (props.mongoCollectionGrid ? mongoDocumentGridEditorText(value) : undefined),
+  externalCellValue: (value) => (props.mongoCollectionGrid ? mongoDocumentGridExternalValue(value) : value),
   mongoDocuments: computed(() => props.result.mongo_copy_documents ?? props.result.mongo_documents),
   spatialColumns: computed(() => props.result.spatial_columns),
   spatialValues: computed(() => props.result.spatial_values),
@@ -7863,7 +7881,7 @@ function applyGeneratedSelectionValue(kind: CellValueGenerationKind, startValue 
   beginBatch();
   try {
     cells.forEach((cell, index) => {
-      applied = applyVisibleSelectedCellValue(cell.item, cell.visibleCol, values[index] ?? null, allowDraftSelectionValue, { preserveEmptyString: kind === "empty" }) || applied;
+      applied = applyVisibleSelectedCellValue(cell.item, cell.visibleCol, generatedGridValue(kind, values[index] ?? null), allowDraftSelectionValue, { preserveEmptyString: kind === "empty" }) || applied;
     });
   } finally {
     commitBatch();
@@ -7878,15 +7896,22 @@ function applyGeneratedSelectionValue(kind: CellValueGenerationKind, startValue 
 function applyGeneratedDetailValue(kind: CellValueGenerationKind, startValue = 1n): boolean {
   const detail = activeCellDetail.value;
   if (!detail?.isEditable) return false;
-  const value = generateCellValues(kind, 1, { startValue })[0] ?? null;
+  const value = generatedGridValue(kind, generateCellValues(kind, 1, { startValue })[0] ?? null);
   applyCellValue(detail.rowId, detail.colIndex, value, {
     preserveEmptyString: kind === "empty",
   });
-  detailEditValue.value = cellDetailEditorText(value);
+  detailEditValue.value = cellEditorTextForValue(value, detail.colIndex);
   syncEditorFromDetailEdit();
   isEditingDetail.value = activeCellDetailTab.value === "valueEditor";
   detailCell.value = { ...detailCell.value! };
   return true;
+}
+
+function generatedGridValue(kind: CellValueGenerationKind, value: string | null): string | null {
+  // MongoDB collection grids reserve an empty cell for a missing field. Their
+  // private null marker becomes $set: null in the document save layer.
+  if (kind === "null" && props.mongoCollectionGrid) return MONGO_DOCUMENT_GRID_NULL;
+  return value;
 }
 
 function openGenerateIncrementDialog(target: "selection" | "detail") {
@@ -8541,6 +8566,10 @@ async function onGridKeydown(event: KeyboardEvent) {
 }
 
 function detailClipboardText(detail: DataGridCellDetail): string {
+  if (props.mongoCollectionGrid) {
+    const documentGridText = mongoDocumentGridEditorText(detail.value);
+    if (documentGridText !== undefined) return documentGridText;
+  }
   if (detail.value === null) return "";
   const binaryText = binaryCellClipboardText(detail.value, detail.type, resolvedDatabaseType.value);
   if (binaryText !== null) return binaryText;
