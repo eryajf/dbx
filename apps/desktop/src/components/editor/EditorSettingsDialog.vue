@@ -217,7 +217,7 @@ import { useConnectionStore } from "@/stores/connectionStore";
 import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { usePromptTemplateStore } from "@/stores/promptTemplateStore";
 import { useTunnelProfileStore } from "@/stores/tunnelProfileStore";
-import { currentLocale, setLocale, type Locale } from "@/i18n";
+import { currentLocale, previewLocale, restoreLocalePreview, setLocale, type Locale } from "@/i18n";
 import {
   SETTINGS_SEARCH_DEFINITIONS,
   TOOLBAR_VISIBILITY_ITEMS,
@@ -283,6 +283,18 @@ function onUiFontFamilyOpenChange(open: boolean) {
   } else {
     restoreUiFontFamilyPreview();
   }
+}
+
+function previewLocaleOption(locale: Locale) {
+  void previewLocale(locale);
+}
+
+function restoreLocaleOptionPreview() {
+  void restoreLocalePreview();
+}
+
+function onLocaleOpenChange(open: boolean) {
+  if (!open) restoreLocaleOptionPreview();
 }
 
 const appThemePaletteOptions = computed(
@@ -516,7 +528,7 @@ const editShowIndexIndicatorsInHeader = ref(settingsStore.editorSettings.showInd
 const editCompactColumnHeaderActions = ref(settingsStore.editorSettings.compactColumnHeaderActions);
 const editDataGridQuickEntry = ref(settingsStore.editorSettings.dataGridQuickEntry);
 const editDataGridFilterEditorView = ref<DataGridFilterEditorView>(settingsStore.editorSettings.dataGridFilterEditorView);
-const editDataGridAutoHideFilterBuilder = ref(settingsStore.editorSettings.dataGridAutoHideFilterBuilder);
+const editDataGridKeepFilterEditorExpanded = ref(settingsStore.editorSettings.dataGridKeepFilterEditorExpanded);
 const dataGridFilterViewPreviewExpanded = ref(true);
 const editDataGridTextFilterPanelHeight = ref(settingsStore.editorSettings.dataGridTextFilterPanelHeight);
 const editMultiStatementDefaultView = ref<MultiStatementDefaultView>(settingsStore.editorSettings.multiStatementDefaultView);
@@ -742,7 +754,7 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     compactColumnHeaderActions: editCompactColumnHeaderActions.value,
     dataGridQuickEntry: editDataGridQuickEntry.value,
     dataGridFilterEditorView: editDataGridFilterEditorView.value,
-    dataGridAutoHideFilterBuilder: editDataGridAutoHideFilterBuilder.value,
+    dataGridKeepFilterEditorExpanded: editDataGridKeepFilterEditorExpanded.value,
     dataGridTextFilterPanelHeight: editDataGridTextFilterPanelHeight.value,
     multiStatementDefaultView: editMultiStatementDefaultView.value,
     dataGridAutoTransposeSingleRow: editDataGridAutoTransposeSingleRow.value,
@@ -1239,7 +1251,7 @@ function syncEditorSettingsDraftFromStore() {
   editCompactColumnHeaderActions.value = settingsStore.editorSettings.compactColumnHeaderActions;
   editDataGridQuickEntry.value = settingsStore.editorSettings.dataGridQuickEntry;
   editDataGridFilterEditorView.value = settingsStore.editorSettings.dataGridFilterEditorView;
-  editDataGridAutoHideFilterBuilder.value = settingsStore.editorSettings.dataGridAutoHideFilterBuilder;
+  editDataGridKeepFilterEditorExpanded.value = settingsStore.editorSettings.dataGridKeepFilterEditorExpanded;
   editDataGridTextFilterPanelHeight.value = settingsStore.editorSettings.dataGridTextFilterPanelHeight;
   editMultiStatementDefaultView.value = settingsStore.editorSettings.multiStatementDefaultView;
   editDataGridAutoTransposeSingleRow.value = settingsStore.editorSettings.dataGridAutoTransposeSingleRow;
@@ -1355,7 +1367,7 @@ const editorSettingsDraftRefs: EditorSettingsDraftRefMap = {
   compactColumnHeaderActions: editCompactColumnHeaderActions,
   dataGridQuickEntry: editDataGridQuickEntry,
   dataGridFilterEditorView: editDataGridFilterEditorView,
-  dataGridAutoHideFilterBuilder: editDataGridAutoHideFilterBuilder,
+  dataGridKeepFilterEditorExpanded: editDataGridKeepFilterEditorExpanded,
   dataGridTextFilterPanelHeight: editDataGridTextFilterPanelHeight,
   multiStatementDefaultView: editMultiStatementDefaultView,
   dataGridAutoTransposeSingleRow: editDataGridAutoTransposeSingleRow,
@@ -1453,6 +1465,7 @@ watch(
     } else {
       clearThemePalettePreview();
       clearUiFontFamilyPreview();
+      restoreLocaleOptionPreview();
     }
   },
   { immediate: true },
@@ -1464,6 +1477,7 @@ watch(
     if (isSettingsPage.value && !active) {
       clearThemePalettePreview();
       clearUiFontFamilyPreview();
+      restoreLocaleOptionPreview();
     }
   },
   { immediate: true },
@@ -1722,7 +1736,7 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
     editDataGridQuickEntry.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry;
     editDataGridFilterEditorView.value = DEFAULT_EDITOR_SETTINGS.dataGridFilterEditorView;
-    editDataGridAutoHideFilterBuilder.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoHideFilterBuilder;
+    editDataGridKeepFilterEditorExpanded.value = DEFAULT_EDITOR_SETTINGS.dataGridKeepFilterEditorExpanded;
     editDataGridTextFilterPanelHeight.value = DEFAULT_EDITOR_SETTINGS.dataGridTextFilterPanelHeight;
     editMultiStatementDefaultView.value = DEFAULT_EDITOR_SETTINGS.multiStatementDefaultView;
     editDataGridAutoTransposeSingleRow.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoTransposeSingleRow;
@@ -1809,7 +1823,7 @@ function resetAllDefaults() {
   editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
   editDataGridQuickEntry.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry;
   editDataGridFilterEditorView.value = DEFAULT_EDITOR_SETTINGS.dataGridFilterEditorView;
-  editDataGridAutoHideFilterBuilder.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoHideFilterBuilder;
+  editDataGridKeepFilterEditorExpanded.value = DEFAULT_EDITOR_SETTINGS.dataGridKeepFilterEditorExpanded;
   editDataGridTextFilterPanelHeight.value = DEFAULT_EDITOR_SETTINGS.dataGridTextFilterPanelHeight;
   editMultiStatementDefaultView.value = DEFAULT_EDITOR_SETTINGS.multiStatementDefaultView;
   editDataGridAutoTransposeSingleRow.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoTransposeSingleRow;
@@ -2082,6 +2096,12 @@ function onDisconnectTabHandlingModeChange(v: any) {
 
 function onLocaleChange(v: any) {
   if (typeof v === "string") void setLocale(v as Locale);
+}
+
+function onUiScaleChange(value: unknown) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return;
+  editUiScale.value = next;
 }
 
 function onUpdateDownloadSourceChange(v: any) {
@@ -3679,6 +3699,7 @@ onMounted(() => {
 onUnmounted(() => {
   clearThemePalettePreview();
   clearUiFontFamilyPreview();
+  restoreLocaleOptionPreview();
   cleanupTableColumnTemplatePointerDrag();
   cleanupTruncationObservers();
 });
@@ -5688,7 +5709,7 @@ onUnmounted(() => {
                   <div class="flex h-9 items-end">
                     <Label class="whitespace-normal leading-tight">{{ t("settings.languageTitle") }}</Label>
                   </div>
-                  <Select :model-value="currentLocale()" @update:model-value="onLocaleChange">
+                  <Select :model-value="currentLocale()" @update:model-value="onLocaleChange" @update:open="onLocaleOpenChange">
                     <SelectTrigger class="h-8 w-full gap-0.5 px-0.5">
                       <SelectValue>
                         <span v-if="selectedLocaleOption" class="flex min-w-0 items-center gap-0.5">
@@ -5699,8 +5720,8 @@ onUnmounted(() => {
                         </span>
                       </SelectValue>
                     </SelectTrigger>
-                    <SelectContent class="w-[150px]">
-                      <SelectItem v-for="locale in LOCALE_OPTIONS" :key="locale.value" :value="locale.value">
+                    <SelectContent class="w-[150px]" @pointerleave="restoreLocaleOptionPreview">
+                      <SelectItem v-for="locale in LOCALE_OPTIONS" :key="locale.value" :value="locale.value" @pointerenter="previewLocaleOption(locale.value)" @focus="previewLocaleOption(locale.value)">
                         <div class="flex items-center gap-1">
                           <span class="inline-flex h-5 w-6 shrink-0 items-center justify-center text-sm font-medium leading-none">
                             {{ locale.flag }}
@@ -5757,15 +5778,7 @@ onUnmounted(() => {
                       </HelpTooltip>
                     </div>
                   </div>
-                  <Select
-                    :model-value="String(editUiScale)"
-                    @update:model-value="
-                      (value: any) => {
-                        const next = Number(value);
-                        if (Number.isFinite(next)) editUiScale = next;
-                      }
-                    "
-                  >
+                  <Select :model-value="String(editUiScale)" @update:model-value="onUiScaleChange">
                     <SelectTrigger class="h-8 w-full">
                       <SelectValue>{{ Math.round(editUiScale * 100) }}%</SelectValue>
                     </SelectTrigger>
@@ -5811,6 +5824,7 @@ onUnmounted(() => {
                     :trigger-class="appearanceFontSearchTriggerClass"
                     :trigger-icon-class="appearanceFontSearchTriggerIconClass"
                     content-class="w-[var(--reka-popover-trigger-width)] min-w-[260px]"
+                    :content-style="{ fontFamily: editUiFontFamily || DEFAULT_UI_FONT_FAMILY }"
                     @update:model-value="onUiFontFamilyChange"
                     @update:open="onUiFontFamilyOpenChange"
                     @option-hover="previewUiFontOption"
@@ -6669,12 +6683,12 @@ onUnmounted(() => {
                       <span class="truncate">{{ t("grid.filterTextView") }}</span>
                     </Button>
                   </div>
-                  <div class="flex items-center justify-between gap-4 rounded-md border bg-background px-3 py-2">
+                  <div v-if="editDataGridFilterEditorView !== 'quick'" class="flex items-center justify-between gap-4 rounded-md border bg-background px-3 py-2">
                     <div class="space-y-1">
-                      <Label for="data-grid-auto-hide-filter-builder">{{ t("settings.dataGridAutoHideFilterBuilder") }}</Label>
-                      <p class="text-xs text-muted-foreground">{{ t("settings.dataGridAutoHideFilterBuilderDescription") }}</p>
+                      <Label for="data-grid-keep-filter-editor-expanded">{{ t("settings.dataGridKeepFilterEditorExpanded") }}</Label>
+                      <p class="text-xs text-muted-foreground">{{ t("settings.dataGridKeepFilterEditorExpandedDescription") }}</p>
                     </div>
-                    <Switch id="data-grid-auto-hide-filter-builder" v-model="editDataGridAutoHideFilterBuilder" />
+                    <Switch id="data-grid-keep-filter-editor-expanded" v-model="editDataGridKeepFilterEditorExpanded" />
                   </div>
                 </div>
 
