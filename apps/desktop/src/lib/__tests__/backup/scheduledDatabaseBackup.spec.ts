@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { databaseBackupFilePath, databaseBackupRunsToPrune, databaseBackupTableMatchesPattern, normalizeDatabaseBackupRun, resolveScheduledDatabaseBackupTableScope, type DatabaseBackupRun } from "../../backup/scheduledDatabaseBackup";
+import { databaseBackupFileNamePatternIsValid, databaseBackupFilePath, databaseBackupRunsToPrune, databaseBackupTableMatchesPattern, normalizeDatabaseBackupRun, resolveScheduledDatabaseBackupTableScope, type DatabaseBackupRun } from "../../backup/scheduledDatabaseBackup";
 
 const startedAt = "2026-08-12T00:00:00.000Z";
 
@@ -23,6 +23,24 @@ describe("database backup run persistence", () => {
     expect(databaseBackupFilePath("/backups", "Nightly", "app", startedAt, "run-12345678", "gzip")).toMatch(/\.sql\.gz$/);
   });
 
+  it("uses a custom file-name template without implicit run ID suffixes", () => {
+    const path = databaseBackupFilePath("/backups", "Nightly", "app", startedAt, "run-12345678", "none", "before-migration");
+
+    expect(path).toBe("/backups/before-migration__app.sql");
+  });
+
+  it("renders all file-name template variables without duplicating suffixes", () => {
+    const path = databaseBackupFilePath("/backups", "Nightly", "app", startedAt, "run-12345678", "none", "{schedule}__{date}__{database}__{runId}");
+
+    expect(path).toBe("/backups/Nightly__20260812__app__run-1234.sql");
+  });
+
+  it("rejects file-name templates that could form a path", () => {
+    expect(databaseBackupFileNamePatternIsValid("before-migration")).toBe(true);
+    expect(databaseBackupFileNamePatternIsValid("../before-migration")).toBe(false);
+    expect(databaseBackupFileNamePatternIsValid("before-migration ")).toBe(false);
+  });
+
   it("accepts a one-shot run without a schedule id", () => {
     const normalized = normalizeDatabaseBackupRun(run());
 
@@ -34,6 +52,12 @@ describe("database backup run persistence", () => {
         trigger: "manual",
       }),
     );
+  });
+
+  it("keeps the backup destination root in persisted run records", () => {
+    const normalized = normalizeDatabaseBackupRun(run({ destinationDirectory: "/backups" }));
+
+    expect(normalized?.destinationDirectory).toBe("/backups");
   });
 
   it("keeps legacy runs compatible and treats them as scheduled history", () => {
