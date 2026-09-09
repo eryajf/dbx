@@ -8907,7 +8907,6 @@ export default withEnglishFallback({
     templateVariableTimestamp: "バックアップ出力パスに使用するタイムスタンプ",
     templateVariableDatabase: "現在のデータベースバックアップ対象名",
     templateVariableRunId: "今回のバックアップ実行 ID の先頭 8 文字",
-    fileNamePreview: "ファイル名のプレビュー",
     fileNamePatternInvalid: "パス区切り文字、予約文字、末尾のピリオドまたは空白を含まないファイル名を使用してください。",
     runDirectoryPattern: "実行ディレクトリテンプレート",
     runDirectoryPatternHint:

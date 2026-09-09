@@ -8857,7 +8857,6 @@ export default withEnglishFallback({
     templateVariableTimestamp: "Carimbo de data e hora usado no caminho de saída do backup",
     templateVariableDatabase: "Nome do destino de banco de dados atual",
     templateVariableRunId: "Primeiros 8 caracteres do ID desta execução",
-    fileNamePreview: "Prévia do nome do arquivo",
     fileNamePatternInvalid: "Use um nome de arquivo sem separadores de caminho, caracteres reservados ou ponto ou espaço final.",
     runDirectoryPattern: "Modelo de diretório de execução",
     runDirectoryPatternHint:

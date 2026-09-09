@@ -396,6 +396,10 @@ export function sanitizeDatabaseBackupFileSegment(value: string): string {
     .replace(/[\\/:*?"<>|]+/g, "_")
     .replace(/[. ]+$/g, "")
     .trim();
+  // Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）不能作为文件名主体，补下划线规避。
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(sanitized)) {
+    return `${sanitized}_`;
+  }
   return sanitized || "database";
 }
 

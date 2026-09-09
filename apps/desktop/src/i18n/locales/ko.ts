@@ -7109,7 +7109,6 @@ export default withEnglishFallback({
     templateVariableTimestamp: "백업 출력 경로에 사용하는 타임스탬프",
     templateVariableDatabase: "현재 데이터베이스 백업 대상 이름",
     templateVariableRunId: "이번 백업 실행 ID의 앞 8자",
-    fileNamePreview: "파일 이름 미리 보기",
     fileNamePatternInvalid: "경로 구분 기호, 예약 문자, 끝의 마침표나 공백이 없는 파일 이름을 사용하세요.",
     runDirectoryPattern: "실행 디렉터리 템플릿",
     runDirectoryPatternHint:

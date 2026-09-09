@@ -90,7 +90,7 @@ fn validate_database_backup_root(raw: &str) -> Result<PathBuf, String> {
     std::fs::canonicalize(&root).map_err(|error| format!("failed to resolve backup root {}: {error}", root.display()))
 }
 
-fn validate_database_backup_file(raw: &str, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
+fn validate_database_backup_file(raw: &str, allowed_roots: &[PathBuf]) -> Result<Option<PathBuf>, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("backup file path is empty".to_string());
@@ -116,10 +116,12 @@ fn validate_database_backup_file(raw: &str, allowed_roots: &[PathBuf]) -> Result
         let resolved = match std::fs::canonicalize(&path) {
             Ok(resolved) => resolved,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // 文件已不存在（例如目标目录已断开）：能确认在受管根目录内的仍返回以便删除，
+                // 无法确认归属的直接跳过（Ok(None)），避免让同批其他运行记录的清理整体失败。
                 if allowed_roots.iter().any(|root| path.starts_with(root) && path != *root) {
-                    return Ok(path);
+                    return Ok(Some(path));
                 }
-                return Err(format!("custom backup file is outside the managed backup directories: {expanded}"));
+                return Ok(None);
             }
             Err(error) => return Err(format!("failed to resolve custom backup file {}: {error}", path.display())),
         };
@@ -127,7 +129,7 @@ fn validate_database_backup_file(raw: &str, allowed_roots: &[PathBuf]) -> Result
             return Err(format!("custom backup file is outside the managed backup directories: {expanded}"));
         }
     }
-    Ok(path)
+    Ok(Some(path))
 }
 
 #[tauri::command]
@@ -139,7 +141,7 @@ pub async fn delete_database_backup_files(paths: Vec<String>, allowed_roots: Vec
     let resolved =
         paths.iter().map(|path| validate_database_backup_file(path, &roots)).collect::<Result<Vec<_>, _>>()?;
     let mut deleted = 0;
-    for path in resolved {
+    for path in resolved.into_iter().flatten() {
         match tokio::fs::remove_file(&path).await {
             Ok(()) => deleted += 1,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -199,8 +201,10 @@ mod tests {
         assert!(validate_database_backup_file("relative/backup.sql", &[]).is_err());
         let invalid_extension = if cfg!(windows) { "C:/tmp/backup.txt" } else { "/tmp/backup.txt" };
         assert!(validate_database_backup_file(invalid_extension, &[]).is_err());
-        let custom = if cfg!(windows) { "C:/tmp/before-migration__app.sql" } else { "/tmp/before-migration__app.sql" };
-        assert!(validate_database_backup_file(custom, &[]).is_err());
+        // 不存在的自定义命名备份：归属无法确认时按跳过处理（Ok(None)）而不是报错。
+        let missing = format!("before-migration__{}.sql", uuid::Uuid::new_v4().simple(),);
+        let custom_missing = if cfg!(windows) { format!("C:/tmp/{missing}") } else { format!("/tmp/{missing}") };
+        assert_eq!(validate_database_backup_file(&custom_missing, &[]), Ok(None));
         let control_character =
             if cfg!(windows) { "C:/tmp/before\n-migration.sql" } else { "/tmp/before\n-migration.sql" };
         assert!(validate_database_backup_file(control_character, &[]).is_err());
@@ -209,6 +213,32 @@ mod tests {
         let valid_gzip =
             if cfg!(windows) { "C:/tmp/dbx-backup__nightly.SQL.GZ" } else { "/tmp/dbx-backup__nightly.SQL.GZ" };
         assert!(validate_database_backup_file(valid_gzip, &[]).is_ok());
+    }
+
+    #[tokio::test]
+    async fn disconnected_root_does_not_abort_batch_cleanup() {
+        let scratch = std::env::temp_dir().join(format!("dbx-backup-mixed-{}", uuid::Uuid::new_v4()));
+        let connected = scratch.join("connected");
+        let disconnected = scratch.join("disconnected");
+        std::fs::create_dir_all(&connected).unwrap();
+        std::fs::create_dir_all(&disconnected).unwrap();
+        let kept = connected.join("before-migration__kept.sql");
+        std::fs::write(&kept, b"kept placeholder").unwrap();
+        let gone = disconnected.join("before-migration__gone.sql");
+        std::fs::write(&gone, b"gone placeholder").unwrap();
+        // 目标目录断开：整个目录被移除，文件路径随之失效。
+        std::fs::remove_dir_all(&disconnected).unwrap();
+
+        let deleted = delete_database_backup_files(
+            vec![kept.to_string_lossy().to_string(), gone.to_string_lossy().to_string()],
+            vec![connected.to_string_lossy().to_string(), disconnected.to_string_lossy().to_string()],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(deleted, 1);
+        assert!(!kept.exists());
+        let _ = std::fs::remove_dir_all(scratch);
     }
 
     #[tokio::test]

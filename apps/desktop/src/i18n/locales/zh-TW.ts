@@ -8845,7 +8845,6 @@ export default withEnglishFallback({
     templateVariableTimestamp: "備份輸出路徑中使用的時間戳",
     templateVariableDatabase: "目前備份的資料庫目標名稱",
     templateVariableRunId: "本次備份執行 ID 的前 8 個字元",
-    fileNamePreview: "檔案名稱預覽",
     fileNamePatternInvalid: "請輸入不含路徑分隔符、保留字元及結尾句點或空白的檔案名稱。",
     runDirectoryPattern: "執行目錄範本",
     runDirectoryPatternHint: "相對於備份目錄的路徑。可使用 {'{'}schedule{'}'}、{'{'}date{'}'}、{'{'}timestamp{'}'} 和 {'{'}runId{'}'}。預設範本保留 {'{'}runId{'}'} 以獲得更好的隔離性。例如：{'{'}schedule{'}'}/{'{'}date{'}'}/{'{'}timestamp{'}'}-{'{'}runId{'}'}",

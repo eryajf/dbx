@@ -7816,7 +7816,6 @@ export default withEnglishFallback({
     templateVariableTimestamp: "备份输出路径中使用的时间戳",
     templateVariableDatabase: "当前备份的数据库目标名称",
     templateVariableRunId: "本次备份运行 ID 的前 8 位",
-    fileNamePreview: "文件名预览",
     fileNamePatternInvalid: "请输入不含路径分隔符、保留字符及末尾句点或空格的文件名。",
     runDirectoryPattern: "运行目录模板",
     runDirectoryPatternHint: "相对于备份目录的路径。可使用 {'{'}schedule{'}'}、{'{'}date{'}'}、{'{'}timestamp{'}'} 和 {'{'}runId{'}'}。默认模板保留 {'{'}runId{'}'} 以获得更好的隔离性。例如：{'{'}schedule{'}'}/{'{'}date{'}'}/{'{'}timestamp{'}'}-{'{'}runId{'}'}",

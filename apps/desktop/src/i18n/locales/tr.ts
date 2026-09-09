@@ -7693,7 +7693,6 @@ export default withEnglishFallback({
     templateVariableTimestamp: "Yedekleme çıktı yolunda kullanılan zaman damgası",
     templateVariableDatabase: "Geçerli veritabanı yedekleme hedefinin adı",
     templateVariableRunId: "Bu yedekleme çalıştırma kimliğinin ilk 8 karakteri",
-    fileNamePreview: "Dosya adı önizlemesi",
     fileNamePatternInvalid: "Yol ayırıcıları, ayrılmış karakterler veya sonunda nokta ya da boşluk olmayan bir dosya adı kullanın.",
     runDirectoryPattern: "Çalıştırma dizini şablonu",
     runDirectoryPatternHint: "Hedef dizin altındaki göreli yol. {'{'}schedule{'}'}, {'{'}date{'}'}, {'{'}timestamp{'}'} ve {'{'}runId{'}'} kullanın. Varsayılan şablon daha iyi yalıtım için {'{'}runId{'}'} içerir. Örnek: {'{'}schedule{'}'}/{'{'}date{'}'}/{'{'}timestamp{'}'}-{'{'}runId{'}'}",

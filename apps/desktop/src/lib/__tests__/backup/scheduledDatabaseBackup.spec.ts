@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { databaseBackupFileNamePatternIsValid, databaseBackupFilePath, databaseBackupRunsToPrune, databaseBackupTableMatchesPattern, normalizeDatabaseBackupRun, resolveScheduledDatabaseBackupTableScope, type DatabaseBackupRun } from "../../backup/scheduledDatabaseBackup";
+import {
+  databaseBackupFileNamePatternIsValid,
+  databaseBackupFilePath,
+  sanitizeDatabaseBackupFileSegment,
+  databaseBackupRunsToPrune,
+  databaseBackupTableMatchesPattern,
+  normalizeDatabaseBackupRun,
+  resolveScheduledDatabaseBackupTableScope,
+  type DatabaseBackupRun,
+} from "../../backup/scheduledDatabaseBackup";
 
 const startedAt = "2026-08-12T00:00:00.000Z";
 
@@ -92,5 +101,18 @@ describe("database backup table pattern matching", () => {
     const scope = resolveScheduledDatabaseBackupTableScope("exclude", ["issue7314.issue7314.vector_data"], ["vector_data", "keep_rows"], "issue7314", "issue7314");
     expect(scope.includedTables).toEqual(["keep_rows"]);
     expect(scope.excludedTables).toEqual(["vector_data"]);
+  });
+});
+
+describe("database backup file name segment sanitization", () => {
+  it("appends an underscore to Windows reserved device names", () => {
+    for (const reserved of ["con", "PRN", "Aux", "nul", "com3", "LPT9"]) {
+      expect(sanitizeDatabaseBackupFileSegment(reserved)).toBe(`${reserved}_`);
+    }
+  });
+
+  it("keeps ordinary segment names unchanged", () => {
+    expect(sanitizeDatabaseBackupFileSegment("nightly-full")).toBe("nightly-full");
+    expect(sanitizeDatabaseBackupFileSegment("con_backup")).toBe("con_backup");
   });
 });

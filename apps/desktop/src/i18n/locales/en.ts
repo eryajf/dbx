@@ -7835,7 +7835,6 @@ export default {
     templateVariableTimestamp: "Timestamp used in the backup output path",
     templateVariableDatabase: "Current database backup target name",
     templateVariableRunId: "First 8 characters of this backup run ID",
-    fileNamePreview: "File name preview",
     fileNamePatternInvalid: "Use a file name without path separators, reserved characters, or a trailing dot or space.",
     runDirectoryPattern: "Run directory template",
     runDirectoryPatternHint: "A relative path under the destination. Use {'{'}schedule{'}'}, {'{'}date{'}'}, {'{'}timestamp{'}'}, and {'{'}runId{'}'}. The default includes {'{'}runId{'}'} for extra isolation. Example: {'{'}schedule{'}'}/{'{'}date{'}'}/{'{'}timestamp{'}'}-{'{'}runId{'}'}",

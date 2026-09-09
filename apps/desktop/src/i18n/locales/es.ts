@@ -8855,7 +8855,6 @@ export default withEnglishFallback({
     templateVariableTimestamp: "Marca de tiempo usada en la ruta de salida de la copia",
     templateVariableDatabase: "Nombre del destino de base de datos actual",
     templateVariableRunId: "Primeros 8 caracteres del ID de esta ejecución",
-    fileNamePreview: "Vista previa del nombre de archivo",
     fileNamePatternInvalid: "Use un nombre de archivo sin separadores de ruta, caracteres reservados ni punto o espacio final.",
     runDirectoryPattern: "Plantilla de directorio de ejecución",
     runDirectoryPatternHint:
