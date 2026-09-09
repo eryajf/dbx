@@ -1188,6 +1188,15 @@ const filteredFilterBuilderColumnOptions = filterBuilder.filteredColumns;
 const appliedStructuredWhereInput = filterBuilder.appliedWhereInput;
 const draftStructuredWhereInput = ref("");
 const filterEditorView = computed(() => settingsStore.editorSettings.dataGridFilterEditorView);
+const isPersistentFilterView = computed(() => filterEditorView.value === "conditions" || filterEditorView.value === "text");
+const isFilterEditorPinnedOpen = computed(() => isPersistentFilterView.value && settingsStore.editorSettings.dataGridKeepFilterEditorExpanded);
+const effectiveFilterBuilderOpen = computed({
+  get: () => isFilterEditorPinnedOpen.value || filterBuilderOpen.value,
+  set: (open: boolean) => {
+    if (isFilterEditorPinnedOpen.value) return;
+    filterBuilderOpen.value = open;
+  },
+});
 const structuredFilterCount = computed(() => structuredFilterRules.value.filter((rule) => !rule.disabled && !!rule.columnName && filterModeHasCompleteValue(rule.mode, rule.rawValue, rule.rawEndValue)).length);
 const hasStructuredFilters = computed(() => !!combineWhereInputs(undefined, appliedStructuredWhereInput.value));
 interface ForeignKeyDisplayLabelState {
@@ -1542,7 +1551,7 @@ function buildGroupedWhere(conditions: string[], rules: StructuredFilterRule[]):
 async function applyStructuredFilters() {
   if (!canUseWhereSearch.value) return;
   appliedStructuredWhereInput.value = await buildStructuredWhereFromRules(structuredFilterRules.value);
-  if (settingsStore.editorSettings.dataGridAutoHideFilterBuilder) filterBuilderOpen.value = false;
+  if (!isFilterEditorPinnedOpen.value) filterBuilderOpen.value = false;
   await applyWhereFilter();
 }
 
@@ -11111,7 +11120,7 @@ function openGridSnapshot() {
                 <DataGridQueryControls
                   v-model:where-input="whereFilterInput"
                   v-model:order-by-input="orderByInput"
-                  v-model:filter-builder-open="filterBuilderOpen"
+                  v-model:filter-builder-open="effectiveFilterBuilderOpen"
                   :filter-editor-view="filterEditorView"
                   :columns="props.tableMeta?.columns.map((column) => column.name) ?? props.result.columns"
                   :condition-columns="conditionColumns"
@@ -11262,7 +11271,7 @@ function openGridSnapshot() {
           </DataGridToolbar>
         </div>
         <DataGridFilterWorkbench
-          v-if="canUseWhereSearch && filterEditorView === 'conditions' && filterBuilderOpen"
+          v-if="canUseWhereSearch && filterEditorView === 'conditions' && effectiveFilterBuilderOpen"
           :sql-preview="filterSqlPreview"
           :rules="structuredFilterRules"
           :columns="filterBuilderColumnOptions"
@@ -11282,7 +11291,7 @@ function openGridSnapshot() {
           @update-rule="updateStructuredFilterRule"
         />
         <DataGridTextFilterWorkbench
-          v-if="canUseWhereSearch && filterEditorView === 'text' && filterBuilderOpen"
+          v-if="canUseWhereSearch && filterEditorView === 'text' && effectiveFilterBuilderOpen"
           :height="settingsStore.editorSettings.dataGridTextFilterPanelHeight"
           :sql-preview="filterSqlPreview"
           :rules="structuredFilterRules"

@@ -505,7 +505,7 @@ const editShowIndexIndicatorsInHeader = ref(settingsStore.editorSettings.showInd
 const editCompactColumnHeaderActions = ref(settingsStore.editorSettings.compactColumnHeaderActions);
 const editDataGridQuickEntry = ref(settingsStore.editorSettings.dataGridQuickEntry);
 const editDataGridFilterEditorView = ref<DataGridFilterEditorView>(settingsStore.editorSettings.dataGridFilterEditorView);
-const editDataGridAutoHideFilterBuilder = ref(settingsStore.editorSettings.dataGridAutoHideFilterBuilder);
+const editDataGridKeepFilterEditorExpanded = ref(settingsStore.editorSettings.dataGridKeepFilterEditorExpanded);
 const dataGridFilterViewPreviewExpanded = ref(true);
 const editDataGridTextFilterPanelHeight = ref(settingsStore.editorSettings.dataGridTextFilterPanelHeight);
 const editMultiStatementDefaultView = ref<MultiStatementDefaultView>(settingsStore.editorSettings.multiStatementDefaultView);
@@ -731,7 +731,7 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     compactColumnHeaderActions: editCompactColumnHeaderActions.value,
     dataGridQuickEntry: editDataGridQuickEntry.value,
     dataGridFilterEditorView: editDataGridFilterEditorView.value,
-    dataGridAutoHideFilterBuilder: editDataGridAutoHideFilterBuilder.value,
+    dataGridKeepFilterEditorExpanded: editDataGridKeepFilterEditorExpanded.value,
     dataGridTextFilterPanelHeight: editDataGridTextFilterPanelHeight.value,
     multiStatementDefaultView: editMultiStatementDefaultView.value,
     dataGridAutoTransposeSingleRow: editDataGridAutoTransposeSingleRow.value,
@@ -1228,7 +1228,7 @@ function syncEditorSettingsDraftFromStore() {
   editCompactColumnHeaderActions.value = settingsStore.editorSettings.compactColumnHeaderActions;
   editDataGridQuickEntry.value = settingsStore.editorSettings.dataGridQuickEntry;
   editDataGridFilterEditorView.value = settingsStore.editorSettings.dataGridFilterEditorView;
-  editDataGridAutoHideFilterBuilder.value = settingsStore.editorSettings.dataGridAutoHideFilterBuilder;
+  editDataGridKeepFilterEditorExpanded.value = settingsStore.editorSettings.dataGridKeepFilterEditorExpanded;
   editDataGridTextFilterPanelHeight.value = settingsStore.editorSettings.dataGridTextFilterPanelHeight;
   editMultiStatementDefaultView.value = settingsStore.editorSettings.multiStatementDefaultView;
   editDataGridAutoTransposeSingleRow.value = settingsStore.editorSettings.dataGridAutoTransposeSingleRow;
@@ -1344,7 +1344,7 @@ const editorSettingsDraftRefs: EditorSettingsDraftRefMap = {
   compactColumnHeaderActions: editCompactColumnHeaderActions,
   dataGridQuickEntry: editDataGridQuickEntry,
   dataGridFilterEditorView: editDataGridFilterEditorView,
-  dataGridAutoHideFilterBuilder: editDataGridAutoHideFilterBuilder,
+  dataGridKeepFilterEditorExpanded: editDataGridKeepFilterEditorExpanded,
   dataGridTextFilterPanelHeight: editDataGridTextFilterPanelHeight,
   multiStatementDefaultView: editMultiStatementDefaultView,
   dataGridAutoTransposeSingleRow: editDataGridAutoTransposeSingleRow,
@@ -1710,7 +1710,7 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
     editDataGridQuickEntry.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry;
     editDataGridFilterEditorView.value = DEFAULT_EDITOR_SETTINGS.dataGridFilterEditorView;
-    editDataGridAutoHideFilterBuilder.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoHideFilterBuilder;
+    editDataGridKeepFilterEditorExpanded.value = DEFAULT_EDITOR_SETTINGS.dataGridKeepFilterEditorExpanded;
     editDataGridTextFilterPanelHeight.value = DEFAULT_EDITOR_SETTINGS.dataGridTextFilterPanelHeight;
     editMultiStatementDefaultView.value = DEFAULT_EDITOR_SETTINGS.multiStatementDefaultView;
     editDataGridAutoTransposeSingleRow.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoTransposeSingleRow;
@@ -1798,7 +1798,7 @@ function resetAllDefaults() {
   editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
   editDataGridQuickEntry.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry;
   editDataGridFilterEditorView.value = DEFAULT_EDITOR_SETTINGS.dataGridFilterEditorView;
-  editDataGridAutoHideFilterBuilder.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoHideFilterBuilder;
+  editDataGridKeepFilterEditorExpanded.value = DEFAULT_EDITOR_SETTINGS.dataGridKeepFilterEditorExpanded;
   editDataGridTextFilterPanelHeight.value = DEFAULT_EDITOR_SETTINGS.dataGridTextFilterPanelHeight;
   editMultiStatementDefaultView.value = DEFAULT_EDITOR_SETTINGS.multiStatementDefaultView;
   editDataGridAutoTransposeSingleRow.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoTransposeSingleRow;
@@ -6631,12 +6631,12 @@ onUnmounted(() => {
                       <span class="truncate">{{ t("grid.filterTextView") }}</span>
                     </Button>
                   </div>
-                  <div class="flex items-center justify-between gap-4 rounded-md border bg-background px-3 py-2">
+                  <div v-if="editDataGridFilterEditorView !== 'quick'" class="flex items-center justify-between gap-4 rounded-md border bg-background px-3 py-2">
                     <div class="space-y-1">
-                      <Label for="data-grid-auto-hide-filter-builder">{{ t("settings.dataGridAutoHideFilterBuilder") }}</Label>
-                      <p class="text-xs text-muted-foreground">{{ t("settings.dataGridAutoHideFilterBuilderDescription") }}</p>
+                      <Label for="data-grid-keep-filter-editor-expanded">{{ t("settings.dataGridKeepFilterEditorExpanded") }}</Label>
+                      <p class="text-xs text-muted-foreground">{{ t("settings.dataGridKeepFilterEditorExpandedDescription") }}</p>
                     </div>
-                    <Switch id="data-grid-auto-hide-filter-builder" v-model="editDataGridAutoHideFilterBuilder" />
+                    <Switch id="data-grid-keep-filter-editor-expanded" v-model="editDataGridKeepFilterEditorExpanded" />
                   </div>
                 </div>
 
