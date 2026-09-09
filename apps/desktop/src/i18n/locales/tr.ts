@@ -6436,7 +6436,7 @@ export default withEnglishFallback({
     appearanceTab: "Görünüm",
     navigationTab: "Gezinme",
     dataTab: "Veri",
-    sqlFileSizeTab: "SQL Dosya Boyutu",
+    sqlFileSection: "SQL Dosyaları",
     tunnelsTab: "Tüneller",
     tunnelsDescription: "Yeniden kullanılabilir SSH / proxy / HTTP tünel yapılandırmaları. Bir kez yapılandırın, sonra bağlantının tünel sekmesinden profili seçin; buradaki değişiklikler profili kullanan her bağlantıda geçerli olur.",
     tunnelsEmpty: "Henüz tünel profili yok. Burada bir tane oluşturun, ardından bir bağlantının tünel ayarlarından seçin.",

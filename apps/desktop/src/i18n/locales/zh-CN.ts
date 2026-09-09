@@ -6533,7 +6533,7 @@ export default withEnglishFallback({
     appearanceTab: "外观",
     navigationTab: "导航",
     dataTab: "数据",
-    sqlFileSizeTab: "SQL 文件大小",
+    sqlFileSection: "SQL 文件",
     tunnelsTab: "隧道维护",
     tunnelsDescription: "可复用的 SSH / 代理 / HTTP 隧道配置。一次配置，之后在连接的隧道页签中选择档案即可；此处的修改会对所有使用该档案的连接生效。",
     tunnelsEmpty: "还没有隧道档案。先在这里创建，然后在连接的隧道设置中选择使用。",

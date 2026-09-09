@@ -6179,7 +6179,7 @@ export default withEnglishFallback({
     appearanceTab: "外観",
     navigationTab: "ナビゲーション",
     dataTab: "データ",
-    sqlFileSizeTab: "SQLファイルサイズ",
+    sqlFileSection: "SQLファイル",
     tunnelsTab: "トンネル",
     tunnelsDescription: "再利用可能な SSH / プロキシ / HTTP トンネル設定です。一度設定すれば、接続のトンネルタブからプロファイルを選択するだけで使えます。ここでの編集は、このプロファイルを使用するすべての接続に反映されます。",
     tunnelsEmpty: "トンネルプロファイルがまだありません。ここで作成し、接続のトンネル設定で選択してください。",

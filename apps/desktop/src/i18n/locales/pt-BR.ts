@@ -6143,7 +6143,7 @@ export default withEnglishFallback({
     appearanceTab: "Aparência",
     navigationTab: "Navegação",
     dataTab: "Dados",
-    sqlFileSizeTab: "Tamanho de arquivo SQL",
+    sqlFileSection: "Arquivos SQL",
     tunnelsTab: "Túneis",
     tunnelsDescription: "Configurações reutilizáveis de túneis SSH / proxy / HTTP. Configure uma vez e selecione o perfil na aba de túnel de uma conexão; as edições aqui se aplicam a todas as conexões que usam o perfil.",
     tunnelsEmpty: "Ainda não há perfis de túnel. Crie um aqui e selecione-o nas configurações de túnel de uma conexão.",

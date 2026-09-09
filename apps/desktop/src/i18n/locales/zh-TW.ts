@@ -5469,7 +5469,7 @@ export default withEnglishFallback({
     securityTab: "安全",
     aboutTab: "關於我們",
     dataTab: "資料",
-    sqlFileSizeTab: "SQL 檔案大小",
+    sqlFileSection: "SQL 檔案",
     tunnelsTab: "隧道維護",
     tunnelsDescription: "可重複使用的 SSH / 代理 / HTTP 隧道設定。一次設定，之後在連線的隧道頁籤中選擇設定檔即可；此處的變更會套用到所有使用該設定檔的連線。",
     tunnelsEmpty: "還沒有隧道設定檔。先在這裡建立，然後在連線的隧道設定中選擇使用。",

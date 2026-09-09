@@ -6141,7 +6141,7 @@ export default withEnglishFallback({
     appearanceTab: "Aspetto",
     navigationTab: "Navigazione",
     dataTab: "Dati",
-    sqlFileSizeTab: "Dimensione file SQL",
+    sqlFileSection: "File SQL",
     tunnelsTab: "Tunnel",
     tunnelsDescription: "Configurazioni riutilizzabili di tunnel SSH / proxy / HTTP. Configura una volta, poi seleziona il profilo dalla scheda tunnel di una connessione; le modifiche qui si applicano a tutte le connessioni che usano il profilo.",
     tunnelsEmpty: "Nessun profilo tunnel. Creane uno qui, poi selezionalo nelle impostazioni tunnel di una connessione.",

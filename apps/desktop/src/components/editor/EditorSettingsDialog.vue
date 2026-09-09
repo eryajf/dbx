@@ -218,7 +218,18 @@ import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { usePromptTemplateStore } from "@/stores/promptTemplateStore";
 import { useTunnelProfileStore } from "@/stores/tunnelProfileStore";
 import { currentLocale, setLocale, type Locale } from "@/i18n";
-import { SETTINGS_SEARCH_DEFINITIONS, TOOLBAR_VISIBILITY_ITEMS, createShortcutSettingsSearchDefinitions, resolveSettingsSearchEntries, searchSettings, toolbarVisibilityItemLabel, type SettingsCategory, type SettingsSearchEntry, type ToolbarVisibilityItem } from "@/lib/settings/settingsSearch";
+import {
+  SETTINGS_SEARCH_DEFINITIONS,
+  TOOLBAR_VISIBILITY_ITEMS,
+  createShortcutSettingsSearchDefinitions,
+  resolveSettingsCategory,
+  resolveSettingsSearchEntries,
+  searchSettings,
+  toolbarVisibilityItemLabel,
+  type SettingsCategory,
+  type SettingsSearchEntry,
+  type ToolbarVisibilityItem,
+} from "@/lib/settings/settingsSearch";
 import { LOCALE_OPTIONS } from "@/lib/app/localeOptions";
 import { DEFAULT_WEB_DAV_AUTO_UPLOAD_INTERVAL_MINUTES, DEFAULT_WEB_DAV_REMOTE_PATH, normalizedWebDavAutoUploadInterval, writeWebDavAutoUploadFields } from "@/lib/webdav/webdavAutoUploadConfig";
 import { apiUrl, webPath } from "@/lib/common/webPath";
@@ -1648,6 +1659,7 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editAppCloseUnsavedTabsMode.value = DEFAULT_EDITOR_SETTINGS.appCloseUnsavedTabsMode;
     editSavedSqlOpenTargetMode.value = DEFAULT_EDITOR_SETTINGS.savedSqlOpenTargetMode;
     editShowTableDdlHoverPreview.value = DEFAULT_EDITOR_SETTINGS.showTableDdlHoverPreview;
+    editExternalSqlEditorMaxMb.value = DEFAULT_EDITOR_SETTINGS.externalSqlEditorMaxMb;
     editClickTableNavigationTarget.value = DEFAULT_EDITOR_SETTINGS.clickTableNavigationTarget;
     editSqlVariableSubstitutionEnabled.value = DEFAULT_EDITOR_SETTINGS.sqlVariableSubstitutionEnabled;
     editSqlVariableSyntaxOverrides.value = normalizeSqlVariableSyntaxOverrides(DEFAULT_EDITOR_SETTINGS.sqlVariableSyntaxOverrides);
@@ -1721,7 +1733,6 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editTableOpenPageSize.value = DEFAULT_EDITOR_SETTINGS.tableOpenPageSize;
     editQueryResultMaxRowsEnabled.value = DEFAULT_EDITOR_SETTINGS.queryResultMaxRowsEnabled;
     editQueryResultMaxRows.value = DEFAULT_EDITOR_SETTINGS.queryResultMaxRows;
-    editExternalSqlEditorMaxMb.value = DEFAULT_EDITOR_SETTINGS.externalSqlEditorMaxMb;
     editInfiniteScroll.value = DEFAULT_EDITOR_SETTINGS.infiniteScroll;
     editRegexMaxMatchCount.value = DEFAULT_EDITOR_SETTINGS.regexMaxMatchCount;
     editAutoCalculateTotalRows.value = DEFAULT_EDITOR_SETTINGS.autoCalculateTotalRows;
@@ -2191,7 +2202,6 @@ const settingsCategoryNav = computed<{ value: SettingsCategory; label: string }[
   { value: "formatter", label: t("settings.sqlFormatterTab") },
   { value: "navigation", label: t("settings.navigationTab") },
   { value: "data", label: t("settings.dataTab") },
-  { value: "sqlFile", label: t("settings.sqlFileSizeTab") },
   ...(isWeb ? [] : [{ value: "backups" as const, label: t("databaseBackup.title") }]),
   { value: "tunnels", label: t("settings.tunnelsTab") },
   { value: "shortcuts", label: t("settings.shortcutsTab") },
@@ -2202,7 +2212,7 @@ const settingsCategoryNav = computed<{ value: SettingsCategory; label: string }[
   ...(isWeb ? [{ value: "security" as const, label: t("settings.securityTab") }] : []),
   { value: "about", label: t("settings.aboutTab") },
 ]);
-const settingsTabsWithApplyFooter = new Set<SettingsCategory>(["editor", "formatter", "appearance", "navigation", "data", "sqlFile", "shortcuts", "snippets"]);
+const settingsTabsWithApplyFooter = new Set<SettingsCategory>(["editor", "formatter", "appearance", "navigation", "data", "shortcuts", "snippets"]);
 
 function hasSettingsApplyFooter(value: SettingsCategory): boolean {
   return settingsTabsWithApplyFooter.has(value);
@@ -3505,7 +3515,7 @@ watch(
       mcpPolicyLoadError.value = "";
       aiConfigListMode.value = "list";
       aiEditConfigId.value = null;
-      activeSettingsTab.value = props.initialTab || "appearance";
+      activeSettingsTab.value = resolveSettingsCategory(props.initialTab);
       passwordMessage.value = "";
       oldPassword.value = "";
       newPassword.value = "";
@@ -3575,7 +3585,7 @@ watch(
   () => props.initialTab,
   (tab) => {
     if (!settingsVisible.value || !tab) return;
-    activeSettingsTab.value = tab;
+    activeSettingsTab.value = resolveSettingsCategory(tab);
     void scrollToInitialSettingsSection();
   },
 );
@@ -3584,7 +3594,7 @@ watch(
   () => props.navigationRequestId,
   () => {
     if (!settingsVisible.value || !props.initialTab) return;
-    activeSettingsTab.value = props.initialTab;
+    activeSettingsTab.value = resolveSettingsCategory(props.initialTab);
     void scrollToInitialSettingsSection();
   },
 );
@@ -3630,7 +3640,7 @@ watch(activeSettingsTab, async (tab) => {
     await promptTemplateStore.ensureLoaded();
     editGlobalInstructions.value = promptTemplateStore.globalInstructions;
   }
-  if (tab === "sqlFile" && isWeb) void loadWebSqlFileUploadMaxMbSetting();
+  if (tab === "data" && isWeb) void loadWebSqlFileUploadMaxMbSetting();
   if (tab === "about" && !appSupportInfo.value) void refreshAppSupportInfo();
   if (tab === "appearance") {
     checkLayoutDescTruncation();
@@ -5565,6 +5575,34 @@ onUnmounted(() => {
                   </div>
                 </div>
               </div>
+
+              <Separator />
+
+              <div data-settings-search-id="editor-sql-file" :class="['space-y-3', settingsSearchTargetClass('editor-sql-file')]">
+                <div class="text-sm font-medium text-muted-foreground">
+                  {{ t("settings.sqlFileSection") }}
+                </div>
+                <div class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
+                  <div class="space-y-1">
+                    <Label for="external-sql-editor-max-mb">
+                      {{ t("settings.externalSqlEditorMaxMb") }}
+                    </Label>
+                    <p class="text-xs text-muted-foreground">
+                      {{ t("settings.externalSqlEditorMaxMbDescription", { min: MIN_EXTERNAL_SQL_EDITOR_FILE_MB, max: MAX_EXTERNAL_SQL_EDITOR_FILE_MB }) }}
+                    </p>
+                  </div>
+                  <Input
+                    id="external-sql-editor-max-mb"
+                    type="number"
+                    inputmode="numeric"
+                    class="h-7 w-[130px] px-2 text-left text-xs tabular-nums"
+                    :min="MIN_EXTERNAL_SQL_EDITOR_FILE_MB"
+                    :max="MAX_EXTERNAL_SQL_EDITOR_FILE_MB"
+                    :model-value="editExternalSqlEditorMaxMb"
+                    @input="updateExternalSqlEditorMaxMbInput"
+                  />
+                </div>
+              </div>
             </section>
 
             <section v-else-if="activeSettingsTab === 'formatter'" data-settings-search-id="formatter" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('formatter')]">
@@ -7151,6 +7189,40 @@ onUnmounted(() => {
 
               <Separator />
 
+              <div v-if="isWeb" data-settings-search-id="data-sql-file-upload" :class="['space-y-3', settingsSearchTargetClass('data-sql-file-upload')]">
+                <div class="text-sm font-medium text-muted-foreground">
+                  {{ t("settings.sqlFileSection") }}
+                </div>
+                <div class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
+                  <div class="space-y-1">
+                    <Label for="web-sql-file-upload-max-mb">
+                      {{ t("settings.webSqlFileUploadMaxMb") }}
+                    </Label>
+                    <p class="text-xs text-muted-foreground">
+                      {{ t("settings.webSqlFileUploadMaxMbDescription", { min: MIN_EXTERNAL_SQL_EDITOR_FILE_MB, max: MAX_EXTERNAL_SQL_EDITOR_FILE_MB }) }}
+                    </p>
+                  </div>
+                  <div class="flex shrink-0 items-center gap-2">
+                    <Input
+                      id="web-sql-file-upload-max-mb"
+                      v-model.number="editWebSqlFileUploadMaxMb"
+                      type="number"
+                      inputmode="numeric"
+                      class="h-7 w-[130px] px-2 text-left text-xs tabular-nums"
+                      :min="MIN_EXTERNAL_SQL_EDITOR_FILE_MB"
+                      :max="MAX_EXTERNAL_SQL_EDITOR_FILE_MB"
+                      :disabled="!webSqlFileUploadMaxMbLoaded || webSqlFileUploadMaxMbLoading"
+                      :aria-invalid="webSqlFileUploadMaxMbOutOfRange(editWebSqlFileUploadMaxMb)"
+                    />
+                    <Button type="button" size="sm" variant="outline" :disabled="!webSqlFileUploadMaxMbLoaded || webSqlFileUploadMaxMbSaving || webSqlFileUploadMaxMbOutOfRange(editWebSqlFileUploadMaxMb)" @click="saveWebSqlFileUploadMaxMbSetting">
+                      {{ t("settings.save") }}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <Separator />
+
               <div data-settings-search-id="data-performance" :class="['space-y-3', settingsSearchTargetClass('data-performance')]">
                 <div class="text-sm font-medium text-muted-foreground">
                   {{ t("settings.performanceSection") }}
@@ -7274,55 +7346,6 @@ onUnmounted(() => {
                       </tbody>
                     </table>
                   </div>
-                </div>
-              </div>
-            </section>
-
-            <section v-else-if="activeSettingsTab === 'sqlFile'" data-settings-search-id="sqlFile" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('sqlFile')]">
-              <div class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
-                <div class="space-y-1">
-                  <Label for="external-sql-editor-max-mb">
-                    {{ t("settings.externalSqlEditorMaxMb") }}
-                  </Label>
-                  <p class="text-xs text-muted-foreground">
-                    {{ t("settings.externalSqlEditorMaxMbDescription", { min: MIN_EXTERNAL_SQL_EDITOR_FILE_MB, max: MAX_EXTERNAL_SQL_EDITOR_FILE_MB }) }}
-                  </p>
-                </div>
-                <Input
-                  id="external-sql-editor-max-mb"
-                  type="number"
-                  inputmode="numeric"
-                  class="h-7 w-[130px] px-2 text-left text-xs tabular-nums"
-                  :min="MIN_EXTERNAL_SQL_EDITOR_FILE_MB"
-                  :max="MAX_EXTERNAL_SQL_EDITOR_FILE_MB"
-                  :model-value="editExternalSqlEditorMaxMb"
-                  @input="updateExternalSqlEditorMaxMbInput"
-                />
-              </div>
-              <div v-if="isWeb" class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
-                <div class="space-y-1">
-                  <Label for="web-sql-file-upload-max-mb">
-                    {{ t("settings.webSqlFileUploadMaxMb") }}
-                  </Label>
-                  <p class="text-xs text-muted-foreground">
-                    {{ t("settings.webSqlFileUploadMaxMbDescription", { min: MIN_EXTERNAL_SQL_EDITOR_FILE_MB, max: MAX_EXTERNAL_SQL_EDITOR_FILE_MB }) }}
-                  </p>
-                </div>
-                <div class="flex shrink-0 items-center gap-2">
-                  <Input
-                    id="web-sql-file-upload-max-mb"
-                    v-model.number="editWebSqlFileUploadMaxMb"
-                    type="number"
-                    inputmode="numeric"
-                    class="h-7 w-[130px] px-2 text-left text-xs tabular-nums"
-                    :min="MIN_EXTERNAL_SQL_EDITOR_FILE_MB"
-                    :max="MAX_EXTERNAL_SQL_EDITOR_FILE_MB"
-                    :disabled="!webSqlFileUploadMaxMbLoaded || webSqlFileUploadMaxMbLoading"
-                    :aria-invalid="webSqlFileUploadMaxMbOutOfRange(editWebSqlFileUploadMaxMb)"
-                  />
-                  <Button type="button" size="sm" variant="outline" :disabled="!webSqlFileUploadMaxMbLoaded || webSqlFileUploadMaxMbSaving || webSqlFileUploadMaxMbOutOfRange(editWebSqlFileUploadMaxMb)" @click="saveWebSqlFileUploadMaxMbSetting">
-                    {{ t("settings.save") }}
-                  </Button>
                 </div>
               </div>
             </section>

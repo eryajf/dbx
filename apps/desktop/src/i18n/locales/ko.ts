@@ -5876,7 +5876,7 @@ export default withEnglishFallback({
     appearanceTab: "모양",
     navigationTab: "탐색",
     dataTab: "데이터",
-    sqlFileSizeTab: "SQL 파일 크기",
+    sqlFileSection: "SQL 파일",
     tunnelsTab: "터널",
     tunnelsDescription: "재사용 가능한 SSH/프록시/HTTP 터널 설정입니다. 한 번 구성한 후 연결의 터널 탭에서 프로필을 선택하세요. 여기서의 편집은 이 프로필을 사용하는 모든 연결에 적용됩니다.",
     tunnelsEmpty: "아직 터널 프로필이 없습니다. 여기서 만든 후 연결의 터널 설정에서 선택하세요.",

@@ -6550,7 +6550,7 @@ export default {
     appearanceTab: "Appearance",
     navigationTab: "Navigation",
     dataTab: "Data",
-    sqlFileSizeTab: "SQL File Size",
+    sqlFileSection: "SQL Files",
     tunnelsTab: "Tunnels",
     tunnelsDescription: "Reusable SSH / proxy / HTTP tunnel configurations. Configure once, then select the profile from a connection's tunnel tab; edits here apply to every connection using the profile.",
     tunnelsEmpty: "No tunnel profiles yet. Create one here, then select it in a connection's tunnel settings.",
