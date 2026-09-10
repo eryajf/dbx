@@ -288,6 +288,7 @@ export default withEnglishFallback({
     changedAgain: "El archivo volvió a cambiar durante el guardado. Inténtalo de nuevo.",
   },
   updates: {
+    preparationWindowOperation: "Espera a que termine la operación de ventana actual antes de actualizar.",
     preparationBusy: "Ya se está preparando una actualización.",
     preparationCancelled: "Se canceló la preparación.",
     preparationTimeout: "Una ventana no se guardó en 5 segundos. Reintenta.",

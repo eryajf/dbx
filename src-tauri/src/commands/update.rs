@@ -70,7 +70,7 @@ impl UpdateDownloadProgressGate {
 enum PendingUpdate {
     Downloading(Arc<DownloadCancellation>),
     Installing,
-    Ready(CachedUpdate),
+    Ready(Box<CachedUpdate>),
 }
 
 struct CachedUpdate {
@@ -159,7 +159,7 @@ impl PendingUpdateState {
             ReadyUpdate::Portable { archive, .. } => archive,
         };
         update_cache::commit(root, &update.record, bytes)?;
-        *pending = Some(PendingUpdate::Ready(update));
+        *pending = Some(PendingUpdate::Ready(Box::new(update)));
         Ok(())
     }
 
@@ -191,7 +191,7 @@ impl PendingUpdateState {
                 if update.record.info.cache_id == cache_id && update.record.info.version == expected_version =>
             {
                 *pending = Some(PendingUpdate::Installing);
-                Ok(update)
+                Ok(*update)
             }
             other => {
                 *pending = other;
@@ -202,7 +202,7 @@ impl PendingUpdateState {
 
     fn restore_ready(&self, update: CachedUpdate) -> Result<(), String> {
         let mut pending = self.pending.lock().map_err(|_| "Update state is unavailable.".to_string())?;
-        *pending = Some(PendingUpdate::Ready(update));
+        *pending = Some(PendingUpdate::Ready(Box::new(update)));
         Ok(())
     }
 
@@ -460,7 +460,7 @@ pub fn get_downloaded_update(
     match restore_cached(&app) {
         Ok(Some(cached)) => {
             let info = cached.record.info.clone();
-            *pending = Some(PendingUpdate::Ready(cached));
+            *pending = Some(PendingUpdate::Ready(Box::new(cached)));
             Ok(Some(info))
         }
         Ok(None) => Ok(None),

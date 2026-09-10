@@ -286,6 +286,7 @@ export default {
     changedAgain: "The file changed again while it was being saved. Try again.",
   },
   updates: {
+    preparationWindowOperation: "Please wait for the current window operation to finish before updating.",
     preparationBusy: "An update is already being prepared.",
     preparationCancelled: "Update preparation was cancelled.",
     preparationTimeout: "A window did not save within 5 seconds. Try again.",

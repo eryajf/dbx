@@ -288,6 +288,7 @@ export default withEnglishFallback({
     changedAgain: "保存中にファイルが再度変更されました。もう一度お試しください。",
   },
   updates: {
+    preparationWindowOperation: "更新する前に、現在のウィンドウ操作が完了するまでお待ちください。",
     preparationBusy: "更新を準備中です。",
     preparationCancelled: "更新準備をキャンセルしました。",
     preparationTimeout: "5 秒以内に保存できないウィンドウがあります。再試行してください。",

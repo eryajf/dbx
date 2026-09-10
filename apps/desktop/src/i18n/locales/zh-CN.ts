@@ -211,6 +211,7 @@ export default withEnglishFallback({
     changedAgain: "保存过程中该文件再次发生变化，请重试。",
   },
   updates: {
+    preparationWindowOperation: "请等待当前窗口操作完成后再更新。",
     preparationBusy: "正在准备更新，请稍候。",
     preparationCancelled: "更新准备已取消。",
     preparationTimeout: "有窗口未在 5 秒内完成保存，请重试。",

@@ -285,6 +285,7 @@ export default withEnglishFallback({
     changedAgain: "Fayl yadda saxlanılarkən yenidən dəyişdirildi. Yenidən cəhd edin.",
   },
   updates: {
+    preparationWindowOperation: "Yeniləmədən əvvəl cari pəncərə əməliyyatının bitməsini gözləyin.",
     preparationBusy: "Yeniləmə artıq hazırlanır.",
     preparationCancelled: "Yeniləmə hazırlığı ləğv edildi.",
     preparationTimeout: "Pəncərə 5 saniyə ərzində saxlanmadı. Yenidən sınayın.",

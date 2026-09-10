@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { effectScope } from "vue";
-import { acquireUpdateBarrier, prepareUpdateWithDraftRecovery, UPDATE_RESTORE_KEY, assertUpdateAllowsCommand, assertUpdateSafe, setupUpdatePreparation, useUpdateBlocker } from "../updatePreparation";
+import { acquireUpdateBarrier, beginUpdateSensitiveOperation, prepareUpdateWithDraftRecovery, UPDATE_RESTORE_KEY, assertUpdateAllowsCommand, assertUpdateSafe, setupUpdatePreparation, useUpdateBlocker } from "../updatePreparation";
+import i18n, { loadLocaleMessages } from "@/i18n";
 
 const bus = vi.hoisted(() => ({ label: "main", members: ["main"] as string[], listeners: new Map<string, Set<{ label: string; callback: (event: any) => unknown }>>() }));
 vi.mock("@tauri-apps/api/webviewWindow", () => ({ getCurrentWebviewWindow: () => ({ label: bus.label }), getAllWebviewWindows: async () => bus.members.map((label) => ({ label })) }));
@@ -28,6 +29,21 @@ afterEach(() => {
 });
 
 describe("update restart preparation", () => {
+  it("translates a pending window operation using the current locale", async () => {
+    const previousLocale = i18n.global.locale.value;
+    await loadLocaleMessages("zh-CN");
+    const release = beginUpdateSensitiveOperation();
+    try {
+      i18n.global.locale.value = "zh-CN";
+      expect(assertUpdateSafe).toThrow("请等待当前窗口操作完成后再更新。");
+      i18n.global.locale.value = "en";
+      expect(assertUpdateSafe).toThrow("Please wait for the current window operation to finish before updating.");
+    } finally {
+      release();
+      i18n.global.locale.value = previousLocale;
+    }
+  });
+
   it("marks recovery only after all preparation succeeds and preserves recovery when relaunch fails", async () => {
     const storage = new Map<string, string>();
     const disk = {

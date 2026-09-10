@@ -287,6 +287,7 @@ export default withEnglishFallback({
     changedAgain: "Il file è cambiato di nuovo durante il salvataggio. Riprova.",
   },
   updates: {
+    preparationWindowOperation: "Attendi il completamento dell’operazione sulla finestra prima di aggiornare.",
     preparationBusy: "Un aggiornamento è già in preparazione.",
     preparationCancelled: "Preparazione annullata.",
     preparationTimeout: "Una finestra non ha salvato entro 5 secondi. Riprova.",

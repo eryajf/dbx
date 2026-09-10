@@ -356,8 +356,10 @@ describe("UpdateDialog ignore version", () => {
 describe("UpdateDialog release notes safety", () => {
   it("renders remote HTML as text and never creates unsafe links or image requests", async () => {
     await mountDialog(0, { releaseNotes: '<img src="https://example.com/tracker" onerror="alert(1)"><script>alert(1)</script> [bad](javascript:alert) ![remote](https://example.com/image) [safe](https://example.com/release)' });
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('a[href="https://example.com/release"]')).not.toBeNull();
+    });
     expect(document.body.querySelector("script, img")).toBeNull();
     expect(Array.from(document.body.querySelectorAll("a")).every((anchor) => anchor.href.startsWith("https://"))).toBe(true);
-    expect(document.body.querySelector('a[href="https://example.com/release"]')).not.toBeNull();
   });
 });

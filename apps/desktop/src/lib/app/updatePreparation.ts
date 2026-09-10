@@ -1,4 +1,5 @@
 import { onScopeDispose } from "vue";
+import i18n from "@/i18n";
 
 const blockers = new Set<() => string | undefined>();
 let barrierDepth = 0;
@@ -11,9 +12,9 @@ export function useUpdateBlocker(blocker: () => string | undefined): void {
 }
 
 /** Reserve a window/task transition before its first asynchronous boundary. */
-export function beginUpdateSensitiveOperation(reason = "Please wait for the current window operation to finish before updating."): () => void {
+export function beginUpdateSensitiveOperation(reason?: string): () => void {
   assertUpdateAllowsInteraction();
-  const blocker = () => reason;
+  const blocker = () => reason ?? i18n.global.t("updates.preparationWindowOperation");
   blockers.add(blocker);
   return () => {
     blockers.delete(blocker);

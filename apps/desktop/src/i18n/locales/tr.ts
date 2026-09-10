@@ -287,6 +287,7 @@ export default withEnglishFallback({
     changedAgain: "Dosya kaydedilirken yeniden değişti. Tekrar deneyin.",
   },
   updates: {
+    preparationWindowOperation: "Güncellemeden önce geçerli pencere işleminin tamamlanmasını bekleyin.",
     preparationBusy: "Güncelleme zaten hazırlanıyor.",
     preparationCancelled: "Güncelleme hazırlığı iptal edildi.",
     preparationTimeout: "Bir pencere 5 saniyede kaydetmedi. Yeniden deneyin.",

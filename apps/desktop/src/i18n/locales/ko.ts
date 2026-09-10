@@ -286,6 +286,7 @@ export default withEnglishFallback({
     changedAgain: "저장하는 동안 파일이 다시 변경되었습니다. 다시 시도하세요.",
   },
   updates: {
+    preparationWindowOperation: "업데이트하기 전에 현재 창 작업이 완료될 때까지 기다려 주세요.",
     preparationBusy: "업데이트를 준비 중입니다.",
     preparationCancelled: "업데이트 준비가 취소되었습니다.",
     preparationTimeout: "창이 5초 안에 저장되지 않았습니다. 다시 시도하세요.",

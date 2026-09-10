@@ -288,6 +288,7 @@ export default withEnglishFallback({
     changedAgain: "儲存期間檔案再次發生變更，請重試。",
   },
   updates: {
+    preparationWindowOperation: "請等待目前視窗操作完成後再更新。",
     preparationBusy: "正在準備更新，請稍候。",
     preparationCancelled: "更新準備已取消。",
     preparationTimeout: "有視窗未在 5 秒內完成儲存，請重試。",
