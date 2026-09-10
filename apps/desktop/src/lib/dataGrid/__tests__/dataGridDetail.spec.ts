@@ -1,7 +1,7 @@
-import { MONGO_DOCUMENT_GRID_NULL, mongoDocumentGridDisplayText, mongoDocumentGridValue } from "@/lib/mongo/mongoDocumentValues";
-import { displayCellValue } from "@/lib/dataGrid/cellValue";
+import { MONGO_DOCUMENT_GRID_NULL, mongoDocumentGridDisplayText, mongoDocumentGridExternalValue, mongoDocumentGridValue } from "@/lib/mongo/mongoDocumentValues";
+import { displayCellValue, type CellValue } from "@/lib/dataGrid/cellValue";
 import { describe, expect, it } from "vitest";
-import { buildDataGridCellDetail, buildDeleteRowConfirmDetails, dataGridColumnDetailTsv, dataGridRowDetailTsv, type DataGridColumnDetail, type DataGridRowDetail } from "../dataGridDetail";
+import { buildDataGridCellDetail, buildDataGridColumnDetail, buildDataGridRowDetail, buildDeleteRowConfirmDetails, dataGridColumnDetailJson, dataGridColumnDetailTsv, dataGridRowDetailJson, dataGridRowDetailTsv, type DataGridColumnDetail, type DataGridRowDetail } from "../dataGridDetail";
 
 type TestRow = string[];
 
@@ -162,5 +162,61 @@ describe("Mongo collection cell detail presentation", () => {
     });
     expect(detail).toMatchObject({ value, rawValue: text, rawValuePreview: text, isNull: bsonValue === null, length: bsonValue === null ? 0 : text.length });
     expect(detail!.rawValue).not.toContain("\u0000");
+  });
+
+  it("presents the BSON null marker as NULL text in row and column detail fields", () => {
+    const value = mongoDocumentGridValue(null) as string;
+    const rawValue = (cell: CellValue) => mongoDocumentGridDisplayText(cell) ?? displayCellValue(cell);
+    const isNullValue = (cell: CellValue) => cell === MONGO_DOCUMENT_GRID_NULL;
+    const rowDetail = buildDataGridRowDetail({
+      rowIndex: 0,
+      rowId: 1,
+      row: [value],
+      columns: ["value"],
+      columnIndexes: [0],
+      displayValue: rawValue,
+      rawValue,
+      isNullValue,
+    });
+    const columnDetail = buildDataGridColumnDetail({
+      rows: [{ rowIndex: 0, rowId: 1, row: [value] }],
+      columns: ["value"],
+      columnIndex: 0,
+      displayValue: rawValue,
+      rawValue,
+      isNullValue,
+    });
+
+    for (const field of [...rowDetail.fields, ...columnDetail!.fields]) {
+      expect(field).toMatchObject({ value, rawValue: "NULL", rawValuePreview: "NULL", isNull: true, length: 0 });
+      expect(field.rawValuePreview).not.toContain("\u0000");
+    }
+  });
+
+  it("restores external BSON null values in row and column detail copy payloads", () => {
+    const value = mongoDocumentGridValue(null) as string;
+    const rowDetail = buildDataGridRowDetail({
+      rowIndex: 0,
+      rowId: 1,
+      row: [value],
+      columns: ["value"],
+      columnIndexes: [0],
+      displayValue: (cell) => displayCellValue(cell),
+    });
+    const columnDetail = buildDataGridColumnDetail({
+      rows: [{ rowIndex: 0, rowId: 1, row: [value] }],
+      columns: ["value"],
+      columnIndex: 0,
+      displayValue: (cell) => displayCellValue(cell),
+    });
+
+    const rowJson = dataGridRowDetailJson(rowDetail, undefined, undefined, mongoDocumentGridExternalValue);
+    const columnJson = dataGridColumnDetailJson(columnDetail!, undefined, mongoDocumentGridExternalValue);
+    expect(rowJson).toBe('{\n  "value": null\n}');
+    expect(columnJson).toBe('[\n  {\n    "row": 1,\n    "value": null\n  }\n]');
+    expect(rowJson).not.toContain("\u0000");
+    expect(columnJson).not.toContain("\u0000");
+    expect(dataGridRowDetailTsv(rowDetail, undefined, mongoDocumentGridExternalValue)).toBe("");
+    expect(dataGridColumnDetailTsv(columnDetail!, undefined, mongoDocumentGridExternalValue)).toBe("");
   });
 });

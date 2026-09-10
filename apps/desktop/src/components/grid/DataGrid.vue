@@ -5186,6 +5186,16 @@ const contextCellDetail = computed(() => {
   if (!cell || cell.col < 0) return null;
   return cellDetailFor(cell.rowIndex, cell.col);
 });
+// The MongoDB collection grid stores an internal sentinel for explicit BSON
+// null; detail panes must render display text instead of leaking that marker.
+function gridDetailRawValue(value: CellValue): string {
+  return props.mongoCollectionGrid ? (mongoDocumentGridDisplayText(value) ?? displayCellValue(value)) : displayCellValue(value);
+}
+
+function gridDetailIsNullValue(value: CellValue): boolean {
+  return value === null || (props.mongoCollectionGrid === true && value === MONGO_DOCUMENT_GRID_NULL);
+}
+
 function cellDetailFor(rowIndex: number, columnIndex: number): DataGridCellDetail | null {
   const item = displayItemAt(rowIndex);
   if (!item) return null;
@@ -5199,8 +5209,8 @@ function cellDetailFor(rowIndex: number, columnIndex: number): DataGridCellDetai
     resultColumnTypes: props.result.column_types,
     commentByColumn: columnCommentMap.value,
     displayValue: (value, index) => formatCellCached(value, index),
-    rawValue: (value) => (props.mongoCollectionGrid ? (mongoDocumentGridDisplayText(value) ?? displayCellValue(value)) : displayCellValue(value)),
-    isNullValue: (value) => value === null || (props.mongoCollectionGrid === true && value === MONGO_DOCUMENT_GRID_NULL),
+    rawValue: gridDetailRawValue,
+    isNullValue: gridDetailIsNullValue,
     isEditable: canEditGridCellDetail({
       canEditCell: canEditCellItem(item, columnIndex),
       isDraft: !!item.isDraft,
@@ -5274,6 +5284,8 @@ const rowDetail = computed(() => {
     resultColumnTypes: props.result.column_types,
     commentByColumn: columnCommentMap.value,
     displayValue: (value, index) => formatCellCached(value, index),
+    rawValue: gridDetailRawValue,
+    isNullValue: gridDetailIsNullValue,
     isEditableColumn: (columnIndex) =>
       canEditGridCellDetail({
         canEditCell: canEditCellItem(item, columnIndex),
@@ -5305,6 +5317,8 @@ const columnDetail = computed(() => {
     resultColumnTypes: props.result.column_types,
     commentByColumn: columnCommentMap.value,
     displayValue: (value, index) => formatCellCached(value, index),
+    rawValue: gridDetailRawValue,
+    isNullValue: gridDetailIsNullValue,
   });
 });
 
@@ -8579,6 +8593,13 @@ function detailClipboardText(detail: DataGridCellDetail): string {
   return displayCellValue(detail.value);
 }
 
+// Row/column detail copy payloads must carry external values: the collection
+// grid's BSON null marker is restored to a real null instead of leaking the
+// internal sentinel into clipboard JSON/TSV.
+function gridDetailExternalValue(value: CellValue): CellValue {
+  return props.mongoCollectionGrid ? mongoDocumentGridExternalValue(value) : value;
+}
+
 async function copyDetailValue() {
   const initialDetail = activeCellDetail.value;
   if (!initialDetail || !(await hydrateLargeValueCell(initialDetail.rowId, initialDetail.colIndex))) return;
@@ -8790,7 +8811,7 @@ async function copyRowDetailJson() {
   try {
     const detail = await resolvedRowDetailForCopy();
     if (!detail) return;
-    copyText(dataGridRowDetailJson(detail, undefined, resolvedDatabaseType.value));
+    copyText(dataGridRowDetailJson(detail, undefined, resolvedDatabaseType.value, gridDetailExternalValue));
   } catch (error) {
     reportLargeValueLoadError(error);
   }
@@ -8800,7 +8821,7 @@ async function copyRowDetailTsv() {
   try {
     const detail = await resolvedRowDetailForCopy();
     if (!detail) return;
-    copyText(dataGridRowDetailTsv(detail, resolvedDatabaseType.value));
+    copyText(dataGridRowDetailTsv(detail, resolvedDatabaseType.value, gridDetailExternalValue));
   } catch (error) {
     reportLargeValueLoadError(error);
   }
@@ -8817,7 +8838,7 @@ async function copyColumnDetailJson() {
   try {
     const detail = await resolvedColumnDetailForCopy();
     if (!detail) return;
-    copyText(dataGridColumnDetailJson(detail, resolvedDatabaseType.value));
+    copyText(dataGridColumnDetailJson(detail, resolvedDatabaseType.value, gridDetailExternalValue));
   } catch (error) {
     reportLargeValueLoadError(error);
   }
@@ -8827,7 +8848,7 @@ async function copyColumnDetailTsv() {
   try {
     const detail = await resolvedColumnDetailForCopy();
     if (!detail) return;
-    copyText(dataGridColumnDetailTsv(detail, resolvedDatabaseType.value));
+    copyText(dataGridColumnDetailTsv(detail, resolvedDatabaseType.value, gridDetailExternalValue));
   } catch (error) {
     reportLargeValueLoadError(error);
   }
