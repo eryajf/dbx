@@ -6656,6 +6656,8 @@ export default withEnglishFallback({
     tableOpenPageSizeDescription: "Yeni bir tablo açıldığında sayfa başına yüklenen satır sayısı. Bir tabloda sayfa başına satırı değiştirmek, sonraki tablo sekmeleri için bu varsayılanı günceller.",
     queryPageSize: "Varsayılan sorgu sayfa başına satır",
     queryPageSizeDescription: "Sorgu sonucu sayfası başına yüklenen satır sayısı. Desteklenen en büyük sayfa boyutu {max}.",
+    defaultAutoKeepResults: "Sorgu sonuçlarını varsayılan olarak otomatik sakla",
+    defaultAutoKeepResultsDescription: "Bu ayar uygulandığında açık sorgu sekmeleri güncellenir ve yeni sekmeler için varsayılan belirlenir. Her sekmede ayrı ayrı değiştirebilirsiniz.",
     multiStatementDefaultView: "Birden çok ifade için varsayılan görünüm",
     multiStatementDefaultViewDescription: "Birden çok SQL ifadesi içeren toplu işlerin sonuç tablosunda mı yoksa yürütme özetinde mi açılacağını seçin.",
     queryResultMaxRows: "En fazla sorgu sonucu satırı",

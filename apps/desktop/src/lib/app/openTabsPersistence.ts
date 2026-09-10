@@ -192,7 +192,7 @@ export function serializeOpenTabs(tabs: QueryTab[]): SavedOpenTab[] {
         }
       : {}),
     ...(tab.mode === "query" && tab.activeResultRunId !== undefined ? { activeResultRunId: tab.activeResultRunId } : {}),
-    ...(tab.mode === "query" && tab.resultAutoSave ? { resultAutoSave: true } : {}),
+    ...(tab.mode === "query" && typeof tab.resultAutoSave === "boolean" ? { resultAutoSave: tab.resultAutoSave } : {}),
   }));
 }
 
@@ -243,7 +243,7 @@ function restoreOpenTabsArray(parsed: unknown, rawActiveTabId: string | null, op
         resultCacheState: mode !== "data" && tab.resultCacheKey ? "disk" : undefined,
         resultRuns,
         activeResultRunId: resultRuns?.some((run) => run.id === tab.activeResultRunId) ? tab.activeResultRunId : resultRuns?.[0]?.id,
-        resultAutoSave: mode === "query" && tab.resultAutoSave ? true : undefined,
+        resultAutoSave: mode === "query" && typeof tab.resultAutoSave === "boolean" ? tab.resultAutoSave : undefined,
       };
     });
     const activeTabId = rawActiveTabId || null;

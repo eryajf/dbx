@@ -6351,6 +6351,8 @@ export default withEnglishFallback({
     tableOpenPageSizeDescription: "Filas cargadas por página al abrir una tabla nueva. Cambiar las filas por página actualiza este valor para futuras pestañas de tablas.",
     queryPageSize: "Filas predeterminadas por página de consulta",
     queryPageSizeDescription: "Filas cargadas por página de resultados. Se admiten hasta {max} filas.",
+    defaultAutoKeepResults: "Conservar resultados automáticamente por defecto",
+    defaultAutoKeepResultsDescription: "Al aplicar este ajuste se actualizan las pestañas de consulta abiertas y se establece el valor predeterminado para las nuevas. Puedes cambiarlo en cada pestaña.",
     multiStatementDefaultView: "Vista predeterminada para varias sentencias",
     multiStatementDefaultViewDescription: "Elige si los lotes con varias sentencias SQL se abren en la tabla de resultados o en el resumen de ejecución.",
     queryResultMaxRows: "Máximo de filas del resultado",

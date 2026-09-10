@@ -1211,6 +1211,7 @@ export interface QueryTab {
   resultViewGeneration?: string;
   resultRuns?: QueryResultRun[];
   activeResultRunId?: string;
+  /** Undefined inherits the default on open; false preserves an explicit per-tab opt-out. */
   resultAutoSave?: boolean;
   explainPlan?: import("@/lib/diagram/explainPlan").ParsedExplainPlan;
   /** MySQL's regular EXPLAIN result, kept alongside its JSON visual plan. */

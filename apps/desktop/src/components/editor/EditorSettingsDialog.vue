@@ -532,6 +532,7 @@ const editDataGridFilterEditorView = ref<DataGridFilterEditorView>(settingsStore
 const editDataGridKeepFilterEditorExpanded = ref(settingsStore.editorSettings.dataGridKeepFilterEditorExpanded);
 const dataGridFilterViewPreviewExpanded = ref(true);
 const editDataGridTextFilterPanelHeight = ref(settingsStore.editorSettings.dataGridTextFilterPanelHeight);
+const editDefaultAutoKeepResults = ref(settingsStore.editorSettings.defaultAutoKeepResults);
 const editMultiStatementDefaultView = ref<MultiStatementDefaultView>(settingsStore.editorSettings.multiStatementDefaultView);
 const editDataGridAutoTransposeSingleRow = ref(settingsStore.editorSettings.dataGridAutoTransposeSingleRow);
 const editDataGridCellDetailButtonVisible = ref(settingsStore.editorSettings.dataGridCellDetailButtonVisible);
@@ -757,6 +758,7 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     dataGridFilterEditorView: editDataGridFilterEditorView.value,
     dataGridKeepFilterEditorExpanded: editDataGridKeepFilterEditorExpanded.value,
     dataGridTextFilterPanelHeight: editDataGridTextFilterPanelHeight.value,
+    defaultAutoKeepResults: editDefaultAutoKeepResults.value,
     multiStatementDefaultView: editMultiStatementDefaultView.value,
     dataGridAutoTransposeSingleRow: editDataGridAutoTransposeSingleRow.value,
     dataGridCellDetailButtonVisible: editDataGridCellDetailButtonVisible.value,
@@ -1254,6 +1256,7 @@ function syncEditorSettingsDraftFromStore() {
   editDataGridFilterEditorView.value = settingsStore.editorSettings.dataGridFilterEditorView;
   editDataGridKeepFilterEditorExpanded.value = settingsStore.editorSettings.dataGridKeepFilterEditorExpanded;
   editDataGridTextFilterPanelHeight.value = settingsStore.editorSettings.dataGridTextFilterPanelHeight;
+  editDefaultAutoKeepResults.value = settingsStore.editorSettings.defaultAutoKeepResults;
   editMultiStatementDefaultView.value = settingsStore.editorSettings.multiStatementDefaultView;
   editDataGridAutoTransposeSingleRow.value = settingsStore.editorSettings.dataGridAutoTransposeSingleRow;
   editDataGridCellDetailButtonVisible.value = settingsStore.editorSettings.dataGridCellDetailButtonVisible;
@@ -1370,6 +1373,7 @@ const editorSettingsDraftRefs: EditorSettingsDraftRefMap = {
   dataGridFilterEditorView: editDataGridFilterEditorView,
   dataGridKeepFilterEditorExpanded: editDataGridKeepFilterEditorExpanded,
   dataGridTextFilterPanelHeight: editDataGridTextFilterPanelHeight,
+  defaultAutoKeepResults: editDefaultAutoKeepResults,
   multiStatementDefaultView: editMultiStatementDefaultView,
   dataGridAutoTransposeSingleRow: editDataGridAutoTransposeSingleRow,
   dataGridCellDetailButtonVisible: editDataGridCellDetailButtonVisible,
@@ -1739,6 +1743,7 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editDataGridFilterEditorView.value = DEFAULT_EDITOR_SETTINGS.dataGridFilterEditorView;
     editDataGridKeepFilterEditorExpanded.value = DEFAULT_EDITOR_SETTINGS.dataGridKeepFilterEditorExpanded;
     editDataGridTextFilterPanelHeight.value = DEFAULT_EDITOR_SETTINGS.dataGridTextFilterPanelHeight;
+    editDefaultAutoKeepResults.value = DEFAULT_EDITOR_SETTINGS.defaultAutoKeepResults;
     editMultiStatementDefaultView.value = DEFAULT_EDITOR_SETTINGS.multiStatementDefaultView;
     editDataGridAutoTransposeSingleRow.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoTransposeSingleRow;
     editDataGridCellDetailButtonVisible.value = DEFAULT_EDITOR_SETTINGS.dataGridCellDetailButtonVisible;
@@ -1826,6 +1831,7 @@ function resetAllDefaults() {
   editDataGridFilterEditorView.value = DEFAULT_EDITOR_SETTINGS.dataGridFilterEditorView;
   editDataGridKeepFilterEditorExpanded.value = DEFAULT_EDITOR_SETTINGS.dataGridKeepFilterEditorExpanded;
   editDataGridTextFilterPanelHeight.value = DEFAULT_EDITOR_SETTINGS.dataGridTextFilterPanelHeight;
+  editDefaultAutoKeepResults.value = DEFAULT_EDITOR_SETTINGS.defaultAutoKeepResults;
   editMultiStatementDefaultView.value = DEFAULT_EDITOR_SETTINGS.multiStatementDefaultView;
   editDataGridAutoTransposeSingleRow.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoTransposeSingleRow;
   editDataGridCellDetailButtonVisible.value = DEFAULT_EDITOR_SETTINGS.dataGridCellDetailButtonVisible;
@@ -6813,6 +6819,13 @@ onUnmounted(() => {
                     :aria-invalid="hasBlockingQueryResultRowLimit"
                     @update:model-value="updatePageSizeDraft"
                   />
+                </div>
+                <div data-settings-search-id="default-auto-keep-results" :class="['settings-item flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2', settingsSearchTargetClass('default-auto-keep-results')]">
+                  <div class="min-w-0 space-y-1">
+                    <Label for="default-auto-keep-results">{{ t("settings.defaultAutoKeepResults") }}</Label>
+                    <p class="text-xs text-muted-foreground">{{ t("settings.defaultAutoKeepResultsDescription") }}</p>
+                  </div>
+                  <Switch id="default-auto-keep-results" v-model="editDefaultAutoKeepResults" :aria-label="t('settings.defaultAutoKeepResults')" />
                 </div>
                 <div data-settings-search-id="multi-statement-default-view" :class="['settings-item flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2', settingsSearchTargetClass('multi-statement-default-view')]">
                   <div class="min-w-0 space-y-1">

@@ -6351,6 +6351,8 @@ export default withEnglishFallback({
     tableOpenPageSizeDescription: "Righe caricate per pagina quando si apre una nuova tabella. La modifica delle righe per pagina aggiorna questo valore per le future schede tabella.",
     queryPageSize: "Righe predefinite per pagina di query",
     queryPageSizeDescription: "Righe caricate per pagina dei risultati. Sono supportate fino a {max} righe.",
+    defaultAutoKeepResults: "Mantieni automaticamente i risultati per impostazione predefinita",
+    defaultAutoKeepResultsDescription: "Applicando questa impostazione si aggiornano le schede di query aperte e si imposta il valore predefinito per le nuove. Puoi modificarlo per ogni scheda.",
     multiStatementDefaultView: "Vista predefinita per istruzioni multiple",
     multiStatementDefaultViewDescription: "Scegli se i batch con più istruzioni SQL si aprono nella tabella dei risultati o nel riepilogo dell'esecuzione.",
     queryResultMaxRows: "Numero massimo di righe del risultato",

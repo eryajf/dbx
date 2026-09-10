@@ -6084,6 +6084,8 @@ export default withEnglishFallback({
     tableOpenPageSizeDescription: "새 테이블을 열 때 페이지당 로드되는 행 수입니다. 테이블에서 페이지당 행을 변경하면 향후 테이블 탭의 기본값이 업데이트됩니다.",
     queryPageSize: "쿼리 결과 기본 페이지당 행 수",
     queryPageSizeDescription: "쿼리 결과 페이지당 로드할 행 수입니다. 최대 {max}행을 지원합니다.",
+    defaultAutoKeepResults: "기본적으로 쿼리 결과 자동 보관",
+    defaultAutoKeepResultsDescription: "적용하면 열린 쿼리 탭을 업데이트하고 새 탭의 기본값으로 설정합니다. 탭별로 전환할 수 있습니다.",
     multiStatementDefaultView: "여러 구문 기본 보기",
     multiStatementDefaultViewDescription: "여러 SQL 구문이 있는 배치를 결과 테이블 또는 실행 요약 중 어디에서 열지 선택합니다.",
     queryResultMaxRows: "쿼리 결과 최대 행 수",

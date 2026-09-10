@@ -6771,6 +6771,8 @@ export default {
     tableOpenPageSizeDescription: "Rows loaded per page when opening a new table. Changing rows per page in a table updates this default for future table tabs.",
     queryPageSize: "Default query rows per page",
     queryPageSizeDescription: "Rows loaded per query result page. The maximum supported page size is {max}.",
+    defaultAutoKeepResults: "Auto-keep query results by default",
+    defaultAutoKeepResultsDescription: "Applying this setting updates open query tabs and sets the default for new ones. You can still toggle it per tab.",
     multiStatementDefaultView: "Default view for multiple statements",
     multiStatementDefaultViewDescription: "Choose whether batches with multiple SQL statements open in the result table or execution summary.",
     queryResultMaxRows: "Maximum query result rows",

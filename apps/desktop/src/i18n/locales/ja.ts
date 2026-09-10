@@ -6385,6 +6385,8 @@ export default withEnglishFallback({
     tableOpenPageSizeDescription: "新しいテーブルを開くときに 1 ページあたり読み込む行数です。テーブルで行数を変更すると、今後のテーブルタブのデフォルトも更新されます。",
     queryPageSize: "クエリ結果のデフォルト行数",
     queryPageSizeDescription: "クエリ結果の 1 ページあたりの行数です。最大 {max} 行まで指定できます。",
+    defaultAutoKeepResults: "クエリ結果を既定で自動保持",
+    defaultAutoKeepResultsDescription: "適用すると開いているクエリタブを更新し、新しいタブの既定値にも設定します。タブごとに切り替えられます。",
     multiStatementDefaultView: "複数ステートメントの既定ビュー",
     multiStatementDefaultViewDescription: "複数の SQL ステートメントを含むバッチを、結果テーブルまたは実行サマリーのどちらで開くか選択します。",
     queryResultMaxRows: "クエリ結果の最大行数",

@@ -1026,6 +1026,23 @@ export const useQueryStore = defineStore("query", () => {
     return true;
   }
 
+  function initializeResultAutoSave(tab: QueryTab) {
+    if (tab.mode === "query" && tab.resultAutoSave === undefined && settingsStore.editorSettings.defaultAutoKeepResults === true) {
+      tab.resultAutoSave = true;
+    }
+  }
+
+  // Apply after the settings mutation completes, never during tab registration
+  // or restoration while the workspace still has incomplete group membership.
+  watch(
+    () => settingsStore.editorSettings.defaultAutoKeepResults,
+    (enabled) => {
+      for (const tab of tabs.value) {
+        if (tab.mode === "query") setResultAutoSave(tab, enabled === true);
+      }
+    },
+  );
+
   /**
    * Atomically registers a freshly built tab: the tab joins the focused group
    * and (by default) becomes that group's active tab and the global active tab
@@ -1034,6 +1051,7 @@ export const useQueryStore = defineStore("query", () => {
    * the new tab ownerless until a post-flush watcher repaired the groups.
    */
   function registerOpenTab(tab: QueryTab, options: { activate?: boolean; insertAfterTabId?: string } = {}): string {
+    initializeResultAutoSave(tab);
     const anchorIndex = options.insertAfterTabId ? tabs.value.findIndex((item) => item.id === options.insertAfterTabId) : -1;
     if (anchorIndex >= 0) {
       tabs.value.splice(anchorIndex + 1, 0, tab);
@@ -1202,6 +1220,7 @@ export const useQueryStore = defineStore("query", () => {
   const savedSqlEditorPositionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingTabSessionResets = new Map<string, Promise<void>>();
   const pendingResultRunRestores = new Map<string, string>();
+  const pendingResultRunPreparations = new WeakMap<QueryTab, string>();
   const multiDbExecutionWorkers = new Map<string, QueryTab>();
   const multiDbExecutionWorkerScopes = new Map<string, Set<string>>();
   let resultCacheTrimScheduled = false;
@@ -1612,7 +1631,7 @@ export const useQueryStore = defineStore("query", () => {
     return true;
   }
 
-  async function restoreResultRunPayload(tab: QueryTab, runId: string) {
+  async function restoreResultRunPayload(tab: QueryTab, runId: string, isCurrent?: () => boolean) {
     const run = tab.resultRuns?.find((item) => item.id === runId);
     if (!run || run.result || run.results?.length) return run;
 
@@ -1620,6 +1639,7 @@ export const useQueryStore = defineStore("query", () => {
     if (!cacheKey) return run;
 
     const snapshot = await readTabResultSnapshot(cacheKey);
+    if (isCurrent && !isCurrent()) return undefined;
     const snapshotRun = snapshot?.resultRuns?.find((item) => item.id === runId);
     if (!snapshotRun) return run;
 
@@ -1648,11 +1668,12 @@ export const useQueryStore = defineStore("query", () => {
     return restoredRun;
   }
 
-  async function setActiveResultRun(id: string, runId: string, options: { evictInactive?: boolean } = {}) {
+  async function setActiveResultRun(id: string, runId: string, options: { evictInactive?: boolean; isCurrent?: () => boolean } = {}) {
     const tab = findExecutionTab(id);
     if (!tab) return false;
     const existingRun = tab.resultRuns?.find((item) => item.id === runId);
-    const run = existingRun && resultRunHasPayload(existingRun) ? existingRun : await restoreResultRunPayload(tab, runId);
+    const run = existingRun && resultRunHasPayload(existingRun) ? existingRun : await restoreResultRunPayload(tab, runId, options.isCurrent);
+    if (options.isCurrent && !options.isCurrent()) return false;
     if (!run?.result && !run?.results?.length) return false;
     projectResultRun(tab, run);
     if (options.evictInactive !== false) evictInactiveResultRunPayloads(tab);
@@ -1971,11 +1992,15 @@ export const useQueryStore = defineStore("query", () => {
   function toggleResultAutoSave(id: string): boolean {
     const tab = tabs.value.find((t) => t.id === id);
     if (!tab || tab.mode !== "query") return false;
-    tab.resultAutoSave = tab.resultAutoSave ? undefined : true;
-    if (tab.resultAutoSave && tab.result && !tab.activeResultRunId) {
+    setResultAutoSave(tab, tab.resultAutoSave !== true);
+    return tab.resultAutoSave === true;
+  }
+
+  function setResultAutoSave(tab: QueryTab, enabled: boolean) {
+    tab.resultAutoSave = enabled;
+    if (enabled && !tab.isExecuting && tab.result && !tab.activeResultRunId) {
       captureDisplayedResultRun(tab, tab.resultBaseSql ?? tab.lastExecutedSql ?? tab.sql);
     }
-    return tab.resultAutoSave === true;
   }
 
   function syncActiveResultRunFromDisplayed(tab: QueryTab, sql?: string) {
@@ -2139,6 +2164,7 @@ export const useQueryStore = defineStore("query", () => {
         tab.schema = connectionObjectTreeNodeSchema(connection, tab.database, tab.schema);
       }
     }
+    restored.tabs.forEach(initializeResultAutoSave);
     tabs.value = restored.tabs;
     for (const tab of restored.tabs) {
       if (tab.mode === "data") {
@@ -2445,6 +2471,7 @@ export const useQueryStore = defineStore("query", () => {
       const restoredResult = restoreCachedResultPayload(restoredTab, await readTabResultSnapshot(handoff.resultCacheKey));
       if (!restoredResult) restoredTab.resultCacheState = "missing";
     }
+    initializeResultAutoSave(restoredTab);
     const existingIndex = tabs.value.findIndex((tab) => tab.id === handoff.tabId);
     if (existingIndex >= 0) {
       tabs.value.splice(existingIndex, 1, restoredTab);
@@ -3764,6 +3791,7 @@ export const useQueryStore = defineStore("query", () => {
       whereInput: original.whereInput,
       previewSql: original.previewSql,
     };
+    initializeResultAutoSave(newTab);
     tabs.value.splice(idx + 1, 0, newTab);
 
     const owner = groupForTab(id);
@@ -4614,6 +4642,7 @@ export const useQueryStore = defineStore("query", () => {
     const executionTabId = options?.tabId ?? activeTabId.value;
     if (!executionTabId) return;
     const tab = tabs.value.find((item) => item.id === executionTabId);
+    if (tab && pendingResultRunPreparations.has(tab)) return false;
     const previousGridKey = tab ? resultGridInstanceKey(tab) : undefined;
     if (tab?.mode === "query") {
       tab.resultSortColumn = undefined;
@@ -5338,7 +5367,9 @@ export const useQueryStore = defineStore("query", () => {
       const tab = tabs.value.find((t) => t.id === tabId);
       if (!tab || tab.result !== result) return;
       queryExecutionLog("info", "metadata:start", { traceId, elapsed: elapsed() });
-      const patch = await buildQueryMetadataPatch(tab, sql, executionDatabase, traceId, elapsed, hiddenPrimaryKeys);
+      // Metadata requests outlive the displayed result when another query starts
+      // or a retained run is selected. Analyze this result, not the live tab.
+      const patch = await buildQueryMetadataPatch({ ...tab, result }, sql, executionDatabase, traceId, elapsed, hiddenPrimaryKeys);
       if (patch?.queryAnalysis && hasHiddenPhysicalRowKey(databaseType, hiddenPrimaryKeys)) {
         patch.queryAnalysis = { ...patch.queryAnalysis, allowInsert: false };
       }
@@ -5527,6 +5558,7 @@ export const useQueryStore = defineStore("query", () => {
   ) {
     const tab = findExecutionTab(id);
     if (!tab || !sql.trim()) return;
+    if (pendingResultRunPreparations.has(tab)) return false;
 
     const openInNewResultTab = tab.mode === "query" && options?.openInNewResultTab === true;
     // Auto-saved results need two independent decisions: keep the currently
@@ -5534,24 +5566,54 @@ export const useQueryStore = defineStore("query", () => {
     // response as another run. Previously `resultAutoSave` only made the latter
     // decision after clearing the displayed payload, which caused the result
     // toolbar and grid to briefly disappear before the next Run was added.
-    const captureAutoSavedResultRun = tab.mode === "query" && tab.resultAutoSave === true && !!tab.activeResultRunId && !!tab.result;
+    const captureAutoSavedResultRun = tab.mode === "query" && tab.resultAutoSave === true && (!!tab.activeResultRunId || !!tab.result);
     let captureResultRun = openInNewResultTab || captureAutoSavedResultRun;
+    let resultRunToRestore: string | undefined;
+    let reuseResultRun = false;
     if (!captureResultRun && tab.mode === "query" && !tab.resultAutoSave && tab.activeResultRunId) {
       const activeRun = tab.resultRuns?.find((run) => run.id === tab.activeResultRunId);
       if (activeRun?.pinned) {
         const reusableRun = tab.resultRuns?.find((run) => !run.pinned);
         if (reusableRun) {
-          // A stale disk snapshot must not make us fall back to overwriting
-          // the pinned active run. Capture a fresh run instead.
-          captureResultRun = !(await setActiveResultRun(id, reusableRun.id));
+          resultRunToRestore = reusableRun.id;
+          reuseResultRun = true;
         } else {
           captureResultRun = true;
         }
       }
     }
-    if (captureResultRun && tab.activeResultRunId && !tab.result) {
-      await setActiveResultRun(id, tab.activeResultRunId);
-      if (findExecutionTab(id) !== tab) return false;
+    if (captureResultRun && tab.activeResultRunId && !tab.result) resultRunToRestore = tab.activeResultRunId;
+    if (resultRunToRestore) {
+      // Reserve before disk I/O so another click cannot queue a second SQL.
+      const preparationId = uuid();
+      pendingResultRunPreparations.set(tab, preparationId);
+      tab.isExecuting = true;
+      tab.isCancelling = false;
+      tab.executionId = preparationId;
+      tab.executingResultRunId = null;
+      tab.queryExecutionStartedAt = Date.now();
+      const isCurrent = () => findExecutionTab(id) === tab && tab.executionId === preparationId && pendingResultRunPreparations.get(tab) === preparationId;
+      let prepared = false;
+      try {
+        const restored = await setActiveResultRun(id, resultRunToRestore, { isCurrent });
+        if (!isCurrent()) return false;
+        if (reuseResultRun) captureResultRun = !restored;
+        prepared = true;
+      } catch (error) {
+        if (!isCurrent()) return false;
+        throw error;
+      } finally {
+        if (pendingResultRunPreparations.get(tab) === preparationId) {
+          pendingResultRunPreparations.delete(tab);
+          if (!prepared && tab.executionId === preparationId) {
+            tab.isExecuting = false;
+            tab.isCancelling = false;
+            tab.executionId = undefined;
+            tab.executingResultRunId = undefined;
+            tab.queryExecutionStartedAt = undefined;
+          }
+        }
+      }
     }
     const executionId = uuid();
     const executionEditorFingerprint = tab.mode === "query" ? sqlTextFingerprint(tab.sql) : undefined;
@@ -7130,6 +7192,16 @@ export const useQueryStore = defineStore("query", () => {
     // 单调递增、不随取消结果回退：导航流程据此判断"执行期间用户请求过停止"
     // （isCancelling 在取消失败或查询先完成时会被清掉，无法承担这个语义）
     tab.cancelRequestCount = (tab.cancelRequestCount ?? 0) + 1;
+    if (pendingResultRunPreparations.get(tab) === executionId) {
+      // No SQL was dispatched; invalidate the disk read without a backend cancel.
+      pendingResultRunPreparations.delete(tab);
+      tab.isExecuting = false;
+      tab.isCancelling = false;
+      tab.executionId = undefined;
+      tab.executingResultRunId = undefined;
+      tab.queryExecutionStartedAt = undefined;
+      return true;
+    }
     const cancellationStartedAt = performance.now();
     try {
       const canceled = await withCancelQueryTimeout(api.cancelQuery(executionId));
