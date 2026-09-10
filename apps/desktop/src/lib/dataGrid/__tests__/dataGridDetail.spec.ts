@@ -1,5 +1,7 @@
+import { MONGO_DOCUMENT_GRID_NULL, mongoDocumentGridDisplayText, mongoDocumentGridValue } from "@/lib/mongo/mongoDocumentValues";
+import { displayCellValue } from "@/lib/dataGrid/cellValue";
 import { describe, expect, it } from "vitest";
-import { buildDeleteRowConfirmDetails, dataGridColumnDetailTsv, dataGridRowDetailTsv, type DataGridColumnDetail, type DataGridRowDetail } from "../dataGridDetail";
+import { buildDataGridCellDetail, buildDeleteRowConfirmDetails, dataGridColumnDetailTsv, dataGridRowDetailTsv, type DataGridColumnDetail, type DataGridRowDetail } from "../dataGridDetail";
 
 type TestRow = string[];
 
@@ -140,5 +142,25 @@ describe("data grid detail TSV", () => {
 
     expect(dataGridRowDetailTsv(rowDetail)).toBe("\tNULL");
     expect(dataGridColumnDetailTsv(columnDetail)).toBe("\nNULL");
+  });
+});
+
+describe("Mongo collection cell detail presentation", () => {
+  it.each([null, "NULL", MONGO_DOCUMENT_GRID_NULL])("presents BSON value %j without leaking grid encoding", (bsonValue) => {
+    const value = mongoDocumentGridValue(bsonValue) as string;
+    const text = mongoDocumentGridDisplayText(value) ?? displayCellValue(value);
+    const detail = buildDataGridCellDetail({
+      rowIndex: 0,
+      rowId: 0,
+      row: [value],
+      columns: ["value"],
+      columnIndex: 0,
+      displayValue: () => text,
+      rawValue: () => text,
+      isNullValue: (cell) => cell === MONGO_DOCUMENT_GRID_NULL,
+      isEditable: true,
+    });
+    expect(detail).toMatchObject({ value, rawValue: text, rawValuePreview: text, isNull: bsonValue === null, length: bsonValue === null ? 0 : text.length });
+    expect(detail!.rawValue).not.toContain("\u0000");
   });
 });

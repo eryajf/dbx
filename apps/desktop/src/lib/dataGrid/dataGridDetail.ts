@@ -21,6 +21,7 @@ export interface DataGridCellDetail {
   isValuePreviewTruncated: boolean;
   imagePreviewUrl: string | null;
   length: number;
+  isNull?: boolean;
   formattedJson: string;
   isEditable: boolean;
 }
@@ -50,6 +51,8 @@ export interface BuildDataGridCellDetailOptions {
   commentByColumn?: ReadonlyMap<string, string>;
   displayValue: (value: CellValue, columnIndex: number) => string;
   isEditable: boolean;
+  rawValue?: (value: CellValue, columnIndex: number) => string;
+  isNullValue?: (value: CellValue) => boolean;
   databaseType?: DatabaseType;
   includeBinaryImagePreview?: boolean;
   isValuePreviewTruncated?: boolean;
@@ -92,7 +95,8 @@ export function buildDataGridCellDetail(options: BuildDataGridCellDetailOptions)
   if (column === undefined) return null;
 
   const value = options.row[options.columnIndex] ?? null;
-  const rawValue = displayCellValue(value);
+  const rawValue = options.rawValue?.(value, options.columnIndex) ?? displayCellValue(value);
+  const isNull = options.isNullValue?.(value) ?? value === null;
   const displayValue = options.displayValue(value, options.columnIndex);
   const formattedJson = typeof value === "string" && looksLikeJsonContainer(value) ? (formatJsonText(value) ?? "") : "";
   const rawValuePreview = previewText(rawValue);
@@ -116,7 +120,8 @@ export function buildDataGridCellDetail(options: BuildDataGridCellDetailOptions)
       binary: options.includeBinaryImagePreview !== false,
       databaseType: options.databaseType,
     }),
-    length: value === null ? 0 : String(value).length,
+    length: isNull ? 0 : rawValue.length,
+    isNull,
     formattedJson,
     isEditable: options.isEditable,
   };

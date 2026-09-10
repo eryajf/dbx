@@ -133,8 +133,11 @@ export function mongoDocumentGridExternalValue(value: CellValue): CellValue {
   return escapedString === undefined ? value : escapedString;
 }
 
-/** Escapes a user-entered value that would otherwise collide with grid state. */
+/** Preserves encoded grid clipboard values and escapes other reserved input. */
 export function mongoDocumentGridInputValue(value: string): string {
+  // Internal copy/paste already carries encoded values; escaping again would
+  // save BSON null as a literal sentinel string.
+  if (value === MONGO_DOCUMENT_GRID_NULL || value.startsWith(MONGO_DOCUMENT_GRID_ESCAPED_STRING_PREFIX)) return value;
   return value.startsWith(MONGO_DOCUMENT_GRID_PREFIX) ? `${MONGO_DOCUMENT_GRID_ESCAPED_STRING_PREFIX}${value}` : value;
 }
 

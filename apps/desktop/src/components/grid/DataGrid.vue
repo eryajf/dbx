@@ -5199,6 +5199,8 @@ function cellDetailFor(rowIndex: number, columnIndex: number): DataGridCellDetai
     resultColumnTypes: props.result.column_types,
     commentByColumn: columnCommentMap.value,
     displayValue: (value, index) => formatCellCached(value, index),
+    rawValue: (value) => (props.mongoCollectionGrid ? (mongoDocumentGridDisplayText(value) ?? displayCellValue(value)) : displayCellValue(value)),
+    isNullValue: (value) => value === null || (props.mongoCollectionGrid === true && value === MONGO_DOCUMENT_GRID_NULL),
     isEditable: canEditGridCellDetail({
       canEditCell: canEditCellItem(item, columnIndex),
       isDraft: !!item.isDraft,

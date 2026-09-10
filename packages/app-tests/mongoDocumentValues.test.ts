@@ -396,7 +396,8 @@ test("escapes Mongo collection-grid values reserved for BSON null state", () => 
   assert.equal(mongoDocumentGridEditorText(gridValue), reservedString);
   assert.equal(mongoDocumentGridDisplayText(gridValue), JSON.stringify(reservedString));
   assert.equal(mongoDocumentGridExternalValue(gridValue), reservedString);
-  assert.equal(mongoDocumentGridInputValue(reservedString), gridValue);
+  assert.equal(mongoDocumentGridInputValue(reservedString), reservedString);
+  assert.equal(mongoDocumentGridInputValue(gridValue as string), gridValue);
   assert.deepEqual(buildMongoUpdateDocument(new Map([[1, gridValue as string]]), columns, { _id: "1", value: reservedString }), {
     $set: { value: reservedString },
   });

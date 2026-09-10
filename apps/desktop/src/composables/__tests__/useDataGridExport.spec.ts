@@ -1564,6 +1564,28 @@ describe("useDataGridExport prepared row statements", () => {
     expect(exportQueryResultCsv).toHaveBeenLastCalledWith(expect.any(String), ["_id", "value"], [["1", reservedString]], expect.anything());
   });
 
+  it("exports missing Mongo fields as null while retaining explicit empty strings", async () => {
+    const columns = ["_id", "missing", "nullable", "empty"];
+    const document = { _id: "1", nullable: null, empty: "" };
+    const item = { ...row(["1", "", MONGO_DOCUMENT_GRID_NULL, ""]), sourceIndex: 0 };
+    const state = createMongoExportState({
+      columns,
+      item,
+      mongoDocuments: [document],
+      externalCellValue: mongoDocumentGridExternalValue,
+      fullExportResult: async () => ({
+        columns,
+        column_types: ["", "", "", ""],
+        rows: [item.data],
+        mongo_copy_documents: [document],
+        affected_rows: 1,
+        execution_time_ms: 1,
+      }),
+    });
+    await state.exportJson();
+    expect(exportQueryResultJson).toHaveBeenCalledWith(expect.any(String), columns, [["1", null, null, ""]]);
+  });
+
   it("preserves Mongo Extended JSON objects and dates in JSON exports", async () => {
     const columns = ["_id", "valueMap", "createdTime"];
     const mongoCopyDocument = {

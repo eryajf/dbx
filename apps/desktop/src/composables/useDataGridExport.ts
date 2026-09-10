@@ -357,7 +357,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
       const document = documents[rowIndex];
       if (!document || typeof document !== "object" || Array.isArray(document)) return row;
       const source = document as Record<string, unknown>;
-      return columnsToExport.map((column, columnIndex) => (Object.prototype.hasOwnProperty.call(source, column) ? (source[column] as CellValue) : (row[columnIndex] ?? null)));
+      return columnsToExport.map((column) => (Object.prototype.hasOwnProperty.call(source, column) ? (source[column] as CellValue) : null));
     });
   }
 
