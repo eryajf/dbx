@@ -117,6 +117,7 @@ import {
 import { isPointOverElementRoot } from "@/lib/editor/tableReferenceDragFeedback";
 import type { SqlHighlighter } from "@/lib/sql/sqlHighlighter";
 import { EDITOR_FONT_FAMILY_CSS_VAR, EDITOR_FONT_SIZE_CSS_VAR, editorDiagnosticColors, editorThemeAppearanceFor, loadEditorTheme, editorFontTheme, shellLineCommentTheme, sqlCompletionTheme, sqlSemanticHighlightTheme } from "@/lib/editor/editorThemes";
+import { createQueryEditorCompletionHighlight } from "@/lib/editor/queryEditorCompletionHighlight";
 import { createStatementGutterMarkerDom, shouldShowStatementGutter } from "@/lib/editor/codemirrorStatementGutter";
 import { createQueryEditorSqlShortcutDomHandler, isCharacterProducingShortcut } from "@/lib/editor/queryEditorSqlShortcut";
 import { createQueryEditorReplaceShortcutBindings, createQueryEditorReplaceShortcutHandler, createQueryEditorSearchKeymap } from "@/lib/editor/queryEditorSearchKeymap";
@@ -6309,6 +6310,7 @@ onMounted(async () => {
       tooltips({ parent: tooltipParent }),
       completionComp.of(buildSqlCompletionExtension()),
       sqlCompletionTheme(EditorView),
+      createQueryEditorCompletionHighlight({ StateEffect, StateField, ViewPlugin, autocompletion, currentCompletions, selectedCompletionIndex }),
       codeMirrorTheme.of(theme),
       closeBracketsComp.of(closeBracketsExtension(initialSettings.autoCloseBrackets)),
       bracketMatching(),

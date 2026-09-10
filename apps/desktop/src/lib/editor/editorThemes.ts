@@ -944,6 +944,11 @@ export function editorFontTheme(EditorView: typeof import("@codemirror/view").Ed
 }
 
 export function buildSqlCompletionThemeRules(): CodeMirrorStyleSpec {
+  const selectedOptionStyle = {
+    background: `${colorMixValue("var(--accent)", "color-mix(in oklch, var(--primary) 14%, var(--popover))")} !important`,
+    color: "var(--popover-foreground) !important",
+    outline: colorMixValue("1px solid var(--border)", "1px solid color-mix(in oklch, var(--primary) 22%, transparent)"),
+  };
   return {
     ".cm-tooltip.cm-tooltip-autocomplete": {
       background: "var(--popover)",
@@ -992,10 +997,16 @@ export function buildSqlCompletionThemeRules(): CodeMirrorStyleSpec {
       transition: "background-color 90ms ease, color 90ms ease",
       whiteSpace: "nowrap",
     },
-    ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
-      background: `${colorMixValue("var(--accent)", "color-mix(in oklch, var(--primary) 14%, var(--popover))")} !important`,
+    ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": selectedOptionStyle,
+    // Hint at the first candidate without selecting it, so Enter and Tab keep
+    // their configured behavior. Hide the hint once a real selection exists,
+    // and never mistake the start of a virtualized window for the first option.
+    ".cm-tooltip.cm-tooltip-autocomplete:not(.cm-tooltip-autocomplete-disabled):not(.cm-completion-highlight-pending) > ul:not(.cm-completionListIncompleteTop):not(:has(> li[aria-selected])) > li[role=option]:first-of-type": selectedOptionStyle,
+    ".cm-tooltip.cm-tooltip-autocomplete.cm-completion-highlight-pending > ul > li[aria-selected]": {
+      background: "transparent !important",
       color: "var(--popover-foreground) !important",
-      outline: colorMixValue("1px solid var(--border)", "1px solid color-mix(in oklch, var(--primary) 22%, transparent)"),
+      outline: "none",
+      transition: "none",
     },
     ".cm-tooltip.cm-tooltip-autocomplete > ul > li.cm-batch-column-selection-action": {
       background: "var(--popover)",
