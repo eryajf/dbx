@@ -18,6 +18,7 @@ import { completionMatchRanges } from "@/lib/common/completionMatch";
 import { executionCandidateForMode, resolveExecutableSql, type SqlExecutionSnapshot, type SqlExecutionOverride, type SqlExecutionCandidate } from "@/lib/sql/sqlExecutionTarget";
 import { buildExecutionCandidates, hasMultipleExecutionTargets, supportsExecutionTargetPicker, type SqlTextRange } from "@/lib/sql/sqlStatementRanges";
 import { executableStatementRangeAtCursor, executableStatementRangeCacheForDoc, executableStatementRangeStartingAt as executableStatementRangeStartingAtLine, type ExecutableStatementRangeCache } from "@/lib/sql/executableStatementRangeCache";
+import { createDeferredEditorTask } from "@/lib/editor/deferredEditorTask";
 import { currentStatementFrameRangeTo } from "@/lib/sql/currentStatementFrame";
 import { looksLikeDmlStatement } from "@/lib/sql/dmlChangePreview";
 import { expandToSqlStatementWindow } from "@/lib/sql/insertValueHints";
@@ -247,7 +248,7 @@ const emit = defineEmits<{
   openObjectSource: [target: SqlObjectNavigationTarget, initialEditing: boolean];
   clickColumn: [columns: Array<{ name: string; table: string; schema?: string }>, error?: string | undefined];
   closeColumnPanel: [];
-  viewportChange: [viewport: { scrollTop: number; scrollLeft: number }];
+  viewportChange: [viewport: { scrollTop: number; scrollLeft: number }, tabId?: string];
   selectionStateChange: [selection: { anchor: number; head: number }];
   editorStateFlushed: [];
   sendSelectionToAi: [sql: string];
@@ -257,7 +258,10 @@ const editorRef = ref<HTMLDivElement>();
 const view = shallowRef<EditorViewType | null>(null);
 const contextMenuOpen = ref(false);
 let contextMenuPointerCleanup: (() => void) | null = null;
-let viewportEmitFrame: number | null = null;
+let viewportOwnerTabId = props.tabId;
+const viewportEmitTask = createDeferredEditorTask(() => {
+  if (latestViewport) emitEditorViewport(latestViewport);
+}, 150);
 let viewportRestoreFrame: number | null = null;
 let latestViewport: { scrollTop: number; scrollLeft: number } | undefined = props.initialViewport;
 let lastEmittedViewport: { scrollTop: number; scrollLeft: number } | undefined = props.initialViewport;
@@ -6058,7 +6062,9 @@ onMounted(async () => {
     ViewPlugin.fromClass(
       class {
         decorations: import("@codemirror/view").DecorationSet;
-        private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+        private refreshTask = createDeferredEditorTask(() => {
+          if (this.currentView.dom.isConnected) this.currentView.dispatch({ effects: refreshSqlSemanticHighlightEffect.of(null) });
+        }, SQL_SEMANTIC_HIGHLIGHT_DEBOUNCE_MS);
         private cachedDoc: import("@codemirror/state").Text | null = null;
         private cachedSql = "";
         private cachedDialectId = "";
@@ -6069,7 +6075,7 @@ onMounted(async () => {
           spans: Array<{ start: number; end: number }>;
         }> = [];
 
-        constructor(currentView: import("@codemirror/view").EditorView) {
+        constructor(private currentView: import("@codemirror/view").EditorView) {
           this.decorations = this.buildDecorations(currentView);
         }
 
@@ -6080,24 +6086,23 @@ onMounted(async () => {
             this.scheduleRefresh(update.view);
             return;
           }
-          if (refreshRequested || update.viewportChanged) {
+          if (refreshRequested) {
             this.cancelRefresh();
             this.decorations = this.buildDecorations(update.view);
+          } else if (update.viewportChanged) {
+            // Keep existing decorations while scrolling. Parse only after the
+            // viewport settles instead of blocking CodeMirror's layout update.
+            this.scheduleRefresh(update.view);
           }
         }
 
         scheduleRefresh(currentView: import("@codemirror/view").EditorView) {
-          if (this.refreshTimer !== null) return;
-          this.refreshTimer = setTimeout(() => {
-            this.refreshTimer = null;
-            if (currentView.dom.isConnected) currentView.dispatch({ effects: refreshSqlSemanticHighlightEffect.of(null) });
-          }, SQL_SEMANTIC_HIGHLIGHT_DEBOUNCE_MS);
+          this.currentView = currentView;
+          this.refreshTask.schedule();
         }
 
         cancelRefresh() {
-          if (this.refreshTimer === null) return;
-          clearTimeout(this.refreshTimer);
-          this.refreshTimer = null;
+          this.refreshTask.cancel();
         }
 
         destroy() {
@@ -6841,6 +6846,12 @@ function swapEditorDocument(doc: string) {
 function activateTabDocument(prevTabId: string | undefined, tabId: string | undefined, doc: string) {
   const currentView = view.value;
   if (!currentView) return;
+  // Flush the outgoing document before props and restored scroll positions
+  // become the new tab's state. The event carries its original owner.
+  flushEditorViewport();
+  viewportOwnerTabId = tabId;
+  latestViewport = props.initialViewport ?? { scrollTop: 0, scrollLeft: 0 };
+  lastEmittedViewport = undefined;
   clearScheduledPreviewContextRefresh();
   if (prevTabId !== undefined) {
     tabStateCache.set(prevTabId, currentView.state);
@@ -7168,10 +7179,7 @@ onDeactivated(pauseQueryEditorBackgroundWork);
 
 onBeforeUnmount(() => {
   pauseQueryEditorBackgroundWork();
-  if (viewportEmitFrame !== null) {
-    cancelAnimationFrame(viewportEmitFrame);
-    viewportEmitFrame = null;
-  }
+  viewportEmitTask.cancel();
   if (viewportRestoreFrame !== null) {
     cancelAnimationFrame(viewportRestoreFrame);
     viewportRestoreFrame = null;
@@ -7244,25 +7252,19 @@ function restoreEditorFocus() {
 function emitEditorViewport(viewport: { scrollTop: number; scrollLeft: number }) {
   if (sameEditorViewport(lastEmittedViewport, viewport)) return;
   lastEmittedViewport = { ...viewport };
-  emit("viewportChange", viewport);
+  emit("viewportChange", viewport, viewportOwnerTabId);
 }
 
 function scheduleEditorViewportEmit() {
   if (!view.value || !editorIsActive) return;
   latestViewport = readEditorViewport(view.value);
   scheduleSemanticDiagnostics(700, { preserveOutsideRanges: true });
-  if (viewportEmitFrame !== null) return;
-  viewportEmitFrame = requestAnimationFrame(() => {
-    viewportEmitFrame = null;
-    if (latestViewport) emitEditorViewport(latestViewport);
-  });
+  viewportEmitTask.schedule();
 }
 
 function flushEditorViewport() {
-  if (viewportEmitFrame !== null) {
-    cancelAnimationFrame(viewportEmitFrame);
-    viewportEmitFrame = null;
-  }
+  if (view.value) latestViewport = readEditorViewport(view.value);
+  viewportEmitTask.flush();
   if (latestViewport) emitEditorViewport(latestViewport);
 }
 
@@ -7405,6 +7407,33 @@ defineExpose({
 </template>
 
 <style scoped>
+[data-query-editor-root] > :deep(.cm-editor) {
+  /* The host supplies both dimensions. Keep viewport DOM changes from
+     invalidating intrinsic sizes throughout the surrounding flex layout;
+     WebKit otherwise spends a frame recomputing it on each viewport change.
+     Leave paint uncontained so editor overlays retain their overflow. */
+  contain: size layout style;
+}
+
+[data-query-editor-root] :deep(.cm-scroller::-webkit-scrollbar) {
+  width: 5px;
+}
+
+[data-query-editor-root] :deep(.cm-scroller::-webkit-scrollbar-track) {
+  background: rgba(127, 127, 127, 0.1);
+}
+
+[data-query-editor-root] :deep(.cm-scroller::-webkit-scrollbar-thumb) {
+  background: rgba(127, 127, 127, 0.7);
+  border-radius: 999px;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  [data-query-editor-root] :deep(.cm-scroller) {
+    scrollbar-width: thin;
+  }
+}
+
 .query-editor--table-navigation-hover :deep(.cm-content),
 .query-editor--table-navigation-hover :deep(.cm-line) {
   cursor: pointer;
