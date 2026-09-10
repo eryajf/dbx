@@ -1,3 +1,4 @@
+import { UPDATE_RESTORE_KEY, assertUpdateAllowsInteraction } from "@/lib/app/updatePreparation";
 import { defineStore } from "pinia";
 import { uuid } from "@/lib/common/utils";
 import { computed, markRaw, nextTick, onScopeDispose, reactive, ref, watch } from "vue";
@@ -61,6 +62,7 @@ import { classifySqlRisk } from "@/lib/sql/sqlRisk";
 import { externalSqlFileDisplayTitles, normalizeExternalSqlPath } from "@/lib/sql/sqlFileOpen";
 import { clearDataGridPendingSnapshot, clearDataGridPendingSnapshotsForTab } from "@/composables/useDataGridEditor";
 import { beginClosingDataGridViewSnapshotsForTab, clearDataGridViewSnapshot, clearDataGridViewSnapshotsForTab } from "@/lib/dataGrid/dataGridViewStateCache";
+import { beginClosingBrowserState } from "@/lib/tabs/documentBrowserStateCache";
 import { clearDataGridStructuredFilterStatesForTab } from "@/lib/dataGrid/dataGridFilterBuilderPersistence";
 import { clearDataGridSearchStatesForTab } from "@/lib/dataGrid/dataGridSearchStatePersistence";
 import { buildTabResultSnapshot, deleteTabResultSnapshot, pruneTabResultSnapshots, readTabResultSnapshot, tabResultCacheKey, writeTabResultSnapshot } from "@/lib/tabs/tabResultCache";
@@ -741,7 +743,7 @@ function restoreSavedTabsFromPayload(
   payload: { tabs?: unknown; activeTabId?: unknown; groups?: unknown; focusedGroupId?: unknown; orientation?: unknown; sizes?: unknown } | null | undefined,
   options: { validConnectionIds?: Iterable<string> } = {},
 ): { tabs: QueryTab[]; activeTabId: string | null; workspace?: unknown } {
-  const restoreMode = useSettingsStore().editorSettings.openTabsRestoreMode;
+  const restoreMode = safeLocalStorageGet(UPDATE_RESTORE_KEY) === "1" ? "all" : useSettingsStore().editorSettings.openTabsRestoreMode;
   if (restoreMode === "none") {
     return { tabs: [], activeTabId: null, workspace: undefined };
   }
@@ -764,7 +766,7 @@ function restoreSavedTabsFromPayload(
 }
 
 function restoreLegacySavedTabs(options: { validConnectionIds?: Iterable<string> } = {}): { tabs: QueryTab[]; activeTabId: string | null; workspace?: undefined } {
-  const restoreMode = useSettingsStore().editorSettings.openTabsRestoreMode;
+  const restoreMode = safeLocalStorageGet(UPDATE_RESTORE_KEY) === "1" ? "all" : useSettingsStore().editorSettings.openTabsRestoreMode;
   if (restoreMode === "none") {
     return { tabs: [], activeTabId: null, workspace: undefined };
   }
@@ -1051,6 +1053,7 @@ export const useQueryStore = defineStore("query", () => {
    * the new tab ownerless until a post-flush watcher repaired the groups.
    */
   function registerOpenTab(tab: QueryTab, options: { activate?: boolean; insertAfterTabId?: string } = {}): string {
+    assertUpdateAllowsInteraction();
     initializeResultAutoSave(tab);
     const anchorIndex = options.insertAfterTabId ? tabs.value.findIndex((item) => item.id === options.insertAfterTabId) : -1;
     if (anchorIndex >= 0) {
@@ -2241,7 +2244,7 @@ export const useQueryStore = defineStore("query", () => {
     if (saved?.tabs && Array.isArray(saved.tabs)) {
       const restored = restoreSavedTabsFromPayload(saved, options);
       applyRestoredOpenTabs(restored);
-      if (useSettingsStore().editorSettings.openTabsRestoreMode === "none") {
+      if (safeLocalStorageGet(UPDATE_RESTORE_KEY) !== "1" && useSettingsStore().editorSettings.openTabsRestoreMode === "none") {
         // Restore is explicitly disabled, so stale saved payloads should not
         // reappear if the user later changes the setting.
         clearLegacySavedTabs();
@@ -2249,6 +2252,7 @@ export const useQueryStore = defineStore("query", () => {
       }
       await recoverDetachedTabsToMain(options);
       await saveTabs(tabs.value, activeTabId.value).catch(() => undefined);
+      safeLocalStorageRemove(UPDATE_RESTORE_KEY);
       isOpenTabsLoaded.value = true;
       scheduleResultCacheMaintenance();
       return;
@@ -2258,7 +2262,7 @@ export const useQueryStore = defineStore("query", () => {
     if (legacy.rawTabs || legacy.rawActiveTabId) {
       const restored = restoreLegacySavedTabs(options);
       applyRestoredOpenTabs(restored);
-      if (useSettingsStore().editorSettings.openTabsRestoreMode === "none") {
+      if (safeLocalStorageGet(UPDATE_RESTORE_KEY) !== "1" && useSettingsStore().editorSettings.openTabsRestoreMode === "none") {
         // Restore is explicitly disabled, so keeping the legacy startup payload
         // would resurrect old tabs if the user later changes the setting.
         clearLegacySavedTabs();
@@ -2313,6 +2317,7 @@ export const useQueryStore = defineStore("query", () => {
       autoCommit: t.autoCommit,
       resultAutoSave: t.resultAutoSave,
       structureTableName: t.structureTableName,
+      structureDraft: t.structureDraft,
       objectBrowser: t.objectBrowser,
       objectSource: t.objectSource,
       sourceView: t.sourceView,
@@ -2457,7 +2462,7 @@ export const useQueryStore = defineStore("query", () => {
     // A freshly created detached window never runs the main-window bootstrap that
     // populates savedSqlStore's local file index, so useSavedSqlStore().ensureFileContent()
     // can't find the file locally either — go straight to the backend instead.
-    if (restoredTab.savedSqlId && restoredTab.mode === "query" && !restoredTab.sql) {
+    if (restoredTab.savedSqlId && restoredTab.mode === "query" && !restoredTab.sql && restoredTab.originalSql === undefined) {
       const file = await api.loadSavedSqlFile(restoredTab.savedSqlId).catch(() => undefined);
       if (file) {
         restoredTab.title = restoredTab.customTitle ? restoredTab.title : file.name;
@@ -3182,7 +3187,7 @@ export const useQueryStore = defineStore("query", () => {
       return !!tab.structureDraft && tab.structureDraft.dirty !== false;
     }
     if (tab.mode !== "query") return false;
-    if (!tab.externalSqlPath && !tab.sql.trim()) return false;
+    if (!tab.externalSqlPath && !tab.sql.trim() && !(tab.savedSqlId && tab.originalSql !== undefined)) return false;
     const original = tab.originalSql;
     if (original === undefined) return !!tab.savedSqlId;
     return tab.sql !== original;
@@ -3451,6 +3456,7 @@ export const useQueryStore = defineStore("query", () => {
     if (tab.mode === "sqlserver-trace") void disposeSqlServerActivityTrace(tab.id);
     clearDataGridPendingSnapshotsForTab(id);
     beginClosingDataGridViewSnapshotsForTab(id);
+    beginClosingBrowserState(id);
     clearDataGridStructuredFilterStatesForTab(id);
     clearDataGridSearchStatesForTab(id);
     if (tabs.value[idx].txnSessionId) void rollbackTransaction(id);
@@ -3814,6 +3820,7 @@ export const useQueryStore = defineStore("query", () => {
         if (tab.mode === "sqlserver-trace") void disposeSqlServerActivityTrace(tab.id);
         clearDataGridPendingSnapshotsForTab(tab.id);
         beginClosingDataGridViewSnapshotsForTab(tab.id);
+        beginClosingBrowserState(tab.id);
         clearDataGridStructuredFilterStatesForTab(tab.id);
         clearDataGridSearchStatesForTab(tab.id);
         if (tab.txnSessionId) void rollbackTransaction(tab.id);
@@ -4033,6 +4040,7 @@ export const useQueryStore = defineStore("query", () => {
         rollbackTabTransaction(tab, { resetAutoCommit: true });
         clearDataGridPendingSnapshotsForTab(tab.id);
         beginClosingDataGridViewSnapshotsForTab(tab.id);
+        beginClosingBrowserState(tab.id);
         clearDataGridStructuredFilterStatesForTab(tab.id);
         clearDataGridSearchStatesForTab(tab.id);
         if (tab.isExecuting) void cancelTabExecution(tab.id);
@@ -4305,7 +4313,7 @@ export const useQueryStore = defineStore("query", () => {
     const existing = tabs.value.find((tab) => tab.savedSqlId === file.id);
     if (existing) {
       persistSavedSqlEditorPosition(existing);
-      if (!existing.sql && file.sql) {
+      if (!existing.sql && file.sql && existing.originalSql === undefined) {
         existing.sql = file.sql;
         existing.originalSql = file.sql;
         const restored = restoreSavedSqlEditorPosition(file.id, file.sql);
@@ -4345,7 +4353,7 @@ export const useQueryStore = defineStore("query", () => {
   async function hydrateSavedSqlTabs() {
     await initSavedSqlEditorPositions();
     const savedSqlStore = useSavedSqlStore();
-    const linkedTabs = tabs.value.filter((tab) => tab.savedSqlId && tab.sql === "");
+    const linkedTabs = tabs.value.filter((tab) => tab.savedSqlId && tab.sql === "" && tab.originalSql === undefined);
     for (const tab of linkedTabs) {
       const file = await savedSqlStore.ensureFileContent(tab.savedSqlId!);
       if (!file) continue;
@@ -4630,6 +4638,7 @@ export const useQueryStore = defineStore("query", () => {
   }
 
   async function executeCurrentTab() {
+    assertUpdateAllowsInteraction();
     const tab = tabs.value.find((t) => t.id === activeTabId.value);
     if (!tab || !tab.sql.trim()) return;
 
@@ -5556,6 +5565,7 @@ export const useQueryStore = defineStore("query", () => {
       batchResume?: BatchSqlResumeOptions;
     },
   ) {
+    assertUpdateAllowsInteraction();
     const tab = findExecutionTab(id);
     if (!tab || !sql.trim()) return;
     if (pendingResultRunPreparations.has(tab)) return false;
@@ -6842,6 +6852,7 @@ export const useQueryStore = defineStore("query", () => {
   }
 
   async function explainTabSql(id: string, sql: string, databaseType?: DatabaseType, explainMode?: string) {
+    assertUpdateAllowsInteraction();
     const tab = tabs.value.find((t) => t.id === id);
     if (!tab) return { ok: false as const, reason: "empty" as const };
     const conn = useConnectionStore().getConfig(tab.connectionId);

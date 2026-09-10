@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useUpdateBlocker } from "@/lib/app/updatePreparation";
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, shallowRef, useId, watch } from "vue";
 import { Compartment, StateEffect, StateField } from "@codemirror/state";
 import { ensureSyntaxTree } from "@codemirror/language";
@@ -2659,6 +2660,29 @@ function openNacosConsole() {
   }
   window.open(url, "_blank", "noopener,noreferrer");
 }
+useUpdateBlocker(() =>
+  isConfigDirty.value ||
+  isCreatingConfig.value ||
+  savingConfig.value ||
+  deletingConfig.value ||
+  pendingConfigSave.value ||
+  pendingDeleteConfig.value ||
+  pendingBatchDelete.value ||
+  pendingHistoryRollback.value ||
+  rollingBackHistory.value ||
+  instanceEditorOpen.value ||
+  serviceEditorOpen.value ||
+  registerInstanceOpen.value ||
+  pendingInstanceUpdate.value ||
+  pendingInstanceDeregister.value ||
+  pendingServiceDelete.value ||
+  deletingService.value ||
+  registeringInstance.value ||
+  Object.keys(updatingInstanceKeys.value).length > 0 ||
+  Object.keys(instanceWeightDrafts.value).length > 0
+    ? t("updates.preparationDrafts")
+    : undefined,
+);
 </script>
 
 <template>

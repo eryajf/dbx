@@ -2346,7 +2346,7 @@ defineExpose({
     <!-- Redis mode: key browser -->
     <template v-else-if="activeTab.mode === 'redis'">
       <div class="flex-1 min-h-0">
-        <RedisKeyBrowser ref="redisKeyBrowserRef" :key="`${activeTab.id}:${activeTab.connectionId}:${activeTab.database}`" :connection-id="activeTab.connectionId" :db="Number(activeTab.database)" :block-dangerous-redis-commands="props.blockDangerousRedisCommands" />
+        <RedisKeyBrowser ref="redisKeyBrowserRef" :key="`${activeTab.id}:${activeTab.connectionId}:${activeTab.database}`" :connection-id="activeTab.connectionId" :db="Number(activeTab.database)" :block-dangerous-redis-commands="props.blockDangerousRedisCommands" :state-key="activeTab.id" />
       </div>
     </template>
 
@@ -2427,13 +2427,13 @@ defineExpose({
 
     <template v-else-if="activeTab.mode === 'mongo-gridfs'">
       <div class="flex-1 min-h-0">
-        <MongoGridFsBrowser :key="activeTab.id" :connection-id="activeTab.connectionId" :database="activeTab.database" />
+        <MongoGridFsBrowser :key="activeTab.id" :connection-id="activeTab.connectionId" :database="activeTab.database" :state-key="activeTab.id" />
       </div>
     </template>
 
     <template v-else-if="activeTab.mode === 'mongo-bucket'">
       <div class="flex-1 min-h-0">
-        <MongoBucketBrowser :key="activeTab.id" :connection-id="activeTab.connectionId" :database="activeTab.database" :bucket="activeTab.mongoBucket?.bucketName || activeTab.sql" />
+        <MongoBucketBrowser :key="activeTab.id" :connection-id="activeTab.connectionId" :database="activeTab.database" :bucket="activeTab.mongoBucket?.bucketName || activeTab.sql" :state-key="activeTab.id" />
       </div>
     </template>
 
@@ -2507,6 +2507,7 @@ defineExpose({
           @schema-change="emit('objectSchemaChange', activeTab.id, $event)"
           @viewport-change="emit('objectBrowserViewportChange', activeTab.id, $event)"
           @search-change="emit('objectBrowserSearchChange', activeTab.id, $event)"
+          @add-to-ai="emit('addObjectTableToAi', activeTab.id, $event)"
         />
       </div>
     </template>

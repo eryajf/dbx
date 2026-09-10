@@ -52,6 +52,7 @@ export interface SavedOpenTab {
   nacosNamespace?: string;
   nacosNamespaceName?: string;
   structureTableName?: string;
+  structureDraft?: QueryTab["structureDraft"];
   objectBrowser?: QueryTab["objectBrowser"];
   objectSource?: QueryTab["objectSource"];
   sourceView?: boolean;
@@ -102,7 +103,7 @@ function shouldPersistTabSql(tab: QueryTab) {
 function restoredOriginalSql(tab: SavedOpenTab, mode: QueryTab["mode"], sql: string) {
   if (mode !== "query") return undefined;
   if (tab.externalSqlPath) return tab.originalSql ?? sql;
-  if (tab.savedSqlId) return sql ? "" : undefined;
+  if (tab.savedSqlId) return tab.originalSql ?? (sql ? "" : undefined);
   // Prefer the persisted originalSql so a clean prefilled query tab (sql === originalSql)
   // restores clean instead of being marked dirty. Older saved state without this field
   // falls through to "" (preserving prior behavior for user-edited scratch tabs).
@@ -141,9 +142,9 @@ export function serializeOpenTabs(tabs: QueryTab[]): SavedOpenTab[] {
     sql: shouldPersistTabSql(tab) ? tab.sql : "",
     ...(tab.editorViewport ? { editorViewport: tab.editorViewport } : {}),
     ...(tab.editorSelection ? { editorSelection: tab.editorSelection } : {}),
-    // Plain query tabs always round-trip originalSql. External-file tabs only persist it
-    // while dirty so their disk baseline survives restart without duplicating clean SQL.
-    ...(tab.originalSql !== undefined && !tab.savedSqlId && (!tab.externalSqlPath || tab.sql !== tab.originalSql) ? { originalSql: tab.originalSql } : {}),
+    // File-backed drafts retain their baseline, including when the edited SQL is empty.
+    // Clean file-backed tabs omit it so startup can hydrate the current file content.
+    ...(tab.originalSql !== undefined && ((!tab.savedSqlId && !tab.externalSqlPath) || tab.sql !== tab.originalSql) ? { originalSql: tab.originalSql } : {}),
     savedSqlId: tab.savedSqlId,
     externalSqlPath: tab.externalSqlPath,
     ...(tab.externalSqlFileVersion ? { externalSqlFileVersion: tab.externalSqlFileVersion } : {}),
@@ -168,6 +169,7 @@ export function serializeOpenTabs(tabs: QueryTab[]): SavedOpenTab[] {
     ...(tab.nacosNamespace !== undefined ? { nacosNamespace: tab.nacosNamespace } : {}),
     ...(tab.nacosNamespaceName !== undefined ? { nacosNamespaceName: tab.nacosNamespaceName } : {}),
     ...(tab.structureTableName !== undefined ? { structureTableName: tab.structureTableName } : {}),
+    ...(tab.structureDraft ? { structureDraft: JSON.parse(JSON.stringify(tab.structureDraft)) } : {}),
     objectBrowser: tab.objectBrowser,
     objectSource: tab.objectSource,
     ...(tab.sourceView ? { sourceView: true } : {}),
