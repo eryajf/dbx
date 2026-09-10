@@ -62,6 +62,7 @@ import { SQLITE_DATABASE_FILE_EXTENSIONS } from "@/lib/database/databaseFileDete
 import { connectionAttemptOriginalErrorMessage, connectionAttemptTimeoutMessage, connectionAttemptTimeoutMs } from "@/lib/connection/connectionAttemptTimeout";
 import { consulAgentAddressesMatch } from "@/lib/consul/agentTarget";
 import { appendConnectionErrorHints, isJdbcMissingRuntimeDependencyError } from "@/lib/connection/connectionErrorHints";
+import { buildCassandraExternalConfig, cassandraTlsConfigFromExternalConfig, type CassandraTlsConfig } from "@/lib/connection/cassandraTlsOptions";
 import { preventDialogDocumentSelectAll } from "@/lib/connection/dialogTextSelection";
 import { postgresLegacyTlsEnabled, postgresTlsModeForForm, setPostgresLegacyTlsEnabled } from "@/lib/connection/postgresTlsMode";
 import { buildMqKafkaConnectionExtra, mqKafkaConnectionTarget, resolveMqKafkaConnectionSource, type MqKafkaConnectionSource } from "@/lib/connection/mqKafkaConnection";
@@ -395,6 +396,12 @@ const defaultForm = (): ConnectionForm => ({
   visible_databases: undefined,
   save_password: true,
 });
+
+const cassandraTls = reactive<CassandraTlsConfig>(cassandraTlsConfigFromExternalConfig(undefined));
+
+function resetCassandraTlsFields(externalConfig: unknown) {
+  Object.assign(cassandraTls, cassandraTlsConfigFromExternalConfig(externalConfig));
+}
 
 const elasticsearchConnectionMode = ref<ElasticsearchConnectionMode>("direct");
 const elasticsearchKibanaBasePath = ref("");
@@ -2333,6 +2340,9 @@ function applyProfile(val: string, preserveConnectionFields = false) {
   if (profile.type !== "elasticsearch" || previousDatabaseType !== "elasticsearch") {
     resetElasticsearchProxyFields();
   }
+  if (profile.type !== "cassandra" || previousDatabaseType !== "cassandra") {
+    resetCassandraTlsFields(undefined);
+  }
   if (!preserveConnectionFields) {
     oracleTnsAdminPath.value = "";
     form.value.port = profile.port;
@@ -2572,6 +2582,7 @@ watch(
       } else {
         resetMqFields();
       }
+      resetCassandraTlsFields(config.db_type === "cassandra" ? config.external_config : undefined);
       if (config.db_type === "nacos") {
         hydrateNacosFields(config.external_config);
       } else {
@@ -2643,6 +2654,7 @@ watch(
       selectedType.value = "mysql";
       customDriverName.value = "";
       resetMqFields();
+      resetCassandraTlsFields(undefined);
       resetNacosFields();
       resetInfluxDbFields();
       resetElasticsearchProxyFields();
@@ -3012,6 +3024,7 @@ const tlsCapableDatabaseTypes = new Set<DatabaseType>([
   "chromadb",
   "influxdb",
   "victoriametrics",
+  "cassandra",
 ]);
 const supportsTlsToggle = computed(() => tlsCapableDatabaseTypes.has(form.value.db_type));
 const supportsCaCertificatePath = computed(() => form.value.db_type === "clickhouse" || form.value.db_type === "victoriametrics");
@@ -3922,6 +3935,20 @@ function connectionConfigForSubmit(id: string, generatedName = ""): ConnectionCo
     config.database = undefined;
     config.connection_string = undefined;
     config.url_params = "";
+  } else if (config.db_type === "cassandra") {
+    // Go 侧在配置了 truststore/keystore 时会自动启用 TLS，前端保持一致：有 store 配置就不丢弃 external_config。
+    const cassandraHasTlsStore = Boolean(cassandraTls.truststore_path.trim() || cassandraTls.truststore_password) || Boolean(cassandraTls.keystore_path.trim() || cassandraTls.keystore_password);
+    if (!config.ssl && !cassandraHasTlsStore) {
+      config.external_config = undefined;
+    } else {
+      if (cassandraTls.truststore_password && !cassandraTls.truststore_path.trim()) {
+        throw new Error(t("connection.cassandraTruststorePasswordRequiresPath"));
+      }
+      if (cassandraTls.keystore_password && !cassandraTls.keystore_path.trim()) {
+        throw new Error(t("connection.cassandraKeystorePasswordRequiresPath"));
+      }
+      config.external_config = buildCassandraExternalConfig(cassandraTls);
+    }
   } else if (config.db_type === "nacos") {
     const nacosConfig = buildNacosAdminConfig();
     config.external_config = nacosConfig;
@@ -5473,6 +5500,23 @@ async function browseCaCertPath() {
     if (selected && typeof selected === "string") {
       form.value.ca_cert_path = selected;
     }
+  }
+}
+
+async function browseCassandraStore(target: "truststore" | "keystore") {
+  if (!isTauriRuntime()) return;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    title: target === "truststore" ? t("connection.cassandraTruststoreBrowse") : t("connection.cassandraKeystoreBrowse"),
+    multiple: false,
+    filters: [
+      { name: "Java KeyStore / PKCS#12", extensions: ["jks", "p12", "pfx", "truststore", "keystore"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+  if (typeof selected === "string") {
+    if (target === "truststore") cassandraTls.truststore_path = selected;
+    else cassandraTls.keystore_path = selected;
   }
 }
 
@@ -7910,6 +7954,56 @@ function openExternalUrl(url: string) {
                   <div class="grid grid-cols-4 items-start gap-4">
                     <span />
                     <p class="col-span-3 text-[11px] leading-4 text-muted-foreground">{{ t("connection.damengSslVerificationHint") }}</p>
+                  </div>
+                </template>
+
+                <template v-if="form.db_type === 'cassandra'">
+                  <div class="grid grid-cols-4 items-start gap-4">
+                    <Label :class="connectionLabelSmallPaddedClass">
+                      <span class="inline-flex items-center justify-end gap-1">
+                        <ShieldCheck class="h-3.5 w-3.5" />
+                        {{ t("connection.cassandraTruststore") }}
+                      </span>
+                    </Label>
+                    <div class="col-span-3 grid gap-2">
+                      <div class="flex items-center gap-1">
+                        <Input v-model="cassandraTls.truststore_path" class="flex-1" :placeholder="t('connection.cassandraTruststorePlaceholder')" :disabled="!tlsEnabled" />
+                        <Tooltip v-if="isDesktop">
+                          <TooltipTrigger as-child>
+                            <Button variant="outline" size="icon" class="h-9 w-9 shrink-0" :disabled="!tlsEnabled" @click="browseCassandraStore('truststore')">
+                              <FolderOpen class="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{{ t("connection.cassandraTruststoreBrowse") }}</TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <PasswordInput v-model="cassandraTls.truststore_password" :placeholder="t('connection.cassandraTruststorePassword')" :disabled="!tlsEnabled" />
+                      <p class="text-[11px] leading-4 text-muted-foreground">{{ t("connection.cassandraTruststoreHint") }}</p>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-4 items-start gap-4">
+                    <Label :class="connectionLabelSmallPaddedClass">
+                      <span class="inline-flex items-center justify-end gap-1">
+                        <KeyRound class="h-3.5 w-3.5" />
+                        {{ t("connection.cassandraKeystore") }}
+                      </span>
+                    </Label>
+                    <div class="col-span-3 grid gap-2">
+                      <div class="flex items-center gap-1">
+                        <Input v-model="cassandraTls.keystore_path" class="flex-1" :placeholder="t('connection.cassandraKeystorePlaceholder')" :disabled="!tlsEnabled" />
+                        <Tooltip v-if="isDesktop">
+                          <TooltipTrigger as-child>
+                            <Button variant="outline" size="icon" class="h-9 w-9 shrink-0" :disabled="!tlsEnabled" @click="browseCassandraStore('keystore')">
+                              <FolderOpen class="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{{ t("connection.cassandraKeystoreBrowse") }}</TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <PasswordInput v-model="cassandraTls.keystore_password" :placeholder="t('connection.cassandraKeystorePassword')" :disabled="!tlsEnabled" />
+                      <p class="text-[11px] leading-4 text-muted-foreground">{{ t("connection.cassandraKeystoreHint") }}</p>
+                    </div>
                   </div>
                 </template>
 

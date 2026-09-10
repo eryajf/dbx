@@ -800,6 +800,13 @@ export interface QueryResultRun {
   pinned?: boolean;
   /** Distinguishes successive result payloads that reuse the same run slot. */
   resultGridRevision?: string;
+  /**
+   * Logical-result identity for the tab-switch view snapshot cache. Distinct
+   * from `resultGridRevision` (the grid remount key): this one changes on every
+   * dataset replacement, including in-place refresh, and is preserved across
+   * disk eviction/restore. See `dataGridViewStateCache.ts`.
+   */
+  resultViewGeneration?: string;
   result?: QueryResult;
   results?: QueryResult[];
   activeResultIndex?: number;
@@ -1200,6 +1207,8 @@ export interface QueryTab {
   activeResultIndex?: number;
   /** Distinguishes successive result payloads that reuse the current result slot. */
   resultGridRevision?: string;
+  /** Logical-result identity for the tab-switch view snapshot cache; see QueryResultRun. */
+  resultViewGeneration?: string;
   resultRuns?: QueryResultRun[];
   activeResultRunId?: string;
   resultAutoSave?: boolean;

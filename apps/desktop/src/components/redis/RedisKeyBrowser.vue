@@ -231,7 +231,6 @@ interface ScanIterationBudget {
 // per-call budget (see `fetchScanPage`); only the automatic follow-up check
 // they hand off to afterward is constrained by this shared budget.
 const AUTO_LOAD_TOTAL_SCAN_ITERATIONS = 50;
-const REDIS_VALUE_SCAN_COUNT = 100;
 let autoLoadBudget: ScanIterationBudget = { remaining: AUTO_LOAD_TOTAL_SCAN_ITERATIONS };
 let redisBrowserIsActive = true;
 let reloadKeysOnActivation = false;
@@ -840,7 +839,7 @@ function isCurrentScanOperation(requestId: number, operationId?: number): boolea
 async function fetchScanPage(requestId = searchRequestId, operationId?: number, iterationBudget?: ScanIterationBudget): Promise<RedisScanResult> {
   const pageSize = redisScanPageSize.value;
   if (isValueSearchMode.value) {
-    return api.redisScanValues(props.connectionId, props.db, scanCursor.value, "*", valueQuery.value, Math.min(pageSize, REDIS_VALUE_SCAN_COUNT), searchMode.value === "all");
+    return api.redisScanValues(props.connectionId, props.db, scanCursor.value, "*", valueQuery.value, pageSize, searchMode.value === "all");
   }
 
   // Keep each backend call small so a changed search can cancel between calls.
@@ -886,11 +885,12 @@ async function fetchScanPage(requestId = searchRequestId, operationId?: number, 
 /// Batch-scan variant that performs multiple SCAN iterations server-side.
 /// Dramatically reduces frontend↔backend roundtrips for bulk loading.
 async function fetchScanBatchPage(maxIterations: number, options: { count?: number; includeTypes?: boolean } = {}): Promise<RedisScanResult> {
-  const pageSize = options.count ?? redisScanPageSize.value;
   // Value search cannot be batched because each key requires a GET.
+  // Keep its configured COUNT independent of the key-only bulk override.
   if (isValueSearchMode.value) {
-    return api.redisScanValues(props.connectionId, props.db, scanCursor.value, "*", valueQuery.value, Math.min(pageSize, REDIS_VALUE_SCAN_COUNT), searchMode.value === "all");
+    return api.redisScanValues(props.connectionId, props.db, scanCursor.value, "*", valueQuery.value, redisScanPageSize.value, searchMode.value === "all");
   }
+  const pageSize = options.count ?? redisScanPageSize.value;
   return api.redisScanKeysBatch(props.connectionId, props.db, scanCursor.value, effectivePattern.value, pageSize, maxIterations, options.includeTypes ?? false);
 }
 
