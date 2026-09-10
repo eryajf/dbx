@@ -1,11 +1,11 @@
 import { withEnglishFallback } from "./fallback";
 import docs from "./docs/az";
-import { consulUiMessages } from "./consulUi";
+import { consulAzMessages } from "./consulAz";
 import { sqlServerTraceMessages as sqlServerTrace } from "./sqlServerTraceMessages";
 import { meilisearchManagementAz } from "./meilisearchManagement";
 
 const consul = {
-  ...consulUiMessages,
+  ...consulAzMessages,
   prefixPlaceholder: "Açar prefiksi, məsələn, app/ və ya services/",
   newKey: "Yeni açar",
   loadingKeys: "Açarlar yüklənir...",
@@ -683,7 +683,7 @@ export default withEnglishFallback({
     consulAgentTargetHint: "Agentin yazma əməliyyatları üçün tələb olunur. DNS/yük tarazlaşdırıcılı və nəqliyyat qatı son nöqtələri yalnız oxuma üçün qalır.",
     consulMeshFeatures: "Xidmət şəbəkəsi",
     consulMeshVisible: "Təkmil xidmət şəbəkəsi iş sahəsini göstər",
-    consulMeshVisibleHint: "Yalnız Connect, niyyətlər və ya həmyaşıd əlaqələrini idarə etmək üçün aktiv edin. Deaktiv olduqda iş sahəsi gizli qalır.",
+    consulMeshVisibleHint: "Yalnız Connect, giriş qaydaları və ya həmkar bağlantılarını idarə etmək üçün aktiv edin. Deaktiv olduqda iş sahəsi gizli qalır.",
     consulOperatorWrites: "Operator yazma əməliyyatları",
     consulOperatorVisible: "Təcrübi Operator iş sahəsini göstər",
     consulOperatorSnapshotRestore: "Ani görüntüdən bərpanı aktiv et",

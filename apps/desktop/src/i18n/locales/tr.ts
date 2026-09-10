@@ -1,12 +1,12 @@
 import { withEnglishFallback } from "./fallback";
 import docs from "./docs/tr";
-import { consulUiMessages } from "./consulUi";
+import { consulTrMessages } from "./consulTr";
 import { sqlServerTraceMessages as sqlServerTrace } from "./sqlServerTraceMessages";
 import { meilisearchManagementTr } from "./meilisearchManagement";
 import { redisGroupingTr as redisGrouping } from "./redisGrouping";
 
 const consul = {
-  ...consulUiMessages,
+  ...consulTrMessages,
   redisGrouping,
   prefixPlaceholder: "Anahtar öneki, örn. app/ veya services/",
   newKey: "Yeni Anahtar",
@@ -52,9 +52,9 @@ const consul = {
     health: "Sağlık",
     sessions: "Oturumlar",
     scope: "Kapsam",
-    mesh: "Service Mesh",
+    mesh: "Servis ağı",
     tools: "Araçlar",
-    operator: "Operator",
+    operator: "Operatör",
     refresh: "Yetenekleri yenile",
     loading: "Consul yetenekleri yükleniyor...",
     agentIdentity: "Agent kimliği",
@@ -68,8 +68,8 @@ const consul = {
     acl: "ACL",
     namespaces: "Ad alanları",
     partitions: "Yönetim Bölümleri",
-    enterprise: "Enterprise",
-    community: "Community",
+    enterprise: "Kurumsal",
+    community: "Topluluk",
     serverMode: "Sunucu",
     clientMode: "İstemci",
     capability: {
@@ -683,15 +683,15 @@ export default withEnglishFallback({
     consulAgentTargetNode: "Agent hedef düğümü",
     consulAgentTargetAddress: "Agent doğrudan adresi",
     consulAgentTargetHint: "Agent yazma işlemleri için zorunludur. DNS/yük dengelemeli ve Taşıma Katmanı uç noktaları salt okunur kalır.",
-    consulMeshFeatures: "Service mesh",
-    consulMeshVisible: "Gelişmiş service mesh çalışma alanını göster",
-    consulMeshVisibleHint: "Yalnızca Connect, intention veya peering yönetmek için etkinleştirin. Kapalıyken çalışma alanı gizli kalır.",
-    consulOperatorWrites: "Operator yazma işlemleri",
-    consulOperatorVisible: "Deneysel Operator çalışma alanını göster",
+    consulMeshFeatures: "Servis ağı",
+    consulMeshVisible: "Gelişmiş servis ağı çalışma alanını göster",
+    consulMeshVisibleHint: "Yalnızca Connect, erişim kuralları veya eşlemeleri yönetmek için etkinleştirin. Kapalıyken çalışma alanı gizli kalır.",
+    consulOperatorWrites: "Operatör yazma işlemleri",
+    consulOperatorVisible: "Deneysel operatör çalışma alanını göster",
     consulOperatorSnapshotRestore: "Anlık görüntü geri yüklemeyi etkinleştir",
     consulOperatorAutopilot: "Autopilot güncellemelerini etkinleştir",
     consulOperatorRaft: "Raft değişikliklerini etkinleştir",
-    consulOperatorKeyring: "Keyring değişikliklerini etkinleştir",
+    consulOperatorKeyring: "Anahtarlık değişikliklerini etkinleştir",
     consulOperatorLicense: "Lisans güncellemelerini etkinleştir",
     consulAgentTargetIncomplete: "Agent hedef düğümü ve doğrudan adresi birlikte yapılandırılmalıdır.",
     consulAgentTargetAddressMismatch: "Agent doğrudan adresi, Consul uç noktası sunucusuyla eşleşmelidir.",
