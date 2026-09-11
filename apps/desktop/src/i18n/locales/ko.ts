@@ -1677,6 +1677,8 @@ export default withEnglishFallback({
     filterSqlCopied: "SQL 조건을 복사했습니다",
     filterBuilderSummary: "{count}개 규칙",
     filterBuilderAddRule: "규칙 추가",
+    filterBuilderApplyOnly: "이 조건만 필터링",
+    filterBuilderCompleteRuleFirst: "먼저 이 필터 조건을 완성하세요",
     filterBuilderEnableRule: "조건 활성화",
     filterBuilderDisableRule: "조건 비활성화",
     filterBuilderReorderRule: "드래그하거나 방향키로 조건 순서 변경",

@@ -1684,6 +1684,8 @@ export default withEnglishFallback({
     filterSqlCopied: "SQL 條件已複製",
     filterBuilderSummary: "{count} 條規則",
     filterBuilderAddRule: "新增條件",
+    filterBuilderApplyOnly: "僅篩選此項",
+    filterBuilderCompleteRuleFirst: "請先補齊此篩選條件",
     filterBuilderEnableRule: "啟用條件",
     filterBuilderDisableRule: "停用條件",
     filterBuilderReorderRule: "拖曳或使用方向鍵排序條件",

@@ -1813,6 +1813,8 @@ export default {
     filterSqlCopied: "SQL condition copied",
     filterBuilderSummary: "{count} rules",
     filterBuilderAddRule: "Add rule",
+    filterBuilderApplyOnly: "Filter only this rule",
+    filterBuilderCompleteRuleFirst: "Complete this filter rule first",
     filterBuilderEnableRule: "Enable rule",
     filterBuilderDisableRule: "Disable rule",
     filterBuilderReorderRule: "Drag or use arrow keys to reorder condition",

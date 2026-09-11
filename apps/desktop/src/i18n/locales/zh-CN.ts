@@ -1737,6 +1737,8 @@ export default withEnglishFallback({
     filterSqlCopied: "SQL 条件已复制",
     filterBuilderSummary: "{count} 条规则",
     filterBuilderAddRule: "新增条件",
+    filterBuilderApplyOnly: "仅筛选此项",
+    filterBuilderCompleteRuleFirst: "请先补全此筛选条件",
     filterBuilderEnableRule: "启用条件",
     filterBuilderDisableRule: "禁用条件",
     filterBuilderReorderRule: "拖拽或使用方向键排序条件",

@@ -1807,6 +1807,8 @@ export default withEnglishFallback({
     filterSqlCopied: "SQL koşulu kopyalandı",
     filterBuilderSummary: "{count} kural",
     filterBuilderAddRule: "Kural ekle",
+    filterBuilderApplyOnly: "Yalnızca bu kuralla filtrele",
+    filterBuilderCompleteRuleFirst: "Önce bu filtre kuralını tamamlayın",
     filterBuilderEnableRule: "Kuralı etkinleştir",
     filterBuilderDisableRule: "Kuralı devre dışı bırak",
     filterBuilderReorderRule: "Koşulu yeniden sıralamak için sürükleyin veya ok tuşlarını kullanın",

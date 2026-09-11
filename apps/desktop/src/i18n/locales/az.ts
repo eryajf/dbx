@@ -1812,6 +1812,8 @@ export default withEnglishFallback({
     filterSqlCopied: "SQL şərti kopyalandı",
     filterBuilderSummary: "{count} qayda",
     filterBuilderAddRule: "Qayda əlavə et",
+    filterBuilderApplyOnly: "Yalnız bu qayda ilə filtrlə",
+    filterBuilderCompleteRuleFirst: "Əvvəlcə bu filtr qaydasını tamamlayın",
     filterBuilderEnableRule: "Qaydanı aktivləşdir",
     filterBuilderDisableRule: "Qaydanı deaktiv et",
     filterBuilderReorderRule: "Şərtin sırasını dəyişmək üçün sürükləyin və ya ox düymələrindən istifadə edin",

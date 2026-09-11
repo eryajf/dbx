@@ -1684,6 +1684,8 @@ export default withEnglishFallback({
     filterSqlCopied: "Condizione SQL copiata",
     filterBuilderSummary: "{count} regole",
     filterBuilderAddRule: "Aggiungi regola",
+    filterBuilderApplyOnly: "Filtra solo per questa regola",
+    filterBuilderCompleteRuleFirst: "Completa prima questa regola di filtro",
     filterBuilderEnableRule: "Abilita regola",
     filterBuilderDisableRule: "Disabilita regola",
     filterBuilderReorderRule: "Trascina o usa i tasti freccia per riordinare la condizione",

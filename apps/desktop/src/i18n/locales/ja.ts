@@ -1696,6 +1696,8 @@ export default withEnglishFallback({
     filterSqlCopied: "SQL 条件をコピーしました",
     filterBuilderSummary: "{count}件のルール",
     filterBuilderAddRule: "ルールを追加",
+    filterBuilderApplyOnly: "この条件のみで絞り込む",
+    filterBuilderCompleteRuleFirst: "先にこの絞り込み条件を入力してください",
     filterBuilderEnableRule: "条件を有効化",
     filterBuilderDisableRule: "条件を無効化",
     filterBuilderReorderRule: "ドラッグまたは矢印キーで条件を並べ替え",
