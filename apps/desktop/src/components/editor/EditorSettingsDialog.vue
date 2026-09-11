@@ -549,6 +549,7 @@ const editInfiniteScroll = ref(settingsStore.editorSettings.infiniteScroll);
 const editRegexMaxMatchCount = ref(settingsStore.editorSettings.regexMaxMatchCount);
 const editAutoCalculateTotalRows = ref(settingsStore.editorSettings.autoCalculateTotalRows);
 const editFlatteningMultiLineText = ref(settingsStore.editorSettings.flatteningMultiLineText);
+const editDataGridShowWhitespace = ref(settingsStore.editorSettings.dataGridShowWhitespace);
 const editTableColumnTemplateRows = ref<TableColumnTemplateGridRow[]>(tableColumnTemplateRowsFromSettings(settingsStore.editorSettings.tableColumnTemplateFields));
 const editTableColumnTemplateDatabaseType = ref<DatabaseType>(TABLE_COLUMN_TEMPLATE_DATABASE_TYPES[0] ?? "mysql");
 const editSqlVariableSubstitutionEnabled = ref(settingsStore.editorSettings.sqlVariableSubstitutionEnabled);
@@ -767,6 +768,7 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     dataGridCellDetailButtonVisible: editDataGridCellDetailButtonVisible.value,
     dataGridCrosshairHighlight: editDataGridCrosshairHighlight.value,
     flatteningMultiLineText: editFlatteningMultiLineText.value,
+    dataGridShowWhitespace: editDataGridShowWhitespace.value,
     pageSize: editPageSize.value,
     tableOpenPageSize: editTableOpenPageSize.value,
     queryResultMaxRowsEnabled: editQueryResultMaxRowsEnabled.value,
@@ -1265,6 +1267,7 @@ function syncEditorSettingsDraftFromStore() {
   editDataGridCellDetailButtonVisible.value = settingsStore.editorSettings.dataGridCellDetailButtonVisible;
   editDataGridCrosshairHighlight.value = settingsStore.editorSettings.dataGridCrosshairHighlight;
   editFlatteningMultiLineText.value = settingsStore.editorSettings.flatteningMultiLineText;
+  editDataGridShowWhitespace.value = settingsStore.editorSettings.dataGridShowWhitespace;
   editPageSize.value = settingsStore.editorSettings.pageSize;
   editTableOpenPageSize.value = settingsStore.editorSettings.tableOpenPageSize;
   editQueryResultMaxRowsEnabled.value = settingsStore.editorSettings.queryResultMaxRowsEnabled;
@@ -1390,6 +1393,7 @@ const editorSettingsDraftRefs: EditorSettingsDraftRefMap = {
   regexMaxMatchCount: editRegexMaxMatchCount,
   autoCalculateTotalRows: editAutoCalculateTotalRows,
   flatteningMultiLineText: editFlatteningMultiLineText,
+  dataGridShowWhitespace: editDataGridShowWhitespace,
   shortcuts: editShortcuts,
   sqlFormatter: editSqlFormatter,
   sidebarActivation: editSidebarActivation,
@@ -1752,6 +1756,7 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editDataGridCellDetailButtonVisible.value = DEFAULT_EDITOR_SETTINGS.dataGridCellDetailButtonVisible;
     editDataGridCrosshairHighlight.value = DEFAULT_EDITOR_SETTINGS.dataGridCrosshairHighlight;
     editFlatteningMultiLineText.value = DEFAULT_EDITOR_SETTINGS.flatteningMultiLineText;
+    editDataGridShowWhitespace.value = DEFAULT_EDITOR_SETTINGS.dataGridShowWhitespace;
     editPageSize.value = DEFAULT_EDITOR_SETTINGS.pageSize;
     editTableOpenPageSize.value = DEFAULT_EDITOR_SETTINGS.tableOpenPageSize;
     editQueryResultMaxRowsEnabled.value = DEFAULT_EDITOR_SETTINGS.queryResultMaxRowsEnabled;
@@ -1840,6 +1845,7 @@ function resetAllDefaults() {
   editDataGridCellDetailButtonVisible.value = DEFAULT_EDITOR_SETTINGS.dataGridCellDetailButtonVisible;
   editDataGridCrosshairHighlight.value = DEFAULT_EDITOR_SETTINGS.dataGridCrosshairHighlight;
   editFlatteningMultiLineText.value = DEFAULT_EDITOR_SETTINGS.flatteningMultiLineText;
+  editDataGridShowWhitespace.value = DEFAULT_EDITOR_SETTINGS.dataGridShowWhitespace;
   editPageSize.value = DEFAULT_EDITOR_SETTINGS.pageSize;
   editTableOpenPageSize.value = DEFAULT_EDITOR_SETTINGS.tableOpenPageSize;
   editQueryResultMaxRowsEnabled.value = DEFAULT_EDITOR_SETTINGS.queryResultMaxRowsEnabled;
@@ -7075,6 +7081,13 @@ onUnmounted(() => {
                     </p>
                   </div>
                   <Switch id="data-grid-crosshair-highlight" v-model="editDataGridCrosshairHighlight" />
+                </div>
+                <div class="settings-item flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
+                  <div class="space-y-1">
+                    <Label for="data-grid-show-whitespace">{{ t("settings.dataGridShowWhitespace") }}</Label>
+                    <p class="text-xs text-muted-foreground">{{ t("settings.dataGridShowWhitespaceDescription") }}</p>
+                  </div>
+                  <Switch id="data-grid-show-whitespace" v-model="editDataGridShowWhitespace" />
                 </div>
                 <div class="settings-item flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
                   <div class="space-y-1">

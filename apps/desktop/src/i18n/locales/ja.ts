@@ -7181,6 +7181,8 @@ export default withEnglishFallback({
     autoCalculateTotalRows: "総行数を自動計算",
     autoCalculateTotalRowsDescription: "クエリごとに COUNT(*) を自動実行し、一致する総行数を表示します。大きなクエリを高速に保つため既定はオフです。結果フッターから必要に応じて計算できます。",
     infiniteScrollDescription: "末尾までスクロールしたときに、次のデータを自動的に読み込みます。",
+    dataGridShowWhitespace: "空白文字を表示",
+    dataGridShowWhitespaceDescription: "データセルのスペースを ·、タブを → で表示します。コピーや編集する値は変わりません。",
     flatteningMultiLineText: "多行テキストを展開",
     flatteningMultiLineTextDescription: "複数行のテキストを1行に結合して表示し、改行文字は¶として表示する。",
     regexMaxMatchCount: "すべての一致を選択する最大数",

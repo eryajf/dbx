@@ -6238,6 +6238,8 @@ export default withEnglishFallback({
     autoCalculateTotalRows: "전체 행 수 자동 집계",
     autoCalculateTotalRowsDescription: "각 쿼리 후 자동으로 COUNT(*)를 실행하여 일치하는 전체 행 수를 표시합니다. 대규모 쿼리를 빠르게 유지하기 위해 기본적으로 꺼져 있으며, 결과 푸터에서 요청 시 집계할 수 있습니다.",
     infiniteScrollDescription: "목록 하단으로 스크롤할 때 다음 데이터 묶음을 자동으로 불러옵니다.",
+    dataGridShowWhitespace: "공백 문자 표시",
+    dataGridShowWhitespaceDescription: "데이터 셀의 공백을 ·, 탭을 →로 표시합니다. 복사하거나 편집하는 값은 변경되지 않습니다.",
     flatteningMultiLineText: "멀티라인 텍스트 단순화",
     flatteningMultiLineTextDescription: "다중 행 텍스트를 단일 행으로 병합하여 표시하고, 개행 문자는 ¶로 표시합니다.",
     tableColumnTemplateFields: "새 테이블 미리 정의된 필드",

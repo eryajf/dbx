@@ -6926,6 +6926,8 @@ export default withEnglishFallback({
     autoCalculateTotalRows: "Ümumi sətir sayını avtomatik hesabla",
     autoCalculateTotalRowsDescription: "Uyğun gələn sətirlərin ümumi sayını göstərmək üçün hər sorğudan sonra COUNT(*) avtomatik işlədilir. Böyük sorğuların sürətini qorumaq üçün standart olaraq söndürülüb — ehtiyac olduqda nəticənin alt hissəsindən hesablayın.",
     infiniteScrollDescription: "Aşağıya sürüşdürdükdə növbəti toplunu avtomatik yüklə.",
+    dataGridShowWhitespace: "Boşluq simvollarını göstər",
+    dataGridShowWhitespaceDescription: "Verilənlər xanalarında boşluqları ·, tabulyasiyaları → kimi göstərir. Kopyalanan və redaktə edilən dəyərlər dəyişmir.",
     flatteningMultiLineText: "Çoxsətirli mətnin bir sətrə birləşdirilməsi",
     flatteningMultiLineTextDescription: "Çoxsətirli mətn bir sətirdə göstərilir, sətir keçidləri ¶ kimi göstərilir.",
     regexMaxMatchCount: "Hamısını seçmək üçün maksimum uyğunluq sayı",

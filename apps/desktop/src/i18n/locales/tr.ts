@@ -6808,6 +6808,8 @@ export default withEnglishFallback({
     autoCalculateTotalRows: "Toplam satır sayısını otomatik hesapla",
     autoCalculateTotalRowsDescription: "Eşleşen toplam satırı göstermek için her sorgunun ardından otomatik olarak COUNT(*) çalıştır. Büyük sorguların hızlı kalması için varsayılan olarak kapalıdır — sonuç alt bilgisinden istediğinizde hesaplayın.",
     infiniteScrollDescription: "En alta kaydırıldığında sonraki grubu otomatik yükle.",
+    dataGridShowWhitespace: "Boşluk karakterlerini göster",
+    dataGridShowWhitespaceDescription: "Veri hücrelerinde boşlukları ·, sekmeleri → olarak gösterir. Kopyalanan ve düzenlenen değerler değişmez.",
     flatteningMultiLineText: "Çok Satırlı Metni Düzleştirme",
     flatteningMultiLineTextDescription: "Çok satırlı metin, satır sonları ¶ ile gösterilerek tek satırda birleştirilir.",
     regexMaxMatchCount: 'En fazla "tümünü seç" eşleşmesi',
