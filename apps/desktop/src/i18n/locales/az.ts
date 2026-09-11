@@ -300,6 +300,7 @@ export default withEnglishFallback({
     retryDownload: "Endirməni yenidən sınayın",
     title: "Yeniləmələr",
     check: "Yeniləmələri yoxla",
+    checking: "Yeniləmələr yoxlanılır…",
     updateReadyTooltip: "Yeniləmə hazırdır — quraşdırmaq üçün klikləyin",
     restartRequiredTooltip: "Yeniləmə quraşdırılıb — tamamlamaq üçün yenidən başladın",
     availableTitle: "Yeniləmə mövcuddur",

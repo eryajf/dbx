@@ -303,6 +303,7 @@ export default withEnglishFallback({
     retryDownload: "ダウンロードを再試行",
     title: "アップデート",
     check: "アップデートを確認",
+    checking: "アップデートを確認中…",
     updateReadyTooltip: "アップデートの準備ができました。クリックしてインストール",
     restartRequiredTooltip: "アップデートがインストールされました。再起動して完了してください",
     availableTitle: "アップデートがあります",

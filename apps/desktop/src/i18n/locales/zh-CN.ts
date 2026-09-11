@@ -226,6 +226,7 @@ export default withEnglishFallback({
     retryDownload: "重试下载",
     title: "更新",
     check: "检查更新",
+    checking: "正在检查更新…",
     updateReadyTooltip: "更新已就绪，点击安装",
     restartRequiredTooltip: "更新已安装，重启以完成更新",
     availableTitle: "发现新版本",

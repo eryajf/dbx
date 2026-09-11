@@ -302,6 +302,7 @@ export default withEnglishFallback({
     retryDownload: "İndirmeyi yeniden dene",
     title: "Güncellemeler",
     check: "Güncellemeleri denetle",
+    checking: "Güncellemeler denetleniyor…",
     updateReadyTooltip: "Güncelleme hazır — kurmak için tıklayın",
     restartRequiredTooltip: "Güncelleme kuruldu — bitirmek için yeniden başlatın",
     availableTitle: "Güncelleme mevcut",

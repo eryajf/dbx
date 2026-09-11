@@ -301,6 +301,7 @@ export default {
     retryDownload: "Retry Download",
     title: "Updates",
     check: "Check for updates",
+    checking: "Checking for updates…",
     updateReadyTooltip: "Update ready — click to install",
     restartRequiredTooltip: "Update installed — restart to finish",
     availableTitle: "Update available",

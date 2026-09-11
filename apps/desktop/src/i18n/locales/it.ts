@@ -302,6 +302,7 @@ export default withEnglishFallback({
     retryDownload: "Riprova download",
     title: "Aggiornamenti",
     check: "Verifica aggiornamenti",
+    checking: "Verifica degli aggiornamenti in corso…",
     updateReadyTooltip: "Aggiornamento pronto, clicca per installare",
     restartRequiredTooltip: "Aggiornamento installato, riavvia per completare",
     availableTitle: "Aggiornamento disponibile",

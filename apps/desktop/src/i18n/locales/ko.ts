@@ -301,6 +301,7 @@ export default withEnglishFallback({
     retryDownload: "다운로드 재시도",
     title: "업데이트",
     check: "업데이트 확인",
+    checking: "업데이트 확인 중…",
     updateReadyTooltip: "업데이트 준비 완료 — 클릭하여 설치",
     restartRequiredTooltip: "업데이트 설치 완료 — 다시 시작하여 완료하세요",
     availableTitle: "업데이트 가능",

@@ -303,6 +303,7 @@ export default withEnglishFallback({
     retryDownload: "重試下載",
     title: "更新",
     check: "檢查更新",
+    checking: "正在檢查更新…",
     updateReadyTooltip: "更新已就緒，點擊安裝",
     restartRequiredTooltip: "更新已安裝，重新啟動以完成更新",
     availableTitle: "發現新版本",

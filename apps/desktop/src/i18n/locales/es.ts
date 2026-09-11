@@ -303,6 +303,7 @@ export default withEnglishFallback({
     retryDownload: "Reintentar descarga",
     title: "Actualizaciones",
     check: "Buscar actualizaciones",
+    checking: "Buscando actualizaciones…",
     updateReadyTooltip: "Actualización lista, haz clic para instalar",
     restartRequiredTooltip: "Actualización instalada, reinicia para finalizar",
     availableTitle: "Actualización disponible",
