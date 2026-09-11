@@ -136,6 +136,7 @@ import { EDITOR_FONT_FAMILY_CSS_VAR, EDITOR_FONT_SIZE_CSS_VAR, editorDiagnosticC
 import { createStatementGutterMarkerDom, shouldShowStatementGutter } from "@/lib/editor/codemirrorStatementGutter";
 import { createQueryEditorSqlShortcutDomHandler, isCharacterProducingShortcut } from "@/lib/editor/queryEditorSqlShortcut";
 import { createQueryEditorReplaceShortcutBindings, createQueryEditorReplaceShortcutHandler, createQueryEditorSearchKeymap } from "@/lib/editor/queryEditorSearchKeymap";
+import { createQueryEditorEscapeHandler } from "@/lib/editor/queryEditorEscape";
 import { buildQueryEditorLineNumbersExtension, createQueryEditorLineNumberAlignmentExtension } from "@/lib/editor/queryEditorLineNumbers";
 import { searchKeymapWithoutModD } from "@/lib/editor/codemirrorSearchKeymap";
 import { defaultKeymapForGlobalShortcuts } from "@/lib/editor/codemirrorDefaultKeymap";
@@ -6384,10 +6385,15 @@ onMounted(async () => {
           { key: "Tab", run: handleTab },
           {
             key: "Escape",
-            run: () => {
-              clearBatchColumnSelectionSession();
-              return searchPanelRef.value?.closeSearch() ?? false;
-            },
+            run: createQueryEditorEscapeHandler({
+              clearBatchSelection: clearBatchColumnSelectionSession,
+              cancelPendingAcceptance: () => {
+                clearPendingCompletionEnter();
+                clearPendingCompletionTab();
+              },
+              closeSearch: () => searchPanelRef.value?.closeSearch() ?? false,
+              closeCompletion: (currentView) => codeMirrorCloseCompletion?.(currentView) ?? false,
+            }),
           },
         ]),
       ),

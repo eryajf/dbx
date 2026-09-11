@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { acceptSelectedCompletionWithRetry, acceptSelectedOrFirstCompletion } from "@/lib/editor/queryEditorCompletionAcceptance";
+import { createQueryEditorEscapeHandler } from "@/lib/editor/queryEditorEscape";
 import { DEFAULT_SHORTCUT_SETTINGS, normalizeShortcutSettings, shortcutToCodeMirrorKey } from "@/lib/editor/shortcutRegistry";
 
 const queryEditorSource = readFileSync(new URL("../../../components/editor/QueryEditor.vue", import.meta.url), "utf8");
@@ -315,6 +316,59 @@ describe("QueryEditor completion Tab keymap", () => {
 
     expect(harness.handleTab(view)).toBe(true);
     expect(nextSnippetField).toHaveBeenCalledWith(view);
+    expect(view.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each(["Tab", "Enter"])("advances the snippet after Escape dismisses completion with %s acceptance", (acceptCompletionShortcut) => {
+    let status: "active" | null = "active";
+    const nextSnippetField = vi.fn(() => true);
+    const acceptCompletion = vi.fn(() => true);
+    const harness = createHarness({ completionStatus: () => status, nextSnippetField, acceptCompletion, acceptCompletionShortcut });
+    const closeCompletion = vi.fn(() => {
+      status = null;
+      return true;
+    });
+    const escape = createQueryEditorEscapeHandler({
+      clearBatchSelection: vi.fn(),
+      cancelPendingAcceptance: harness.clearPendingCompletionTab,
+      closeSearch: () => false,
+      closeCompletion,
+    });
+    const view = createView();
+
+    expect(escape(view as unknown as Parameters<typeof escape>[0])).toBe(true);
+    expect(harness.handleTab(view)).toBe(true);
+    expect(nextSnippetField).toHaveBeenCalledWith(view);
+    expect(acceptCompletion).not.toHaveBeenCalled();
+    expect(view.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("cancels a queued Tab on Escape without advancing until the next explicit Tab", async () => {
+    vi.useFakeTimers();
+    let status: "pending" | null = "pending";
+    const nextSnippetField = vi.fn(() => true);
+    const harness = createHarness({ completionStatus: () => status, nextSnippetField });
+    const escape = createQueryEditorEscapeHandler({
+      clearBatchSelection: vi.fn(),
+      cancelPendingAcceptance: harness.clearPendingCompletionTab,
+      closeSearch: () => false,
+      closeCompletion: () => {
+        status = null;
+        return true;
+      },
+    });
+    const view = createView();
+    expect(harness.handleTab(view)).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+
+    expect(escape(view as unknown as Parameters<typeof escape>[0])).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(nextSnippetField).not.toHaveBeenCalled();
+    expect(view.dispatch).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+
+    expect(harness.handleTab(view)).toBe(true);
+    expect(nextSnippetField).toHaveBeenCalledOnce();
     expect(view.dispatch).not.toHaveBeenCalled();
   });
 
