@@ -117,7 +117,7 @@ export default withEnglishFallback({
       nullSource: "NULL no contiene texto para convertir.",
       incomplete: "El valor completo aún no se ha cargado. Espera o vuelve a abrir los detalles de la celda.",
       unsafeNumber: "Este número no se puede representar con precisión. Consúltalo como texto para conservarla.",
-      tooLarge: "Límite de conversión superado: 50,000 caracteres de entrada, 200,000 de salida o 4,096 para enteros.",
+      tooLarge: "Límite de conversión superado: {maxInput} caracteres de entrada, {maxOutput} de salida o {maxRadixDigits} para enteros.",
       invalid: "No se puede convertir. Revisa el formato de entrada y las opciones.",
       invalidTimestamp: "Introduce una marca de tiempo entera dentro del intervalo de fechas admitido.",
       ambiguousUnit: "No se puede determinar la unidad. Selecciona segundos o milisegundos.",

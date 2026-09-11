@@ -114,7 +114,7 @@ export default {
       nullSource: "NULL has no text to convert.",
       incomplete: "The full value has not loaded. Wait for it to load or reopen the cell details.",
       unsafeNumber: "This numeric value cannot be represented safely. Retrieve it as text to preserve precision.",
-      tooLarge: "Conversion limit exceeded: 50,000 input characters, 200,000 output characters, or 4,096 integer characters.",
+      tooLarge: "Conversion limit exceeded: {maxInput} input characters, {maxOutput} output characters, or {maxRadixDigits} integer characters.",
       invalid: "Unable to convert. Check the input format and conversion options.",
       invalidTimestamp: "Enter an integer timestamp within the supported date range.",
       ambiguousUnit: "Cannot determine the timestamp unit. Select seconds or milliseconds explicitly.",

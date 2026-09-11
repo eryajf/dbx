@@ -116,7 +116,7 @@ export default withEnglishFallback({
       nullSource: "NULL non contiene testo da convertire.",
       incomplete: "Il valore completo non è ancora stato caricato. Attendi o riapri i dettagli della cella.",
       unsafeNumber: "Questo numero non può essere rappresentato con precisione. Recuperalo come testo per conservarla.",
-      tooLarge: "Limite di conversione superato: 50,000 caratteri in ingresso, 200,000 in uscita o 4,096 per gli interi.",
+      tooLarge: "Limite di conversione superato: {maxInput} caratteri in ingresso, {maxOutput} in uscita o {maxRadixDigits} per gli interi.",
       invalid: "Impossibile convertire. Controlla il formato di ingresso e le opzioni.",
       invalidTimestamp: "Inserisci un timestamp intero nell’intervallo di date supportato.",
       ambiguousUnit: "Impossibile determinare l’unità. Seleziona secondi o millisecondi.",

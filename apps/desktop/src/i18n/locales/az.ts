@@ -114,7 +114,7 @@ export default withEnglishFallback({
       nullSource: "NULL çevriləcək mətn ehtiva etmir.",
       incomplete: "Tam dəyər hələ yüklənməyib. Gözləyin və ya xana təfərrüatlarını yenidən açın.",
       unsafeNumber: "Bu ədəd dəqiq təqdim edilə bilmir. Dəqiqliyi qorumaq üçün onu mətn kimi sorğulayın.",
-      tooLarge: "Çevirmə həddi aşılıb: giriş 50,000 simvol, çıxış 200,000 simvol və ya tam ədəd girişi 4,096 simvol.",
+      tooLarge: "Çevirmə həddi aşılıb: giriş {maxInput} simvol, çıxış {maxOutput} simvol və ya tam ədəd girişi {maxRadixDigits} simvol.",
       invalid: "Çevirmək mümkün deyil. Giriş formatını və çevirmə seçimlərini yoxlayın.",
       invalidTimestamp: "Dəstəklənən tarix aralığında tam ədəd zaman damğası daxil edin.",
       ambiguousUnit: "Vahidi müəyyən etmək mümkün deyil. Saniyə və ya millisaniyə seçin.",

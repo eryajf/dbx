@@ -116,7 +116,7 @@ export default withEnglishFallback({
       nullSource: "NULL에는 변환할 텍스트가 없습니다.",
       incomplete: "전체 값을 아직 불러오지 못했습니다. 기다리거나 셀 상세 정보를 다시 여세요.",
       unsafeNumber: "이 숫자는 안전하게 표현할 수 없습니다. 정밀도를 유지하려면 텍스트로 조회하세요.",
-      tooLarge: "변환 한도 초과: 입력 50,000자, 출력 200,000자, 정수 입력 4,096자입니다.",
+      tooLarge: "변환 한도 초과: 입력 {maxInput}자, 출력 {maxOutput}자, 정수 입력 {maxRadixDigits}자입니다.",
       invalid: "변환할 수 없습니다. 입력 형식과 변환 옵션을 확인하세요.",
       invalidTimestamp: "지원하는 날짜 범위 내의 정수 타임스탬프를 입력하세요.",
       ambiguousUnit: "단위를 확인할 수 없습니다. 초 또는 밀리초를 선택하세요.",

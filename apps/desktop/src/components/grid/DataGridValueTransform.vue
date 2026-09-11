@@ -5,7 +5,7 @@ import { copyToClipboard } from "@/lib/common/clipboard";
 import { useToast } from "@/composables/useToast";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { CELL_TRANSFORM_KINDS, CELL_TRANSFORM_MAX_INPUT, transformCellValue, type CellTransformKind, type CellTransformResult } from "@/lib/dataGrid/cellValueTransform";
+import { CELL_TRANSFORM_KINDS, CELL_TRANSFORM_MAX_INPUT, CELL_TRANSFORM_MAX_OUTPUT, CELL_TRANSFORM_MAX_RADIX_DIGITS, transformCellValue, type CellTransformKind, type CellTransformResult } from "@/lib/dataGrid/cellValueTransform";
 import { DataGridDateTimePatterns, getSupportedTimeZoneOptions } from "@/lib/dataGrid/columnFormatter";
 
 const props = defineProps<{
@@ -52,6 +52,13 @@ const blockedReason = computed(() => {
   if (props.source.length > CELL_TRANSFORM_MAX_INPUT) return "tooLarge";
   return "";
 });
+
+// Locale messages only interpolate the grouped limit digits, so translations keep their wording.
+const errorLimits = {
+  maxInput: new Intl.NumberFormat("en-US").format(CELL_TRANSFORM_MAX_INPUT),
+  maxOutput: new Intl.NumberFormat("en-US").format(CELL_TRANSFORM_MAX_OUTPUT),
+  maxRadixDigits: new Intl.NumberFormat("en-US").format(CELL_TRANSFORM_MAX_RADIX_DIGITS),
+};
 
 // Keep only options between cells. Results must always belong to the current source.
 watch(
@@ -139,8 +146,8 @@ async function copyResult() {
       </div>
       <p v-if="kind === 'radix'" class="text-xs text-muted-foreground">{{ t("cellTransform.radixHint") }}</p>
       <p v-if="kind === 'urlEncode' || kind === 'urlDecode'" class="text-xs text-muted-foreground">{{ t("cellTransform.urlHint") }}</p>
-      <p v-if="blockedReason" role="status" class="text-xs text-muted-foreground">{{ t(`cellTransform.errors.${blockedReason}`) }}</p>
-      <p v-else-if="result && !result.ok" role="alert" class="text-xs text-destructive">{{ t(`cellTransform.errors.${result.error}`) }}</p>
+      <p v-if="blockedReason" role="status" class="text-xs text-muted-foreground">{{ t(`cellTransform.errors.${blockedReason}`, errorLimits) }}</p>
+      <p v-else-if="result && !result.ok" role="alert" class="text-xs text-destructive">{{ t(`cellTransform.errors.${result.error}`, errorLimits) }}</p>
       <template v-if="result?.ok">
         <div class="flex items-center justify-between gap-2 text-xs">
           <span

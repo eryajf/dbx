@@ -4,6 +4,7 @@ import { applyColumnFormatter, DataGridDateTimePatterns } from "@/lib/dataGrid/c
 
 export const CELL_TRANSFORM_MAX_INPUT = 50_000;
 export const CELL_TRANSFORM_MAX_OUTPUT = 200_000;
+export const CELL_TRANSFORM_MAX_RADIX_DIGITS = 4_096;
 export const CELL_TRANSFORM_KINDS = ["timestamp", "json", "jsonCompact", "xml", "base64Encode", "base64Decode", "urlEncode", "urlDecode", "radix"] as const;
 export type CellTransformKind = (typeof CELL_TRANSFORM_KINDS)[number];
 export type CellTransformError = "tooLarge" | "invalid" | "invalidTimestamp" | "ambiguousUnit" | "invalidInteger" | "invalidBase64";
@@ -94,7 +95,7 @@ export function transformCellValue(source: string, options: CellTransformOptions
         const to = options.toBase ?? 16;
         if (![2, 8, 10, 16].includes(from) || ![2, 8, 10, 16].includes(to)) fail("invalidInteger");
         const input = source.trim();
-        if (input.length > 4096) fail("tooLarge");
+        if (input.length > CELL_TRANSFORM_MAX_RADIX_DIGITS) fail("tooLarge");
         const sign = input.startsWith("-") ? -1n : 1n;
         const digits = input.replace(/^[+-]/, "");
         const valid = from === 2 ? /^[01]+$/ : from === 8 ? /^[0-7]+$/ : from === 10 ? /^\d+$/ : /^[0-9a-f]+$/i;

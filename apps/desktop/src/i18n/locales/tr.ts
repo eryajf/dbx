@@ -116,7 +116,7 @@ export default withEnglishFallback({
       nullSource: "NULL dönüştürülebilecek metin içermez.",
       incomplete: "Değerin tamamı henüz yüklenmedi. Bekleyin veya hücre ayrıntılarını yeniden açın.",
       unsafeNumber: "Bu sayı güvenli biçimde temsil edilemiyor. Hassasiyeti korumak için metin olarak sorgulayın.",
-      tooLarge: "Dönüştürme sınırı aşıldı: girdi 50,000 karakter, çıktı 200,000 karakter veya tam sayı girdisi 4,096 karakter.",
+      tooLarge: "Dönüştürme sınırı aşıldı: girdi {maxInput} karakter, çıktı {maxOutput} karakter veya tam sayı girdisi {maxRadixDigits} karakter.",
       invalid: "Dönüştürülemiyor. Girdi biçimini ve dönüştürme seçeneklerini kontrol edin.",
       invalidTimestamp: "Desteklenen tarih aralığında bir tam sayı zaman damgası girin.",
       ambiguousUnit: "Birim belirlenemiyor. Saniye veya milisaniyeyi seçin.",

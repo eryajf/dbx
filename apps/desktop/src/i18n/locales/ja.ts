@@ -117,7 +117,7 @@ export default withEnglishFallback({
       nullSource: "NULL には変換できるテキストがありません。",
       incomplete: "値全体がまだ読み込まれていません。読み込みを待つか、セルの詳細を開き直してください。",
       unsafeNumber: "この数値は安全に表現できません。精度を保つためテキストとして取得してください。",
-      tooLarge: "変換上限を超えました。入力 50,000 文字、出力 200,000 文字、整数入力 4,096 文字です。",
+      tooLarge: "変換上限を超えました。入力 {maxInput} 文字、出力 {maxOutput} 文字、整数入力 {maxRadixDigits} 文字です。",
       invalid: "変換できません。入力形式と変換オプションを確認してください。",
       invalidTimestamp: "対応する日付範囲内の整数タイムスタンプを入力してください。",
       ambiguousUnit: "単位を判定できません。秒またはミリ秒を選択してください。",

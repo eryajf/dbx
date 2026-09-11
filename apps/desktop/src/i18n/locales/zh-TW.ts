@@ -116,7 +116,7 @@ export default withEnglishFallback({
       nullSource: "NULL 沒有可轉換的文字。",
       incomplete: "完整值尚未載入，請等待載入完成或重新開啟儲存格詳細資料。",
       unsafeNumber: "該數值無法安全表示，請以文字形式查詢以保留精確度。",
-      tooLarge: "超過轉換限制：輸入 50,000 字元、輸出 200,000 字元，整數輸入 4,096 字元。",
+      tooLarge: "超過轉換限制：輸入 {maxInput} 字元、輸出 {maxOutput} 字元，整數輸入 {maxRadixDigits} 字元。",
       invalid: "無法轉換，請檢查輸入格式和轉換選項。",
       invalidTimestamp: "請輸入有效日期範圍內的整數時間戳記。",
       ambiguousUnit: "無法確定時間戳記單位，請手動選擇秒或毫秒。",

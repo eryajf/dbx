@@ -39,7 +39,7 @@ export default withEnglishFallback({
       nullSource: "NULL 没有可转换的文本。",
       incomplete: "完整值尚未加载，请等待加载完成或重新打开单元格详情。",
       unsafeNumber: "该数值无法安全表示，请以文本形式查询以保留精度。",
-      tooLarge: "超过转换限制：输入 50,000 字符、输出 200,000 字符，整数输入 4,096 字符。",
+      tooLarge: "超过转换限制：输入 {maxInput} 字符、输出 {maxOutput} 字符，整数输入 {maxRadixDigits} 字符。",
       invalid: "无法转换，请检查输入格式和转换选项。",
       invalidTimestamp: "请输入有效日期范围内的整数时间戳。",
       ambiguousUnit: "无法确定时间戳单位，请手动选择秒或毫秒。",
