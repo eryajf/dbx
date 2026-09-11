@@ -1595,11 +1595,45 @@ function buildGroupedWhere(conditions: string[], rules: StructuredFilterRule[]):
   return result;
 }
 
-async function applyStructuredFilters() {
-  if (!canUseWhereSearch.value) return;
-  appliedStructuredWhereInput.value = await buildStructuredWhereFromRules(structuredFilterRules.value);
+async function applyStructuredWhere(where: string) {
+  appliedStructuredWhereInput.value = where;
   if (!isFilterEditorPinnedOpen.value) filterBuilderOpen.value = false;
   await applyWhereFilter();
+}
+
+async function applyStructuredFilters() {
+  if (!canUseWhereSearch.value) return;
+  await applyStructuredWhere(await buildStructuredWhereFromRules(structuredFilterRules.value));
+}
+
+const applyingOnlyStructuredFilter = ref(false);
+async function applyOnlyStructuredFilter(ruleId: string) {
+  if (!canUseWhereSearch.value || applyingOnlyStructuredFilter.value || isApplyingWhere.value) return;
+  const rule = structuredFilterRules.value.find((item) => item.id === ruleId);
+  if (!rule) return;
+  if (!rule.columnName || !isStructuredFilterRuleComplete(rule)) {
+    toast(t("grid.filterBuilderCompleteRuleFirst"));
+    return;
+  }
+  applyingOnlyStructuredFilter.value = true;
+  const scopeKey = structuredFilterScopeKey.value;
+  const cacheKey = structuredFilterCacheKey.value;
+  const rulesSnapshot = JSON.stringify(structuredFilterRules.value);
+  try {
+    // Build before changing enabled states so an invalid condition cannot clear the filter.
+    const where = await buildStructuredWhereFromRules([{ ...rule, disabled: false }]);
+    if (scopeKey !== structuredFilterScopeKey.value || cacheKey !== structuredFilterCacheKey.value || rulesSnapshot !== JSON.stringify(structuredFilterRules.value)) return;
+    if (!where) {
+      toast(t("grid.filterBuilderCompleteRuleFirst"));
+      return;
+    }
+    filterBuilder.enableOnlyRule(ruleId);
+    await applyStructuredWhere(where);
+  } catch (error: unknown) {
+    toast(error instanceof Error ? error.message : String(error));
+  } finally {
+    applyingOnlyStructuredFilter.value = false;
+  }
 }
 
 let structuredFilterPreviewRequestId = 0;
@@ -5786,7 +5820,16 @@ watch(valueEditorContainer, async (el) => {
       fontSize: editorFontSize,
       fontFamily: detailEditorFontFamily,
     });
-    await valueDetailEditor.create(el, detailEditValue.value, activeCellDetail.value?.type);
+    const editor = valueDetailEditor;
+    await editor.create(el, detailEditValue.value, activeCellDetail.value?.type);
+    // The editor initializes asynchronously (theme loading can yield here), so
+    // detailEditValue may have changed before CodeMirror owns the document.
+    // Reconcile the latest value after create and ignore an editor replaced by
+    // a fast tab unmount/remount.
+    if (valueDetailEditor !== editor) return;
+    if (editor.getValue() !== detailEditValue.value) {
+      editor.setValue(detailEditValue.value, activeCellDetail.value?.type);
+    }
   } else if (!el && valueDetailEditor) {
     valueDetailEditor.destroy();
     valueDetailEditor = null;
@@ -5809,7 +5852,7 @@ const detailEdit = useDataGridCellDetailEdit({
   restoreCellValue,
   syncEditor: (value, columnType) => {
     const editor = getDetailEditor();
-    if (editor) editor.setValue(value, columnType);
+    if (editor && editor.getValue() !== value) editor.setValue(value, columnType);
   },
   refreshDetail: () => {
     detailCell.value = detailCell.value ? { ...detailCell.value } : null;
@@ -11512,6 +11555,8 @@ useUpdateBlocker(() => (hasPendingChanges.value || hasPendingDataEditorDraft.val
                   @ensure-rule="ensureStructuredFilterRule"
                   @add-rule="addStructuredFilterRule"
                   @apply-filters="applyStructuredFilters"
+                  :apply-only-busy="applyingOnlyStructuredFilter || isApplyingWhere"
+                  @apply-only="applyOnlyStructuredFilter"
                   @reset-filters="resetStructuredFilters"
                   @clear-filters="clearAllFilters"
                   @remove-rule="removeStructuredFilterRule"
@@ -11650,6 +11695,8 @@ useUpdateBlocker(() => (hasPendingChanges.value || hasPendingDataEditorDraft.val
           @ensure-rule="ensureStructuredFilterRule"
           @add-rule="addStructuredFilterRule"
           @apply="applyStructuredFilters"
+          :apply-only-busy="applyingOnlyStructuredFilter || isApplyingWhere"
+          @apply-only="applyOnlyStructuredFilter"
           @reset="resetStructuredFilters"
           @clear="clearAllFilters"
           @copy-sql="copyFilterSqlPreview"
@@ -11672,6 +11719,8 @@ useUpdateBlocker(() => (hasPendingChanges.value || hasPendingDataEditorDraft.val
           @ensure-rule="ensureStructuredFilterRule"
           @add-rule="addStructuredFilterRule"
           @apply="applyStructuredFilters"
+          :apply-only-busy="applyingOnlyStructuredFilter || isApplyingWhere"
+          @apply-only="applyOnlyStructuredFilter"
           @reset="resetStructuredFilters"
           @clear="clearAllFilters"
           @copy-sql="copyFilterSqlPreview"
