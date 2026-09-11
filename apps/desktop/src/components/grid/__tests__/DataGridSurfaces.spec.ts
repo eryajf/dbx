@@ -28,6 +28,7 @@ vi.mock("@lucide/vue", async () => {
     ChevronsRight: icon,
     Download: icon,
     Filter: icon,
+    Focus: icon,
     FileDiff: icon,
     Loader2: icon,
     FileUp: icon,
@@ -619,6 +620,34 @@ describe("DataGridColumnHeader", () => {
 });
 
 describe("DataGridFilterBuilder", () => {
+  it.each(["popover", "panel", "text"])("offers apply-only for disabled rules in the %s layout only when enabled", async (layout) => {
+    const applyOnly = vi.fn();
+    const mounted = mountComponent(DataGridFilterBuilder, {
+      rules: [{ id: "r1", columnName: "id", mode: "equals", rawValue: "7", rawEndValue: "", conjunction: "AND", disabled: true }],
+      columns: ["id"],
+      filteredColumns: ["id"],
+      modeOptions: [{ value: "equals", labelKey: "equals" }],
+      columnSearch: "",
+      layout,
+      onApplyOnly: applyOnly,
+    });
+    const buttons = () => findAll(mounted.root, (node) => node.props["aria-label"] === "grid.filterBuilderApplyOnly");
+    expect(buttons()).toHaveLength(0);
+    await mounted.setProps({ showApplyOnly: true });
+    expect(buttons()).toHaveLength(1);
+    expect(buttons()[0].props.disabled).toBeFalsy();
+    dispatch(buttons()[0], "click");
+    expect(applyOnly).toHaveBeenCalledWith("r1");
+    await mounted.setProps({ applyOnlyBusy: true });
+    expect(buttons()[0].props.disabled).toBe(true);
+    await mounted.setProps({ applyOnlyBusy: false });
+    expect(buttons()[0].props.disabled).toBeFalsy();
+    dispatch(buttons()[0], "click");
+    expect(applyOnly).toHaveBeenCalledTimes(2);
+    await mounted.setProps({ disabled: true });
+    expect(buttons()[0].props.disabled).toBe(true);
+  });
+
   it("renders a compact text rule without framed form controls", async () => {
     const updateRule = vi.fn();
     const add = vi.fn();
@@ -1392,6 +1421,14 @@ describe("cell detail surfaces", () => {
       expect(classes).toEqual(expect.arrayContaining(["min-w-max", "flex-1", "shrink-0"]));
     }
     expect(dataGridSource).not.toContain("activeCellDetailTabsGridClass");
+
+    const valueEditorLifecycleStart = dataGridSource.indexOf("watch(valueEditorContainer");
+    const valueEditorLifecycleEnd = dataGridSource.indexOf("const detailEdit = useDataGridCellDetailEdit", valueEditorLifecycleStart);
+    const valueEditorLifecycle = dataGridSource.slice(valueEditorLifecycleStart, valueEditorLifecycleEnd);
+    expect(valueEditorLifecycle).toContain("const editor = valueDetailEditor;");
+    expect(valueEditorLifecycle).toContain("if (valueDetailEditor !== editor) return;");
+    expect(valueEditorLifecycle).toContain("if (editor.getValue() !== detailEditValue.value)");
+    expect(valueEditorLifecycle).toContain("editor.setValue(detailEditValue.value, activeCellDetail.value?.type);");
 
     const valueEditorStart = dataGridSource.indexOf("<TabsContent v-if=\"activeCellDetailTabs.includes('valueEditor')\"");
     const valueEditorEnd = dataGridSource.indexOf("</TabsContent>", valueEditorStart);
