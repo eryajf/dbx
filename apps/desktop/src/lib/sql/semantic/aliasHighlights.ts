@@ -114,7 +114,7 @@ export function sqlAliasHighlightGroups(sql: string, options: SqlSemanticBuildOp
   for (let index = 0; index + 2 < tokens.length; index++) {
     const qualifier = tokens[index];
     const column = tokens[index + 2];
-    if (!tokenIsIdentifier(qualifier) || tokens[index + 1].text !== "." || (!tokenIsIdentifier(column) && column.text !== "*")) continue;
+    if (!tokenIsIdentifier(qualifier) || tokens[index + 1].text !== "." || (column.text !== "*" && !tokenIsIdentifier(column))) continue;
     // Do not mistake schema.table.column or a qualified function call for alias.column.
     if (tokens[index - 1]?.text === "." || tokens[index + 3]?.text === "." || tokens[index + 3]?.text === "(") continue;
     const block = lastBlock(blocks, (candidate) => candidate.start <= index && index < candidate.end);
