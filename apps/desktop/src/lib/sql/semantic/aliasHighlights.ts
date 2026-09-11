@@ -19,6 +19,8 @@ interface QueryBlock {
 }
 
 const SET_OPERATORS = new Set(["union", "intersect", "except"]);
+// MySQL aliases and SQL Server default collations compare identifiers case-insensitively.
+const CASE_INSENSITIVE_ALIAS_DIALECTS = new Set(["mysql", "sqlserver", "sqlite"]);
 export const MAX_ALIAS_HIGHLIGHT_SQL_LENGTH = 128 * 1024;
 
 function lastBlock(blocks: QueryBlock[], predicate: (block: QueryBlock) => boolean): QueryBlock | undefined {
@@ -49,9 +51,9 @@ export function sqlAliasHighlightGroups(sql: string, options: SqlSemanticBuildOp
   const tokensByStart = new Map(tokens.map((token) => [token.span.start, token]));
   const nameOf = (token: SqlSemanticToken) => {
     const name = dialect.normalizeIdentifier(unquoteSqlSemanticIdentifier(token), token.kind === "quoted_identifier");
-    // SQLite compares even quoted identifiers case-insensitively for ASCII letters.
-    // Keep the spelling normalizer unchanged, and preserve other dialects' quote semantics.
-    return dialect.id === "sqlite" ? name.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) : name;
+    // These dialects compare even quoted identifiers case-insensitively for ASCII letters.
+    // Keep the spelling normalizer unchanged, and preserve other dialects' quote and case semantics.
+    return CASE_INSENSITIVE_ALIAS_DIALECTS.has(dialect.id) ? name.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) : name;
   };
   const blocks: QueryBlock[] = [];
   const groups: SqlAliasHighlightGroup[] = [];
@@ -128,7 +130,9 @@ export function sqlAliasHighlightGroups(sql: string, options: SqlSemanticBuildOp
     group.references.push({ start: qualifier.span.start, end: column.span.end });
   }
   for (const block of blocks) {
-    for (const group of block.aliases.values()) if (group && group.references.length) groups.push(group);
+    // Keep unreferenced declarations too: the caller still highlights the declaration itself
+    // when the cursor sits on it. Only shadowed (null) entries produce no spans at all.
+    for (const group of block.aliases.values()) if (group) groups.push(group);
   }
   return groups;
 }
