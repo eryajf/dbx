@@ -87,12 +87,47 @@ describe("mounted QueryEditor snippet Escape", () => {
     expect(hasPrevSnippetField(view.state)).toBe(false);
     expect(hasNextSnippetField(view.state)).toBe(true);
 
-    // Fill the selected first field before advancing, matching the editor's
-    // existing distinction between snippet navigation and selected-text indent.
-    view.dispatch(view.state.replaceSelection("renamed"));
     press(view, "Tab");
     expect(selectedText(view)).toBe(editSecondField ? "id" : "column");
-    expect(view.state.doc.toString()).toBe(beforeBack.replace("demo", "renamed"));
+    expect(view.state.doc.toString()).toBe(beforeBack);
+  });
+
+  it("navigates untouched fields with Tab, Shift+Tab, Tab without indenting", async () => {
+    const view = await mountEditor();
+    snippet("CREATE TABLE ${table} (${column} ${type});")(view, { label: "create table" }, 0, 0);
+    const original = view.state.doc.toString();
+    expect(selectedText(view)).toBe("table");
+    press(view, "Tab");
+    expect(selectedText(view)).toBe("column");
+    press(view, "Tab", true);
+    expect(selectedText(view)).toBe("table");
+    press(view, "Tab");
+    expect(selectedText(view)).toBe("column");
+    press(view, "Tab");
+    expect(selectedText(view)).toBe("type");
+    expect(view.state.doc.toString()).toBe(original);
+    expect(hasNextSnippetField(view.state)).toBe(false);
+    expect(hasPrevSnippetField(view.state)).toBe(false);
+  });
+
+  it("still indents an ordinary selected range outside a snippet", async () => {
+    const view = await mountEditor();
+    const sql = "SELECT id\nFROM users;";
+    view.dispatch({ changes: { from: 0, insert: sql }, selection: { anchor: 0, head: sql.length } });
+    press(view, "Tab");
+    expect(view.state.doc.toString()).toMatch(/^[ \t]+SELECT id\n[ \t]+FROM users;$/);
+    expect(hasNextSnippetField(view.state)).toBe(false);
+  });
+
+  it("still accepts completion after typing into a snippet field", async () => {
+    const view = await mountEditor();
+    snippet("CREATE TABLE ${table} (${column} ${type});")(view, { label: "create table" }, 0, 0);
+    view.dispatch(view.state.replaceSelection("demo"));
+    startCompletion(view);
+    await vi.waitFor(() => expect(completionStatus(view.state)).toBe("active"));
+    press(view, "Tab");
+    await vi.waitFor(() => expect(view.state.doc.toString()).toContain("candidate"));
+    expect(selectedText(view)).not.toBe("column");
   });
 
   it("dismisses completion through the real hidden search panel and keeps later fields", async () => {

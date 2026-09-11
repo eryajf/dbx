@@ -893,7 +893,12 @@ function editorIndentUnit(): string {
 }
 
 function handleTab(view: EditorViewType): boolean {
-  if (view.state.selection.ranges.some((range) => !range.empty)) return codeMirrorIndentMore?.(view) ?? false;
+  if (isEditorComposing(view)) return false;
+  if (view.state.selection.ranges.some((range) => !range.empty)) {
+    // Snippet navigation selects the whole field, including after Shift+Tab.
+    // Give that active session priority over ordinary selected-text indentation.
+    return (codeMirrorNextSnippetField?.(view) ?? false) || (codeMirrorIndentMore?.(view) ?? false);
+  }
   if (tabKeyAcceptsCompletion()) {
     return acceptCompletionOrNextSnippetField(view) || performNormalTab(view);
   }
@@ -2394,9 +2399,8 @@ function selectAllSelectionOccurrencesFromContextMenu() {
 }
 
 function acceptCompletionOrNextSnippetField(view: EditorViewType): boolean {
-  // Any non-empty selection range means Tab is being used for block indent,
-  // not word completion. A completion popup can still appear as a side effect
-  // of the indent edit itself, so it must never hijack this or a following Tab.
+  // A non-empty selection belongs to snippet navigation or block indentation,
+  // not word completion. A popup opened by an indent edit must not hijack Tab.
   if (isEditorComposing(view)) return false;
   if (view.state.selection.ranges.every((range) => range.empty)) {
     const completionStatus = codeMirrorCompletionStatus?.(view.state) ?? null;

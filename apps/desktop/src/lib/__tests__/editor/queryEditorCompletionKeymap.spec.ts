@@ -471,7 +471,7 @@ describe("QueryEditor completion Tab keymap", () => {
   it("indents mixed multi-range selections instead of accepting an active completion", () => {
     const completionStatus = vi.fn(() => "active" as const);
     const acceptCompletion = vi.fn(() => true);
-    const nextSnippetField = vi.fn(() => true);
+    const nextSnippetField = vi.fn(() => false);
     const indentMore = vi.fn(() => true);
     const harness = createHarness({ completionStatus, acceptCompletion, nextSnippetField, indentMore });
     const view = createMixedMultiRangeView();
@@ -480,8 +480,31 @@ describe("QueryEditor completion Tab keymap", () => {
     expect(indentMore).toHaveBeenCalledWith(view);
     expect(completionStatus).not.toHaveBeenCalled();
     expect(acceptCompletion).not.toHaveBeenCalled();
-    expect(nextSnippetField).not.toHaveBeenCalled();
+    expect(nextSnippetField).toHaveBeenCalledWith(view);
     expect(view.state.replaceSelection).not.toHaveBeenCalled();
+  });
+
+  it("navigates a selected snippet field even when completion acceptance is remapped", () => {
+    const nextSnippetField = vi.fn(() => true);
+    const indentMore = vi.fn(() => true);
+    const acceptCompletion = vi.fn(() => true);
+    const harness = createHarness({ completionStatus: () => "active", nextSnippetField, indentMore, acceptCompletion, acceptCompletionShortcut: "Enter" });
+    const view = createMultiLineSelectionView();
+
+    expect(harness.handleTab(view)).toBe(true);
+    expect(nextSnippetField).toHaveBeenCalledWith(view);
+    expect(indentMore).not.toHaveBeenCalled();
+    expect(acceptCompletion).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate or indent a selected field during IME composition", () => {
+    const nextSnippetField = vi.fn(() => true);
+    const indentMore = vi.fn(() => true);
+    const harness = createHarness({ completionStatus: () => "active", nextSnippetField, indentMore, imeComposing: () => true });
+
+    expect(harness.handleTab(createMultiLineSelectionView())).toBe(false);
+    expect(nextSnippetField).not.toHaveBeenCalled();
+    expect(indentMore).not.toHaveBeenCalled();
   });
 
   it("does not accept or wait for completion when a mixed multi-range selection is active", async () => {
