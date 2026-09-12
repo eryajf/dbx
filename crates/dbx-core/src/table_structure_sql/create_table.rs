@@ -74,7 +74,12 @@ pub fn build_create_table_sql(mut options: TableStructureSqlOptions) -> TableStr
                 parts.push(format!("COLLATE {}", quote_ident(dialect, &column.collation)));
             }
         }
-        if !column.is_nullable
+        if dialect == StructureDialect::Sqlite
+            && column.is_primary_key
+            && column.extra.as_ref().is_some_and(|e| e.auto_increment.unwrap_or(false))
+        {
+            parts.push("PRIMARY KEY".to_string());
+        } else if !column.is_nullable
             && !column.is_primary_key
             && !matches!(dialect, StructureDialect::ClickHouse | StructureDialect::ManticoreSearch)
         {
@@ -106,7 +111,12 @@ pub fn build_create_table_sql(mut options: TableStructureSqlOptions) -> TableStr
 
     let pk_columns: Vec<_> = active_columns
         .iter()
-        .filter(|column| column.is_primary_key && dialect != StructureDialect::ManticoreSearch)
+        .filter(|column| {
+            column.is_primary_key
+                && dialect != StructureDialect::ManticoreSearch
+                && !(dialect == StructureDialect::Sqlite
+                    && column.extra.as_ref().is_some_and(|e| e.auto_increment.unwrap_or(false)))
+        })
         .collect();
     if !pk_columns.is_empty() {
         let pk_list = pk_columns
