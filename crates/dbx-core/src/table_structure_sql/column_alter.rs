@@ -994,11 +994,8 @@ pub(super) fn build_sqlite_existing_column_sql(
             || lower.contains("identity")
             || lower.contains("serial")
     });
-    let auto_increment_changed = column
-        .extra
-        .as_ref()
-        .and_then(|e| e.auto_increment)
-        .is_some_and(|value| value != original_auto_increment);
+    let auto_increment_changed =
+        column.extra.as_ref().and_then(|e| e.auto_increment).is_some_and(|value| value != original_auto_increment);
     let unsupported_change = column.data_type.trim() != original.data_type.trim()
         || column.is_nullable != original.is_nullable
         || normalize_default(Some(&column.default_value)) != original_default(column)
