@@ -5127,6 +5127,12 @@ fn generate_create_table_sql(
                     }
                 }
                 if !suffix.is_empty() {
+                    // SQLite requires AUTOINCREMENT to be part of an inline
+                    // INTEGER PRIMARY KEY declaration; it cannot be combined
+                    // with the table-level PRIMARY KEY clause below.
+                    if db_type == DatabaseType::Sqlite && col.is_primary_key && suffix.contains("AUTOINCREMENT") {
+                        def.push_str(" PRIMARY KEY");
+                    }
                     def.push_str(suffix);
                 }
                 if postgres_sequence {
@@ -5134,7 +5140,7 @@ fn generate_create_table_sql(
                     auto_col_name = Some(col.name.clone());
                 }
                 col_defs.push(def);
-                if col.is_primary_key {
+                if col.is_primary_key && !(db_type == DatabaseType::Sqlite && suffix.contains("AUTOINCREMENT")) {
                     pk_cols.push(quote_id(&col.name, db_type));
                 }
             }

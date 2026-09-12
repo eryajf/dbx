@@ -405,7 +405,13 @@ pub fn apply_auto_inc_to_column_def(
     col: &ColumnInfo,
     is_integer_like: bool,
 ) -> AutoIncColumnBuild {
-    let wants_auto = col.is_primary_key && (column_is_auto_increment(col) || is_integer_like);
+    let wants_auto = col.is_primary_key
+        && (column_is_auto_increment(col)
+            || (is_integer_like
+                && !matches!(
+                    profile.auto_inc,
+                    crate::sql_dialect::ddl_profile::AutoIncSyntax::Suffix(" AUTOINCREMENT")
+                )));
 
     match profile.auto_inc {
         crate::sql_dialect::ddl_profile::AutoIncSyntax::ReplaceTypeWith(type_name)

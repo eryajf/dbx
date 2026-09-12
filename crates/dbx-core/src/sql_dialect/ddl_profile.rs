@@ -539,7 +539,7 @@ fn sqlite_family(db: DatabaseType) -> DdlDialectProfile {
     DdlDialectProfile {
         database_type: db,
         quote: QuoteStyle::DoubleQuote,
-        auto_inc: AutoIncSyntax::None,
+        auto_inc: AutoIncSyntax::Suffix(" AUTOINCREMENT"),
         supports_display_width: false,
         requires_explicit_varchar_length: false,
         max_varchar_len: None,
