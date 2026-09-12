@@ -6131,6 +6131,7 @@ export default withEnglishFallback({
     tabPlacementLeft: "왼쪽",
     tabPlacementRight: "오른쪽",
     tabPlacementDescription: "사이드 탭 표시줄은 세로로 스크롤됩니다. 여러 줄 표시는 콘텐츠 위 또는 아래에서만 적용됩니다.",
+    tabOrganization: "위치, 그룹화, 정렬",
     tabGroup: "그룹 기준",
     tabGroupNone: "그룹화 안 함",
     tabGroupDatabaseType: "데이터베이스 유형별 그룹화",

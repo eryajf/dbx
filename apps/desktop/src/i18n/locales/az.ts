@@ -6815,6 +6815,7 @@ export default withEnglishFallback({
     tabPlacementLeft: "Sol tərəf",
     tabPlacementRight: "Sağ tərəf",
     tabPlacementDescription: "Yan vərəq zolaqları şaquli sürüşdürülür; bir neçə sətrə keçirmə yalnız məzmunun üstündə və ya altında tətbiq olunur.",
+    tabOrganization: "Mövqe, qruplaşdırma, sıralama",
     tabGroup: "Qruplaşdırma meyarı",
     tabGroupNone: "Qruplaşdırma yoxdur",
     tabGroupDatabaseType: "Verilənlər bazasının növünə görə qruplaşdır",

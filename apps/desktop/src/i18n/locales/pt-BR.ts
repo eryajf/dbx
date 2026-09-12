@@ -6390,6 +6390,7 @@ export default withEnglishFallback({
     tabPlacementLeft: "Lado esquerdo",
     tabPlacementRight: "Lado direito",
     tabPlacementDescription: "As barras laterais rolam verticalmente; a quebra em múltiplas linhas só se aplica acima ou abaixo do conteúdo.",
+    tabOrganization: "Posição, agrupamento e ordenação",
     tabGroup: "Agrupar por",
     tabGroupNone: "Sem agrupamento",
     tabGroupDatabaseType: "Agrupar por tipo de banco de dados",

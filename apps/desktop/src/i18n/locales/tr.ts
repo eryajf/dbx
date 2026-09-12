@@ -6697,6 +6697,7 @@ export default withEnglishFallback({
     tabPlacementLeft: "Sol taraf",
     tabPlacementRight: "Sağ taraf",
     tabPlacementDescription: "Yan sekme çubukları dikey kayar; çok satırlı sarma yalnızca içeriğin üstünde veya altında geçerlidir.",
+    tabOrganization: "Konum, gruplama, sıralama",
     tabGroup: "Gruplama ölçütü",
     tabGroupNone: "Gruplama yok",
     tabGroupDatabaseType: "Veritabanı türüne göre grupla",

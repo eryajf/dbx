@@ -6814,6 +6814,7 @@ export default {
     tabPlacementLeft: "Left side",
     tabPlacementRight: "Right side",
     tabPlacementDescription: "Side tab bars scroll vertically; multi-row wrapping applies only above or below content.",
+    tabOrganization: "Position, grouping, sorting",
     tabGroup: "Group by",
     tabGroupNone: "No grouping",
     tabGroupDatabaseType: "Group by database type",
