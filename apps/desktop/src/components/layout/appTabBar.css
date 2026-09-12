@@ -569,6 +569,35 @@
   line-height: 1;
 }
 
+/* Modern split bars use h-7 (1.75rem) pills. Keep the group header on that
+ * exact baseline; the surrounding 2.5rem strip supplies the outer breathing
+ * room. Wrapped rows opt out and use their intrinsic row height below. */
+.app-tab-bar.separated-tab-layout:not(.vertical-tab-layout):not(:has(.wrap-mode)) .tab-group-header {
+  height: 1.75rem;
+  align-self: center;
+}
+
+.app-tab-bar.separated-tab-layout:not(.vertical-tab-layout):not(:has(.wrap-mode)) .tab-group-header-content {
+  height: 1.75rem;
+}
+
+/* The modern top/bottom bar joins the group header and its pills into one
+ * continuous horizontal rail. Rounded pseudo-elements at the seam create a
+ * visible bump (the “turn” between the two pieces), so keep that rail flat. */
+.app-tab-bar.separated-tab-layout:not(.vertical-tab-layout):not(:has(.wrap-mode)) .tab-group-header::after,
+.app-tab-bar.separated-tab-layout:not(.vertical-tab-layout):not(:has(.wrap-mode)) .tab-group-tab::after {
+  border-radius: 0;
+}
+
+.app-tab-bar.separated-tab-layout:not(.vertical-tab-layout):not(:has(.wrap-mode)) .tab-group-header::after {
+  bottom: 0;
+}
+
+.app-tab-bar.separated-tab-layout:not(.vertical-tab-layout):not(:has(.wrap-mode))[data-placement="bottom"] .tab-group-header::after {
+  top: 0;
+  bottom: auto;
+}
+
 /* Wrapped rows must use their own content height. In particular, avoid
  * height: 100% here: when a group expands into another row it makes the
  * auto-sized flex container feed its height back into the row measurement. */
