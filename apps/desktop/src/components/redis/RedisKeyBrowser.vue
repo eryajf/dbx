@@ -3478,9 +3478,9 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
                       variant="ghost"
                       size="icon"
                       class="h-6 w-6"
-                      :class="blockDangerousRedisCommands ? 'text-orange-600 bg-orange-100 dark:text-orange-300 dark:bg-orange-900/30' : 'text-muted-foreground/50'"
+                      :class="props.blockDangerousRedisCommands ? 'text-orange-600 bg-orange-100 dark:text-orange-300 dark:bg-orange-900/30' : 'text-muted-foreground/50'"
                       :aria-label="t('toolbar.blockDangerousRedisCommands')"
-                      :aria-pressed="blockDangerousRedisCommands"
+                      :aria-pressed="props.blockDangerousRedisCommands"
                       @click="settingsStore.updateEditorSettings({ blockDangerousRedisCommands: !props.blockDangerousRedisCommands })"
                     >
                       <Shield class="size-3.5" />
