@@ -1452,16 +1452,11 @@ provide(sidebarTreeContextKey, {
         // Refresh only the tables group. Refreshing the database/schema node
         // also reloads views, routines, triggers, etc., causing a visible
         // redraw of the whole sidebar for a table-only operation.
-        const findTablesGroup = (node: TreeNode): TreeNode | undefined => {
-          if (node.type === "group-tables") return node;
-          for (const child of node.children ?? []) {
-            const found = findTablesGroup(child);
-            if (found) return found;
-          }
-          return undefined;
-        };
-        const tablesGroup = parent.type === "group-tables" ? parent : findTablesGroup(parent);
-        if (tablesGroup) await store.loadObjectGroupChildren(tablesGroup, { force: true });
+        if (parent.type === "group-tables") {
+          await store.loadObjectGroupChildren(parent, { force: true });
+        } else if (localTableSearchParentTypes.has(parent.type)) {
+          await store.loadTables(parent.connectionId, parent.database, parent.schema, { force: true });
+        }
       }
       await loadLocalTableSearchResults(parentNodeId, true);
     })().catch((error) => {

@@ -196,7 +196,6 @@ function handleCancelClose() {
 </script>
 
 <template>
-  <!-- Plugin center tab marker is rendered by the group tab bar. data-plugin-center-tab -->
   <!-- Targets remain mounted while inactive so the original group bars can
        move here without losing their local presentation state. -->
   <div v-show="driverStoreActive || pluginCenterActive || settingsPageActive" data-special-page-workspace class="flex min-h-0 min-w-0 flex-1 overflow-hidden" :class="layoutClass">

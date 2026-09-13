@@ -490,7 +490,6 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- Marketplace cards use a responsive repeat(auto-fit) grid in list mode. -->
   <div ref="panelRootRef" class="plugin-center-view relative mx-auto flex h-full w-full max-w-6xl flex-col gap-4 overflow-hidden px-6 py-6" @dragenter="onWebDragEnter" @dragover="onWebDragOver" @dragleave="onWebDragLeave" @drop="onWebDrop">
     <input ref="webFileInput" type="file" accept=".dbxp" class="hidden" @change="handleWebPackage" />
     <div v-if="error" class="shrink-0 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{{ error }}</div>

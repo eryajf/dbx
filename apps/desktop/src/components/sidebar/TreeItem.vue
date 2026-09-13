@@ -1177,10 +1177,10 @@ const {
   connectionStore.reorderSidebarEntries(draggedIds, targetId, position, { preserveSameGroupOrder: props.moveToGroupOnly });
 });
 
-function canReorderTreeNode(): boolean {
+const canReorderTreeNode = computed(() => {
   if (props.reorderDisabled) return false;
   return activeNode.value.type === "connection" || activeNode.value.type === "connection-group";
-}
+});
 
 function isPinnedOrderDrag(): boolean {
   return dragState.active && dragState.draggedType === PINNED_TREE_NODE_DRAG_TYPE;
@@ -1388,7 +1388,7 @@ function startTableReferenceMouseDrag(event: MouseEvent) {
 }
 
 function onRowMouseDown(event: MouseEvent) {
-  if (canReorderTreeNode()) {
+  if (canReorderTreeNode.value) {
     startDrag(event, activeNode.value.id, activeNode.value.type);
   } else if (canDragTableReference.value) {
     startTableReferenceMouseDrag(event);
