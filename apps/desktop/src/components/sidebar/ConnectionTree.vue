@@ -1433,7 +1433,43 @@ provide(sidebarTreeContextKey, {
       scheduleLocalSidebarTableSearchRefresh(parentNodeId, focusRestore);
     } else scheduleSidebarTableSearchRefresh(parentNodeId, { focusRestore });
   },
-  refreshTableSearchIndex: (parentNodeId) => void loadLocalTableSearchResults(parentNodeId, true),
+  refreshTableSearchIndex: (parentNodeId) => {
+    // Re-fetch the live object list before rebuilding the local index. The
+    // index refresh used to scan the database correctly, but the tree itself
+    // still contained the old first page, so newly-created tables could not
+    // be rendered even though they were present in the refreshed index.
+    const findNode = (nodes: TreeNode[]): TreeNode | undefined => {
+      for (const node of nodes) {
+        if (node.id === parentNodeId) return node;
+        const found = node.children ? findNode(node.children) : undefined;
+        if (found) return found;
+      }
+      return undefined;
+    };
+    void (async () => {
+      const parent = findNode(store.treeNodes);
+      if (parent?.connectionId && parent.database && (parent.type === "database" || parent.type === "schema" || parent.type === "linked-server-schema" || parent.type === "group-tables")) {
+        // Refresh only the tables group. Refreshing the database/schema node
+        // also reloads views, routines, triggers, etc., causing a visible
+        // redraw of the whole sidebar for a table-only operation.
+        const findTablesGroup = (node: TreeNode): TreeNode | undefined => {
+          if (node.type === "group-tables") return node;
+          for (const child of node.children ?? []) {
+            const found = findTablesGroup(child);
+            if (found) return found;
+          }
+          return undefined;
+        };
+        const tablesGroup = parent.type === "group-tables" ? parent : findTablesGroup(parent);
+        if (tablesGroup) await store.loadObjectGroupChildren(tablesGroup, { force: true });
+      }
+      await loadLocalTableSearchResults(parentNodeId, true);
+    })().catch((error) => {
+      // Keep refresh failures inside the UI action boundary instead of
+      // leaving an unhandled Promise rejection when metadata loading fails.
+      toast(error instanceof Error ? error.message : String(error), 5000);
+    });
+  },
   registerPasteHandler: pasteHandlerRegistry.register,
 });
 provide(sidebarTreeRuntimeKey, sidebarTreeRuntime);
