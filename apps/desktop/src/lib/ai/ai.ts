@@ -223,7 +223,8 @@ export async function runAgentStream(input: AiRequestInput, history: api.AiMessa
   const { messages, systemPrompt, taskContract, maxTokens } = buildAgentRequest(input, history, custom);
   const sid = sessionId || uuid();
 
-  return api.aiAgentStream(
+  const selectedDatabases = input.context.selectedDatabases;
+  const args = [
     sid,
     {
       config: input.config,
@@ -244,8 +245,9 @@ export async function runAgentStream(input: AiRequestInput, history: api.AiMessa
     input.confirmedDatabase,
     input.confirmedSchema,
     undefined,
-    input.context.selectedDatabases,
-  );
+    ...(selectedDatabases ? [selectedDatabases] : []),
+  ] as const;
+  return api.aiAgentStream(...args);
 }
 
 export function buildUserPrompt(action: AiAction, context: AiContext, instruction: string, isZh: boolean): string {

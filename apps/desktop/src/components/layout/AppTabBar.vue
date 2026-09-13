@@ -202,7 +202,7 @@ function handleCancelClose() {
     <div data-special-page-navigation class="flex min-h-0 min-w-0 shrink-0 flex-col overflow-auto" :style="navigationStyle">
       <div v-for="group in queryStore.groups" :key="group.id" :ref="(element) => setTabBarTarget(group.id, element)" :data-special-page-tab-target="group.id" class="flex min-h-0 min-w-0" :class="isVerticalLayout ? 'flex-1' : 'shrink-0'" />
     </div>
-    <div data-special-page-content class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <div data-special-page-content data-plugin-center-tab class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <slot />
     </div>
   </div>
