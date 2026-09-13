@@ -53,6 +53,7 @@ import {
   PanelTop,
   Pencil,
   Pin,
+  PlugZap,
   RotateCcw,
   RotateCw,
   Search,
@@ -98,8 +99,8 @@ const props = defineProps<{
   canDetachTabs?: boolean;
   /** A detached tab is being dragged over this bar — highlight it as the drop target. */
   detachedDropTarget?: boolean;
-  /** App-level special pages (settings / driver store) appended after the tabs. */
-  specialPageTabs?: { settingsOpen: boolean; settingsActive: boolean; driverStoreOpen: boolean; driverStoreActive: boolean; driverUpdateCount: number };
+  /** App-level special pages appended after the tabs. */
+  specialPageTabs?: { settingsOpen: boolean; settingsActive: boolean; driverStoreOpen: boolean; driverStoreActive: boolean; pluginCenterOpen: boolean; pluginCenterActive: boolean; driverUpdateCount: number };
 }>();
 
 const emit = defineEmits<{
@@ -113,6 +114,8 @@ const emit = defineEmits<{
   "close-settings": [];
   "activate-driver-store": [];
   "close-driver-store": [];
+  "activate-plugin-center": [];
+  "close-plugin-center": [];
 }>();
 
 const { t } = useI18n();
@@ -135,8 +138,8 @@ const suppressNextTabClick = ref(false);
 const isClassicLayout = computed(() => settingsStore.editorSettings.appLayout === "classic");
 // Special pages append to the focused group's strip only: one instance at a
 // time, in the pane the user is working in (v0.6.2 kept them in the single strip).
-const showSpecialPageTabs = computed(() => !!props.specialPageTabs && (props.specialPageTabs.settingsOpen || props.specialPageTabs.driverStoreOpen) && queryStore.focusedGroupId === props.groupId);
-const specialPageActive = computed(() => !!(props.specialPageTabs?.settingsActive || props.specialPageTabs?.driverStoreActive));
+const showSpecialPageTabs = computed(() => !!props.specialPageTabs && (props.specialPageTabs.settingsOpen || props.specialPageTabs.driverStoreOpen || props.specialPageTabs.pluginCenterOpen) && queryStore.focusedGroupId === props.groupId);
+const specialPageActive = computed(() => !!(props.specialPageTabs?.settingsActive || props.specialPageTabs?.driverStoreActive || props.specialPageTabs?.pluginCenterActive));
 
 function isTabActive(tab: QueryTab): boolean {
   return !specialPageActive.value && tab.id === props.activeTabId;
@@ -153,9 +156,11 @@ function specialPageTabClass(active: boolean): string[] {
 }
 
 function specialPageTabStyle(active: boolean) {
-  if (isVerticalLayout.value) return active ? { "--app-tab-background": "var(--accent)" } : undefined;
-  if (!isClassicLayout.value) return undefined;
-  return active ? { boxShadow: "inset 0 -2px 0 var(--ring)" } : undefined;
+  if (!active) return undefined;
+  const activeBackground = "color-mix(in srgb, var(--foreground) 18%, var(--background))";
+  if (isVerticalLayout.value) return { "--app-tab-background": "var(--accent)" };
+  if (!isClassicLayout.value) return { "--app-tab-background": activeBackground, borderColor: "var(--ring)" };
+  return { "--app-tab-background": activeBackground, boxShadow: "inset 0 -2px 0 color-mix(in srgb, var(--foreground) 72%, transparent)" };
 }
 const isVerticalLayout = computed(() => settingsStore.editorSettings.tabPlacement === "left" || settingsStore.editorSettings.tabPlacement === "right");
 const isWrapLayout = computed(() => !isVerticalLayout.value && settingsStore.editorSettings.tabLayout === "wrap");
@@ -192,16 +197,22 @@ function toggleCompactTabTitle() {
   compactTabTitle.value = !compactTabTitle.value;
 }
 
-function getSpecialPageTabMenuItems(surface: "settings" | "driverStore"): ContextMenuItem[] {
-  const closeCurrent = surface === "settings" ? () => emit("close-settings") : () => emit("close-driver-store");
-  const otherOpen = surface === "settings" ? props.specialPageTabs?.driverStoreOpen : props.specialPageTabs?.settingsOpen;
+function getSpecialPageTabMenuItems(surface: "settings" | "driverStore" | "pluginCenter"): ContextMenuItem[] {
+  const closeCurrent = surface === "settings" ? () => emit("close-settings") : surface === "driverStore" ? () => emit("close-driver-store") : () => emit("close-plugin-center");
+  const otherOpen =
+    surface === "settings" ? props.specialPageTabs?.driverStoreOpen || props.specialPageTabs?.pluginCenterOpen : surface === "driverStore" ? props.specialPageTabs?.settingsOpen || props.specialPageTabs?.pluginCenterOpen : props.specialPageTabs?.settingsOpen || props.specialPageTabs?.driverStoreOpen;
+  const closeOthers = () => {
+    if (surface !== "settings") emit("close-settings");
+    if (surface !== "driverStore") emit("close-driver-store");
+    if (surface !== "pluginCenter") emit("close-plugin-center");
+  };
   return [
     { label: compactTabTitle.value ? t("contextMenu.fullTabTitle") : t("contextMenu.compactTabTitle"), action: toggleCompactTabTitle, icon: compactTabTitle.value ? Maximize2 : Minimize2 },
     { label: "", separator: true },
     { label: t("contextMenu.closeTab"), action: closeCurrent, icon: X },
     {
       label: t("contextMenu.closeOtherTabs"),
-      action: () => (surface === "settings" ? emit("close-driver-store") : emit("close-settings")),
+      action: closeOthers,
       disabled: !otherOpen,
       icon: X,
     },
@@ -1392,7 +1403,7 @@ watch(
   { flush: "post" },
 );
 
-watch([() => props.specialPageTabs?.settingsActive, () => props.specialPageTabs?.driverStoreActive, () => settingsStore.editorSettings.tabPlacement, () => props.tabBarCollapsed], () => {
+watch([() => props.specialPageTabs?.settingsActive, () => props.specialPageTabs?.driverStoreActive, () => props.specialPageTabs?.pluginCenterActive, () => settingsStore.editorSettings.tabPlacement, () => props.tabBarCollapsed], () => {
   nextTick(() => {
     updateScrollButtons();
     if (showSpecialPageTabs.value && specialPageActive.value) {
@@ -1614,6 +1625,31 @@ watch([() => props.specialPageTabs?.settingsActive, () => props.specialPageTabs?
                   </CustomContextMenu>
                 </template>
                 <template v-if="!section.pinned && showSpecialPageTabs">
+                  <CustomContextMenu v-if="specialPageTabs?.pluginCenterOpen" :items="getSpecialPageTabMenuItems('pluginCenter')" v-slot="{ onContextMenu }">
+                    <div
+                      data-plugin-center-tab
+                      class="app-tab-pill group flex shrink-0 cursor-default items-center gap-1 px-2 text-xs transition-colors whitespace-nowrap select-none"
+                      :class="specialPageTabClass(!!specialPageTabs?.pluginCenterActive)"
+                      :style="specialPageTabStyle(!!specialPageTabs?.pluginCenterActive)"
+                      :data-active-tab="specialPageTabs?.pluginCenterActive"
+                      :title="t('toolbar.pluginCenter')"
+                      :aria-label="t('toolbar.pluginCenter')"
+                      :aria-pressed="!!specialPageTabs?.pluginCenterActive"
+                      role="button"
+                      tabindex="0"
+                      @click="emit('activate-plugin-center')"
+                      @keydown.enter.self.prevent="emit('activate-plugin-center')"
+                      @keydown.space.self.prevent="emit('activate-plugin-center')"
+                      @contextmenu="onContextMenu"
+                      @mousedown.middle.prevent="emit('close-plugin-center')"
+                    >
+                      <PlugZap class="h-3.5 w-3.5 shrink-0 text-violet-600 dark:text-violet-400" />
+                      <span v-if="!isTabBarCollapsed" class="min-w-0 flex-1 truncate">{{ t("toolbar.pluginCenter") }}</span>
+                      <button v-if="!isTabBarCollapsed" class="shrink-0 rounded p-0.5 hover:bg-muted-foreground/20" :aria-label="t('common.close')" :title="t('common.close')" @click.stop="emit('close-plugin-center')">
+                        <X class="h-3 w-3" />
+                      </button>
+                    </div>
+                  </CustomContextMenu>
                   <CustomContextMenu v-if="specialPageTabs?.settingsOpen" :items="getSpecialPageTabMenuItems('settings')" v-slot="{ onContextMenu }">
                     <div
                       data-settings-page-tab

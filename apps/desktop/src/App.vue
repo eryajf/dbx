@@ -868,6 +868,8 @@ const specialPageTabs = computed(() => ({
   settingsActive: settingsStore.settingsPageActive,
   driverStoreOpen: driverStoreTabOpen.value,
   driverStoreActive: driverStoreActive.value,
+  pluginCenterOpen: pluginCenterTabOpen.value,
+  pluginCenterActive: pluginCenterActive.value,
   driverUpdateCount: toolbarAgentDriverUpdateCount.value,
 }));
 provide(GROUP_TAB_BAR_PORTAL, createGroupTabBarPortal(computed(() => !isDetachedWindowContext && (driverStoreActive.value || pluginCenterActive.value || settingsStore.settingsPageActive))));
@@ -899,6 +901,8 @@ provide(EDITOR_TOOLBAR_ACTIONS, {
   closeSettingsPage,
   activateDriverStore: () => openDriverStorePage(),
   closeDriverStore: closeDriverStorePage,
+  activatePluginCenter: () => openPluginCenterPage(pluginCenterFocus.value),
+  closePluginCenter: closePluginCenterPage,
 });
 
 // Upstream "preview changes" entry: dormant until the group toolbar wires the
@@ -3635,7 +3639,6 @@ onUnmounted(() => {
                 :tab-bar-width="tabBarWidth"
                 :tab-bar-collapsed="tabBarCollapsed"
                 @activate-driver-store="openDriverStorePage"
-                @activate-plugin-center="openPluginCenterPage(pluginCenterFocus)"
                 @activate-settings-page="activateSettingsPage"
                 @activate-tab="activateQueryTab"
                 @close-driver-store="closeDriverStorePage"
