@@ -28,6 +28,7 @@ import {
   Plug,
   Unplug,
   Pin,
+  PlugZap,
   ArrowRightLeft,
   Download,
   Eye,
@@ -70,6 +71,8 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { savedSqlErrorMessage } from "@/lib/savedSql/savedSqlErrors";
 import { useToast } from "@/composables/useToast";
+import { createFrontendPluginRegistry } from "@/lib/plugins/frontendPlugin";
+import type { InstalledPlugin } from "@/types/database";
 import { useDatabaseOptions } from "@/composables/useDatabaseOptions";
 import type { ColumnInfo, ConnectionConfig, DatabaseType, TreeNode, TreeNodeType } from "@/types/database";
 import * as api from "@/lib/backend/api";
@@ -339,7 +342,7 @@ import {
   type DuplicateStructureSource,
 } from "./sidebarTreeDialogState";
 
-const { t } = useI18n();
+const { t, locale: appLocale } = useI18n();
 
 const connectionStore = useConnectionStore();
 
@@ -350,6 +353,15 @@ const settingsStore = useSettingsStore();
 const savedSqlStore = useSavedSqlStore();
 
 const { toast } = useToast();
+const installedPlugins = ref<InstalledPlugin[]>([]);
+const sidebarPluginRegistry = computed(() => createFrontendPluginRegistry(installedPlugins.value, appLocale.value));
+
+void api.listPlugins().then(
+  (plugins) => {
+    installedPlugins.value = plugins.filter((plugin) => plugin.compatibility.compatible);
+  },
+  () => {},
+);
 
 const { highlight } = useSqlHighlighter();
 
@@ -924,6 +936,9 @@ async function toggle(requestId = beginNavigationRequest()) {
         await connectionStore.loadNacosNamespaces(node.connectionId, treeLoadSearchOptions);
       } else if (config?.db_type === "mqtt") {
         await connectionStore.loadMqttTopics(node.connectionId);
+      } else if (config?.db_type === "plugin") {
+        await queryStore.openPluginConnection(node.connectionId);
+        return;
       } else {
         await connectionStore.loadDatabases(node.connectionId, treeLoadSearchOptions);
       }
@@ -1628,13 +1643,16 @@ async function openObjectBrowser(eventReadOnly = false, openEventEditor: boolean
     const eventCreateRequestId = openEventEditor === "create" && node.type === "group-events" ? ++mysqlEventCreateRequestSeq : undefined;
     const objectFilter = node.type === "event" || node.type === "group-events" ? "events" : undefined;
 
+    const connection = connectionStore.getConfig(node.connectionId);
+    if (!connection) return;
+    if (connection.db_type === "plugin") {
+      await queryStore.openPluginConnection(node.connectionId);
+      return;
+    }
     if (hasTreeNodeDatabaseContext(node)) {
       queryStore.openObjectBrowser(node.connectionId, node.database, node.schema, node.catalog, eventName, eventReadOnly, objectFilter, eventCreateRequestId);
       return;
     }
-
-    const connection = connectionStore.getConfig(node.connectionId);
-    if (!connection) return;
     const options = await getDatabaseOptions(node.connectionId);
     const database = resolveDefaultDatabase(connection, options);
     if (database) {
@@ -6453,7 +6471,38 @@ function treeItemMenuItems(): ContextMenuItem[] {
     items.push({ label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
   }
 
+  appendPluginConnectionMenuItems(items, node);
+
   return items;
+}
+
+/** Plugin-contributed native menu entries for saved connections. */
+function appendPluginConnectionMenuItems(items: ContextMenuItem[], node: TreeNode) {
+  if (node.type !== "connection") return;
+  const pluginItems = sidebarPluginRegistry.value.listContextMenuItems("connection");
+  if (pluginItems.length === 0) return;
+  const config = node.connectionId ? connectionStore.getConfig(node.connectionId) : undefined;
+  if (!config) return;
+  items.push({ label: "", separator: true });
+  for (const { plugin, contribution } of pluginItems) {
+    items.push({
+      label: contribution.label,
+      icon: PlugZap,
+      action: () => {
+        api
+          .invokePlugin(plugin.manifest.id, `contextMenu/${contribution.id}`, {
+            connection: { id: config.id, dbType: config.db_type, name: config.name, database: config.database || "" },
+          })
+          .then((result) => {
+            const message = (result as { message?: unknown } | null | undefined)?.message;
+            if (typeof message === "string" && message.trim()) toast(message, 4000);
+          })
+          .catch((error: unknown) => {
+            toast(String((error as Error)?.message || error), 5000);
+          });
+      },
+    });
+  }
 }
 
 function activateRuntimeNode(node: TreeNode) {

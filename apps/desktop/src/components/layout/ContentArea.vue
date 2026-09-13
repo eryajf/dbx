@@ -123,6 +123,8 @@ const XuguServerDashboard = defineAsyncComponent(() => import("@/components/admi
 const DamengJobAdmin = defineAsyncComponent(() => import("@/components/admin/DamengJobAdmin.vue"));
 const DamengUserAdmin = defineAsyncComponent(() => import("@/components/admin/DamengUserAdmin.vue"));
 const DamengRoleAdmin = defineAsyncComponent(() => import("@/components/admin/DamengRoleAdmin.vue"));
+const PluginWorkbenchTab = defineAsyncComponent(() => import("@/components/plugins/PluginWorkbenchTab.vue"));
+const PluginFilesystemTab = defineAsyncComponent(() => import("@/components/plugins/PluginFilesystemTab.vue"));
 const ExplainPlanViewer = defineAsyncComponent(() => import("@/components/explain/ExplainPlanViewer.vue"));
 const QueryChart = defineAsyncComponent(() => import("@/components/chart/QueryChart.vue"));
 import { useQueryStore } from "@/stores/queryStore";
@@ -981,6 +983,25 @@ function onRefreshActiveKvBrowser(event: Event) {
   void nextTick(() => refreshData());
 }
 
+function openPluginResultView(pluginId: string, contributionId: string, label: string) {
+  const result = props.activeTab.result;
+  if (!result) return;
+  // Plugin workbenches receive a bounded snapshot; plugins re-query through
+  // their backend when they need the full or streamed result set.
+  const cappedRows = result.rows.slice(0, 500);
+  queryStore.openPluginWorkbench(pluginId, contributionId, {
+    title: label,
+    connectionId: props.activeTab.connectionId || "",
+    database: props.activeTab.database || "",
+    context: {
+      connectionId: props.activeTab.connectionId || "",
+      database: props.activeTab.database || "",
+      sql: props.activeTab.sql,
+      result: { columns: result.columns, rows: cappedRows, truncated: result.rows.length > cappedRows.length },
+    },
+  });
+}
+
 async function exportResultArchive() {
   if (resultArchiveExporting.value) return;
   resultArchiveExporting.value = true;
@@ -1712,9 +1733,11 @@ defineExpose({
                 :can-export-archive="canExportResultArchive"
                 :archive-exporting="resultArchiveExporting"
                 :compact="standaloneResultToolbarCompact"
+                :has-result="!!activeTab.result"
                 @select-explain="emit('update:activeOutputView', activeTab.id, 'explain')"
                 @select-profile="emit('update:activeOutputView', activeTab.id, 'profile')"
                 @export-archive="exportResultArchive"
+                @open-result-view="openPluginResultView"
               />
             </div>
 
@@ -1953,9 +1976,11 @@ defineExpose({
                     :can-export-archive="canExportResultArchive"
                     :archive-exporting="resultArchiveExporting"
                     :compact="compact"
+                    :has-result="!!activeTab.result"
                     @select-explain="emit('update:activeOutputView', activeTab.id, 'explain')"
                     @select-profile="emit('update:activeOutputView', activeTab.id, 'profile')"
                     @export-archive="exportResultArchive"
+                    @open-result-view="openPluginResultView"
                   />
                 </template>
                 <template v-if="activeTab.result && isQueryExecutionErrorResult(activeTab.result)" #error-actions="{ errorMessage }">
@@ -2501,6 +2526,23 @@ defineExpose({
       </div>
     </template>
 
+    <template v-else-if="activeTab.mode === 'plugin-workbench' && activeTab.pluginWorkbench">
+      <div class="flex-1 min-h-0">
+        <PluginWorkbenchTab :key="activeTab.id" :plugin-id="activeTab.pluginWorkbench.pluginId" :contribution-id="activeTab.pluginWorkbench.contributionId" :context="activeTab.pluginWorkbench.context" />
+      </div>
+    </template>
+    <template v-else-if="activeTab.mode === 'plugin-filesystem' && activeTab.pluginFilesystem">
+      <div class="flex h-full min-h-0 flex-col">
+        <PluginFilesystemTab
+          :key="activeTab.id"
+          :plugin-id="activeTab.pluginFilesystem.pluginId"
+          :provider-id="activeTab.pluginFilesystem.providerId"
+          :connection-id="activeTab.connectionId || undefined"
+          :root-uri="activeTab.pluginFilesystem.rootUri"
+          :initial-uri="activeTab.pluginFilesystem.currentUri"
+        />
+      </div>
+    </template>
     <template v-else-if="activeTab.mode === 'databases' && activeConnection">
       <div class="min-w-0 flex-1 min-h-0">
         <DatabaseBrowser ref="databaseBrowserRef" :key="activeTab.id" :connection="activeConnection" />
