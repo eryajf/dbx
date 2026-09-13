@@ -2,7 +2,7 @@
 import { computed, markRaw, nextTick, ref, shallowRef, onMounted, onUnmounted, onActivated, onDeactivated, watch } from "vue";
 import type { CalendarDateTime } from "@internationalized/date";
 import { useI18n } from "vue-i18n";
-import { Search, RefreshCw, Loader2, ChevronRight, ChevronDown, FolderClosed, FolderOpen, Trash2, Plus, KeyRound, TerminalSquare, Asterisk, History, Radio, Clock, Copy, X } from "@lucide/vue";
+import { Search, RefreshCw, Loader2, ChevronRight, ChevronDown, FolderClosed, FolderOpen, Trash2, Plus, KeyRound, TerminalSquare, Asterisk, History, Radio, Clock, Copy, X, Shield } from "@lucide/vue";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
 import { Splitpanes, Pane } from "splitpanes";
@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { OptionHelpPanel } from "@/components/ui/option-help-panel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import DateTimePicker from "@/components/ui/date-time-picker/DateTimePicker.vue";
 import CustomContextMenu, { type ContextMenuItem } from "@/components/ui/CustomContextMenu.vue";
 import DangerConfirmDialog from "@/components/editor/DangerConfirmDialog.vue";
@@ -3470,9 +3471,27 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
                   {{ t("redis.slowlog") }}
                 </TabsTrigger>
               </TabsList>
-              <Button v-if="activeSidePanel === 'command'" variant="ghost" size="icon" class="h-6 w-6" :title="t('redis.clearHistory')" @click="clearInMemoryHistory">
-                <History class="size-3.5" />
-              </Button>
+              <div v-if="activeSidePanel === 'command'" class="flex shrink-0 items-center gap-1">
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="h-6 w-6"
+                      :class="blockDangerousRedisCommands ? 'text-orange-600 bg-orange-100 dark:text-orange-300 dark:bg-orange-900/30' : 'text-muted-foreground/50'"
+                      :aria-label="t('toolbar.blockDangerousRedisCommands')"
+                      :aria-pressed="blockDangerousRedisCommands"
+                      @click="settingsStore.updateEditorSettings({ blockDangerousRedisCommands: !props.blockDangerousRedisCommands })"
+                    >
+                      <Shield class="size-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{{ t("toolbar.blockDangerousRedisCommands") }}</TooltipContent>
+                </Tooltip>
+                <Button variant="ghost" size="icon" class="h-6 w-6" :title="t('redis.clearHistory')" @click="clearInMemoryHistory">
+                  <History class="size-3.5" />
+                </Button>
+              </div>
             </div>
 
             <TabsContent value="detail" class="m-0 min-h-0 flex-1 flex flex-col">
