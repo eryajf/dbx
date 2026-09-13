@@ -21,6 +21,7 @@ import {
   resolveSidebarObjectSearchFilter,
   type SidebarRegexIndexScope,
   type SidebarRegexScopeIdentity,
+  localTableSearchParentTypes,
 } from "@/lib/sidebar/sidebarSearchTree";
 import { createSidebarLabelMatcher } from "@/lib/sidebar/sidebarSearch";
 import { collectSidebarRegexIndexScopes, resolveSidebarRemoteSearchQuery, resolveSidebarSearchDispatchMode } from "@/lib/sidebar/sidebarRegexSearchIndex";
