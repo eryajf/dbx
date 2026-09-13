@@ -15,7 +15,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { OptionHelpPanel } from "@/components/ui/option-help-panel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import DateTimePicker from "@/components/ui/date-time-picker/DateTimePicker.vue";
 import CustomContextMenu, { type ContextMenuItem } from "@/components/ui/CustomContextMenu.vue";
 import DangerConfirmDialog from "@/components/editor/DangerConfirmDialog.vue";
@@ -3472,22 +3471,18 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
                 </TabsTrigger>
               </TabsList>
               <div v-if="activeSidePanel === 'command'" class="flex shrink-0 items-center gap-1">
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      class="h-6 w-6"
-                      :class="props.blockDangerousRedisCommands ? 'text-orange-600 bg-orange-100 dark:text-orange-300 dark:bg-orange-900/30' : 'text-muted-foreground/50'"
-                      :aria-label="t('toolbar.blockDangerousRedisCommands')"
-                      :aria-pressed="props.blockDangerousRedisCommands"
-                      @click="settingsStore.updateEditorSettings({ blockDangerousRedisCommands: !props.blockDangerousRedisCommands })"
-                    >
-                      <Shield class="size-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{{ t("toolbar.blockDangerousRedisCommands") }}</TooltipContent>
-                </Tooltip>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="h-6 w-6"
+                  :class="props.blockDangerousRedisCommands ? 'text-orange-600 bg-orange-100 dark:text-orange-300 dark:bg-orange-900/30' : 'text-muted-foreground/50'"
+                  :aria-label="t('toolbar.blockDangerousRedisCommands')"
+                  :aria-pressed="props.blockDangerousRedisCommands"
+                  :title="t('toolbar.blockDangerousRedisCommands')"
+                  @click="settingsStore.updateEditorSettings({ blockDangerousRedisCommands: !props.blockDangerousRedisCommands })"
+                >
+                  <Shield class="size-3.5" />
+                </Button>
                 <Button variant="ghost" size="icon" class="h-6 w-6" :title="t('redis.clearHistory')" @click="clearInMemoryHistory">
                   <Trash2 class="size-3.5" />
                 </Button>
