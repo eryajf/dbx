@@ -104,6 +104,9 @@ describe("Object Browser pinned ordering", () => {
     expect(objectBrowserRowMatchesPinnedTreeNode(tableRow, treeNodePinIdentity(tableNode("orders", "archive")), context)).toBe(false);
     expect(objectBrowserRowMatchesPinnedTreeNode(tableRow, treeNodePinIdentity(tableNode("orders", "public")), context)).toBe(true);
 
+    const unqualifiedRow: ObjectBrowserRow = { ...tableRow, schema: undefined };
+    expect(objectBrowserRowMatchesPinnedTreeNode(unqualifiedRow, treeNodePinIdentity(tableNode("orders", "archive")), { connectionId: "conn", database: "app" })).toBe(false);
+
     const routineRow: ObjectBrowserRow = { id: "run-int", name: "run", displayName: "run(integer)", schema: "public", type: "FUNCTION", signature: "integer" };
     const routineNode: TreeNode = {
       id: "conn:app:public:functions:run:text",

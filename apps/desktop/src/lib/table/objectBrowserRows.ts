@@ -74,7 +74,28 @@ export function objectBrowserRowPinnedTreeNodeIdentity(row: ObjectBrowserRow, co
 }
 
 export function objectBrowserRowMatchesPinnedTreeNode(row: ObjectBrowserRow, identity: PinnedTreeNodeIdentity, context: ObjectBrowserPinnedTreeNodeContext): boolean {
-  return pinnedTreeNodeIdentityMatches(identity, objectBrowserRowPinnedTreeNodeIdentity(row, context), canonicalizeObjectBrowserPinnedTreeNodeIdentity(context));
+  const rowIdentity = objectBrowserRowPinnedTreeNodeIdentity(row, context);
+  const canonicalize = canonicalizeObjectBrowserPinnedTreeNodeIdentity(context);
+  if (pinnedTreeNodeIdentityMatches(identity, rowIdentity, canonicalize)) return true;
+
+  // PostgreSQL can omit the schema on rows returned while searching the
+  // current database, while the sidebar node still carries the selected
+  // schema.  The object name/type is still scoped by the current browser
+  // context, so allow this representation-only difference to match the
+  // persisted pin after the search is cleared.
+  const canonicalIdentity = canonicalize(identity);
+  const canonicalRow = canonicalize(rowIdentity);
+  const selectedSchema = context.schema?.trim() || "";
+  const schemaEquivalent = canonicalIdentity.schema === canonicalRow.schema || (selectedSchema !== "" && ((canonicalIdentity.schema === selectedSchema && !canonicalRow.schema) || (canonicalRow.schema === selectedSchema && !canonicalIdentity.schema)));
+  return (
+    schemaEquivalent &&
+    canonicalIdentity.connectionId === canonicalRow.connectionId &&
+    canonicalIdentity.database === canonicalRow.database &&
+    canonicalIdentity.catalog === canonicalRow.catalog &&
+    canonicalIdentity.type === canonicalRow.type &&
+    canonicalIdentity.name === canonicalRow.name &&
+    canonicalIdentity.signature === canonicalRow.signature
+  );
 }
 
 function flattenTreeNodeIds(nodes: readonly TreeNode[]): string[] {
