@@ -3222,7 +3222,7 @@ export const useQueryStore = defineStore("query", () => {
     await connectionStore.ensureConnected(connectionId);
     if (workbench) {
       return openPluginWorkbench(pluginId, workbench.contribution.id, {
-        title: `${connection.name} · ${workbench.contribution.label}`,
+        title: connection.name,
         connectionId,
         context: {
           connectionId,
@@ -3235,7 +3235,7 @@ export const useQueryStore = defineStore("query", () => {
     const filesystem = filesystemProviderId ? registry.listFilesystemProviders().find((entry) => entry.plugin.manifest.id === pluginId && entry.contribution.id === filesystemProviderId) : undefined;
     if (!filesystem) throw new Error(`Plugin connection provider '${pluginId}/${providerId}' does not declare a workbench or filesystem provider`);
     return openPluginFilesystem(pluginId, filesystem.contribution.id, {
-      title: `${connection.name} · ${filesystem.contribution.label}`,
+      title: connection.name,
       connectionId,
       rootUri: filesystem.contribution.root_uri,
     });
