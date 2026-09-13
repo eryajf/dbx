@@ -3699,6 +3699,11 @@ onUnmounted(() => {
                   <SqlEditorWorkspace
                     ref="contentAreaRef"
                     @locate-tab="locateTabInSidebar"
+                    @close-tab="
+                      (tabId: string) => {
+                        if (tabId === queryStore.activeTabId) void closeActiveSurface();
+                      }
+                    "
                     @toggle-zen-mode="toggleZenMode"
                     @start-resize="startTabBarResize"
                     @toggle-collapse="toggleTabBarCollapsed"
