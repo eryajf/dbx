@@ -2,7 +2,7 @@
 import { computed, markRaw, nextTick, ref, shallowRef, onMounted, onUnmounted, onActivated, onDeactivated, watch } from "vue";
 import type { CalendarDateTime } from "@internationalized/date";
 import { useI18n } from "vue-i18n";
-import { Search, RefreshCw, Loader2, ChevronRight, ChevronDown, FolderClosed, FolderOpen, Trash2, Plus, KeyRound, TerminalSquare, Asterisk, History, Radio, Clock, Copy, X, Shield } from "@lucide/vue";
+import { Search, RefreshCw, Loader2, ChevronRight, ChevronDown, FolderClosed, FolderOpen, Trash2, Plus, KeyRound, TerminalSquare, Asterisk, Radio, Clock, Copy, X, Shield } from "@lucide/vue";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
 import { Splitpanes, Pane } from "splitpanes";
@@ -3489,7 +3489,7 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
                   <TooltipContent>{{ t("toolbar.blockDangerousRedisCommands") }}</TooltipContent>
                 </Tooltip>
                 <Button variant="ghost" size="icon" class="h-6 w-6" :title="t('redis.clearHistory')" @click="clearInMemoryHistory">
-                  <History class="size-3.5" />
+                  <Trash2 class="size-3.5" />
                 </Button>
               </div>
             </div>
