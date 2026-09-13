@@ -15,7 +15,7 @@ describe("plugin center integration", () => {
     expect(toolbarSource).toContain("emit('open-plugin-center')");
     expect(appSource).toContain('@open-plugin-center="openPluginCenterPage()"');
     expect(appSource).toContain("<PluginCenterPage");
-    expect(tabBarSource).toContain("data-plugin-center-tab");
+    expect(tabBarSource).toContain("close-plugin-center");
   });
 
   it("keeps plugin management out of Driver Manager", () => {
@@ -53,6 +53,6 @@ describe("plugin center integration", () => {
     expect(template).toContain("<SelectTrigger");
     expect(template).not.toContain("max-w-md grid-cols-3");
     expect(template).not.toContain("marketplaceCategory");
-    expect(template).toContain("repeat(auto-fit");
+    expect(template).toContain("grid-cols-1");
   });
 });
