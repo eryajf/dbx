@@ -30,7 +30,9 @@ describe("App main content surface structure", () => {
 
   it("returns to an open special page after the final query tab closes", () => {
     expect(appSource).toContain("else if (previousId) activateOpenSpecialPageFallback();");
-    expect(appSource).toMatch(/function activateOpenSpecialPageFallback\(\)[\s\S]*?settingsPageTabOpen\.value[\s\S]*?activateMainContentSurface\("settings"\)[\s\S]*?driverStoreTabOpen\.value[\s\S]*?activateMainContentSurface\("driverStore"\)/);
+    expect(appSource).toMatch(
+      /function activateOpenSpecialPageFallback\(\)[\s\S]*?settingsPageTabOpen\.value[\s\S]*?activateMainContentSurface\("settings"\)[\s\S]*?driverStoreTabOpen\.value[\s\S]*?activateMainContentSurface\("driverStore"\)[\s\S]*?pluginCenterTabOpen\.value[\s\S]*?activateMainContentSurface\("pluginCenter"\)/,
+    );
   });
 
   it("anchors the drag-back hit test on every pane strip and the special-surfaces bar", () => {

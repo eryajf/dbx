@@ -1056,6 +1056,10 @@ function activateOpenSpecialPageFallback() {
   }
   if (driverStoreTabOpen.value) {
     activateMainContentSurface("driverStore");
+    return;
+  }
+  if (pluginCenterTabOpen.value) {
+    activateMainContentSurface("pluginCenter");
   }
 }
 
@@ -1066,6 +1070,14 @@ function closeSettingsPage() {
     return;
   }
   if (settingsReturnSurface.value === "pluginCenter" && pluginCenterTabOpen.value) {
+    activateMainContentSurface("pluginCenter");
+    return;
+  }
+  if (driverStoreTabOpen.value) {
+    activateMainContentSurface("driverStore");
+    return;
+  }
+  if (pluginCenterTabOpen.value) {
     activateMainContentSurface("pluginCenter");
     return;
   }
