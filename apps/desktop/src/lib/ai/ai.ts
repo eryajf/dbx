@@ -244,8 +244,10 @@ export async function runAgentStream(input: AiRequestInput, history: api.AiMessa
     input.confirmedConnectionId,
     input.confirmedDatabase,
     input.confirmedSchema,
-    ...(selectedDatabases?.length ? [undefined, selectedDatabases] : []),
   ] as const;
+  if (selectedDatabases?.length) {
+    return api.aiAgentStream(...args, undefined, selectedDatabases);
+  }
   return api.aiAgentStream(...args);
 }
 
