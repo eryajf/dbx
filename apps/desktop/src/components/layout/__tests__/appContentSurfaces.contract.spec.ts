@@ -22,10 +22,10 @@ describe("App main content surface structure", () => {
   });
 
   it("keeps navigation independent from the workspace welcome content", () => {
-    expect(appSource).toContain(':show-tab-navigation="queryStore.tabs.length > 0 || settingsPageTabOpen || driverStoreTabOpen"');
+    expect(appSource).toContain(':show-tab-navigation="queryStore.tabs.length > 0 || settingsPageTabOpen || driverStoreTabOpen || pluginCenterTabOpen"');
     expect(appSource).toContain(':active-tab="activeTab ?? undefined"');
     expect(appSource).toMatch(/<template #empty>\s*<WelcomeScreen/);
-    expect(appSource).not.toContain('v-if="queryStore.tabs.length > 0 || settingsPageTabOpen || driverStoreTabOpen"');
+    expect(appSource).not.toContain('v-if="queryStore.tabs.length > 0 || settingsPageTabOpen || driverStoreTabOpen || pluginCenterTabOpen"');
   });
 
   it("returns to an open special page after the final query tab closes", () => {
