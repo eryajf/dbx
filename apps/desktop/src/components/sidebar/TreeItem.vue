@@ -1231,13 +1231,13 @@ function clearTreeDragTarget() {
 
 const TABLE_REFERENCE_DRAG_THRESHOLD = 5;
 
-function canDragTableReferenceNow() {
+const canDragTableReference = computed(() => {
   if (props.referenceDragDisabled || !activeNode.value.connectionId) return false;
   if (activeNode.value.type === "database") return typeof activeNode.value.database === "string" && activeNode.value.database.trim().length > 0;
   if (activeNode.value.database == null) return false;
   if (activeNode.value.type === "table" || activeNode.value.type === "view" || activeNode.value.type === "materialized_view") return true;
   return activeNode.value.type === "column" && !!activeNode.value.tableName;
-}
+});
 
 let pendingTableReferenceDrag: {
   payload: QueryEditorTableReferencePayload;
@@ -1268,7 +1268,7 @@ function tableReferenceDragLabel(payload: QueryEditorTableReferencePayload): str
 }
 
 function tableReferenceDragPayload(): QueryEditorTableReferencePayload | null {
-  if (!canDragTableReferenceNow()) return null;
+  if (!canDragTableReference.value) return null;
   const selectedNodes = selectedTreeNodesInVisibleOrder();
   const tableCopyOptions = {
     tableNameSeparator: settingsStore.editorSettings.sidebarCopyTableNameSeparator,
@@ -1390,7 +1390,7 @@ function startTableReferenceMouseDrag(event: MouseEvent) {
 function onRowMouseDown(event: MouseEvent) {
   if (canReorderTreeNode.value) {
     startDrag(event, activeNode.value.id, activeNode.value.type);
-  } else if (canDragTableReferenceNow()) {
+  } else if (canDragTableReference.value) {
     startTableReferenceMouseDrag(event);
   }
 }

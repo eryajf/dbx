@@ -245,7 +245,7 @@ export async function runAgentStream(input: AiRequestInput, history: api.AiMessa
     input.confirmedDatabase,
     input.confirmedSchema,
     undefined,
-    ...(selectedDatabases ? [selectedDatabases] : []),
+    ...(selectedDatabases?.length ? [undefined, selectedDatabases] : []),
   ] as const;
   return api.aiAgentStream(...args);
 }
