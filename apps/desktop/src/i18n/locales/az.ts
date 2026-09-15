@@ -3153,6 +3153,8 @@ export default withEnglishFallback({
     renameConversation: "Rename conversation",
     conversationRenameFailed: "Failed to rename conversation",
     clearDatabaseSelection: "Clear selection",
+    searchDatabases: "Verilənlər bazalarında axtarış…",
+    noDatabasesFound: "Verilənlər bazası tapılmadı",
   },
   contextMenu: {
     openConnection: "Əlaqəni aç",

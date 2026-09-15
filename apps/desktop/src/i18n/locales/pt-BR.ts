@@ -3066,6 +3066,8 @@ export default withEnglishFallback({
     renameConversation: "Rename conversation",
     conversationRenameFailed: "Failed to rename conversation",
     clearDatabaseSelection: "Clear selection",
+    searchDatabases: "Pesquisar bancos de dados…",
+    noDatabasesFound: "Nenhum banco de dados encontrado",
     agentSteps: {
       generated: "SQL gerado",
       noSql: "Nenhum SQL encontrado",

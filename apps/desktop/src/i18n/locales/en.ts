@@ -3286,6 +3286,8 @@ export default {
     renameConversation: "Rename conversation",
     conversationRenameFailed: "Failed to rename conversation",
     clearDatabaseSelection: "Clear selection",
+    searchDatabases: "Search databases…",
+    noDatabasesFound: "No databases found",
   },
   contextMenu: {
     openConnection: "Open Connection",

@@ -3079,6 +3079,8 @@ export default withEnglishFallback({
     renameConversation: "Rename conversation",
     conversationRenameFailed: "Failed to rename conversation",
     clearDatabaseSelection: "Clear selection",
+    searchDatabases: "데이터베이스 검색…",
+    noDatabasesFound: "데이터베이스를 찾을 수 없습니다",
   },
   contextMenu: {
     openConnection: "연결 열기",

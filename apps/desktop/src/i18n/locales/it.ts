@@ -2958,6 +2958,8 @@ export default withEnglishFallback({
     renameConversation: "Rename conversation",
     conversationRenameFailed: "Failed to rename conversation",
     clearDatabaseSelection: "Clear selection",
+    searchDatabases: "Cerca database…",
+    noDatabasesFound: "Nessun database trovato",
     agentSteps: {
       generated: "SQL generato",
       noSql: "Nessun SQL trovato",

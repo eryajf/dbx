@@ -4022,8 +4022,10 @@ async function commitRenameConversation(conv: AiConversation) {
     if (activeRun) await runSnapshotScheduler.save(activeRun);
     const latestConversation = conversations.value.find((item) => item.id === conv.id) ?? conv;
     const updated = { ...latestConversation, title, updatedAt: new Date().toISOString() };
-    await saveAiConversation(updated);
+    // Claim the title before the async save so a throttled snapshot firing
+    // during the await window cannot persist the previous title over it.
     renamedConversationTitles.set(conv.id, title);
+    await saveAiConversation(updated);
     const i = conversations.value.findIndex((item) => item.id === conv.id);
     if (i >= 0) conversations.value[i] = updated;
   } catch {

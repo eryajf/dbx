@@ -3200,6 +3200,8 @@ export default withEnglishFallback({
     renameConversation: "重命名会话",
     conversationRenameFailed: "会话重命名失败",
     clearDatabaseSelection: "清空选择",
+    searchDatabases: "搜索数据库…",
+    noDatabasesFound: "未找到数据库",
   },
   contextMenu: {
     openConnection: "打开连接",

@@ -3100,6 +3100,8 @@ export default withEnglishFallback({
     renameConversation: "Rename conversation",
     conversationRenameFailed: "Failed to rename conversation",
     clearDatabaseSelection: "Clear selection",
+    searchDatabases: "データベースを検索…",
+    noDatabasesFound: "データベースが見つかりません",
     agentSteps: {
       generated: "SQL生成完了",
       noSql: "SQLが見つかりません",
