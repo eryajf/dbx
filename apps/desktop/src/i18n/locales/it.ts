@@ -2955,6 +2955,9 @@ export default withEnglishFallback({
     conversationRoleAssistant: "IA",
     conversationFailedMarker: "Generazione di questa risposta non riuscita",
     conversationExportEmpty: "Nessun messaggio da esportare",
+    renameConversation: "Rename conversation",
+    conversationRenameFailed: "Failed to rename conversation",
+    clearDatabaseSelection: "Clear selection",
     agentSteps: {
       generated: "SQL generato",
       noSql: "Nessun SQL trovato",

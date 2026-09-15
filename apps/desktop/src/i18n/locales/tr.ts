@@ -3123,6 +3123,9 @@ export default withEnglishFallback({
     conversationRoleAssistant: "AI",
     conversationFailedMarker: "Bu yanıt oluşturulamadı",
     conversationExportEmpty: "Dışa aktarılacak mesaj yok",
+    renameConversation: "Rename conversation",
+    conversationRenameFailed: "Failed to rename conversation",
+    clearDatabaseSelection: "Clear selection",
   },
   contextMenu: {
     openConnection: "Bağlantıyı Aç",

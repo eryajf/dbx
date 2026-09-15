@@ -3150,6 +3150,9 @@ export default withEnglishFallback({
     conversationRoleAssistant: "AI",
     conversationFailedMarker: "Bu cavabı yaratmaq mümkün olmadı",
     conversationExportEmpty: "Hələ ixrac ediləcək mesaj yoxdur",
+    renameConversation: "Rename conversation",
+    conversationRenameFailed: "Failed to rename conversation",
+    clearDatabaseSelection: "Clear selection",
   },
   contextMenu: {
     openConnection: "Əlaqəni aç",

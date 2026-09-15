@@ -3175,6 +3175,9 @@ export default withEnglishFallback({
     conversationRoleAssistant: "AI",
     conversationFailedMarker: "此回覆產生失敗",
     conversationExportEmpty: "尚無可匯出的訊息",
+    renameConversation: "Rename conversation",
+    conversationRenameFailed: "Failed to rename conversation",
+    clearDatabaseSelection: "Clear selection",
   },
   contextMenu: {
     openConnection: "開啟連線",
