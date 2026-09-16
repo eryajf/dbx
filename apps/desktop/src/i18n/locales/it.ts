@@ -2020,7 +2020,6 @@ export default withEnglishFallback({
     rowsPerPage: "Righe per pagina",
     customRowsPerPage: "Righe personalizzate",
     applyPageSize: "Applica",
-    setDefaultPageSize: "Imposta come predefinito",
     currentAndDefaultPageSize: "Attuale: {current} · Predefinito: {default}",
     applyForThisQuery: "Solo ora",
     applyAndSetDefault: "Predefinito",

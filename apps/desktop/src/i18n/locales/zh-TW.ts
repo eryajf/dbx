@@ -2021,7 +2021,6 @@ export default withEnglishFallback({
     rowsPerPage: "每頁筆數",
     customRowsPerPage: "自訂筆數",
     applyPageSize: "套用",
-    setDefaultPageSize: "設為預設",
     currentAndDefaultPageSize: "目前：{current} · 預設：{default}",
     applyForThisQuery: "僅本次",
     applyAndSetDefault: "設為預設",

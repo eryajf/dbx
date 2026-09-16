@@ -50,7 +50,6 @@ const emit = defineEmits<{
   jumpPage: [page: number];
   lastPage: [];
   selectExport: [value: string];
-  setDefaultPageSize: [];
   applyCustomPageSizeAndSetDefault: [];
 }>();
 

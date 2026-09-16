@@ -2022,7 +2022,6 @@ export default withEnglishFallback({
     rowsPerPage: "Filas por página",
     customRowsPerPage: "Filas personalizadas",
     applyPageSize: "Aplicar",
-    setDefaultPageSize: "Establecer como predeterminado",
     currentAndDefaultPageSize: "Actual: {current} · Predeterminado: {default}",
     applyForThisQuery: "Solo ahora",
     applyAndSetDefault: "Predeterminado",

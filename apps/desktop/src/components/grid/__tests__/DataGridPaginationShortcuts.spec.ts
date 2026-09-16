@@ -65,6 +65,7 @@ function mountGrid(
     infiniteScroll?: boolean;
     empty?: boolean;
     configurePaginationShortcuts?: boolean;
+    pageSizePreference?: "results" | "table-open";
   } = {},
 ) {
   const pinia = createPinia();
@@ -107,6 +108,7 @@ function mountGrid(
                 result,
                 databaseType: "mysql",
                 context: "table-data",
+                pageSizePreference: options.pageSizePreference,
                 pageLimit: 100,
                 pageOffset: options.pageOffset ?? 200,
                 totalRowCount: options.totalRowCount ?? 500,
@@ -125,7 +127,7 @@ function mountGrid(
   app.mount(host);
   const mounted = { app, host };
   mountedApps.push(mounted);
-  return { host, paginate };
+  return { host, paginate, settingsStore };
 }
 
 async function settle() {
@@ -144,6 +146,29 @@ function dispatchShortcut(target: HTMLElement, key: string): KeyboardEvent {
   const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, altKey: true, key });
   target.dispatchEvent(event);
   return event;
+}
+
+function menuActionButton(label: string): HTMLButtonElement {
+  const button = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menu"] button')).find((candidate) => candidate.textContent?.trim() === label);
+  if (!button) throw new Error(`Menu action button not found: ${label}`);
+  return button;
+}
+
+async function openCustomPageSizeMenu(host: HTMLElement): Promise<HTMLInputElement> {
+  const trigger = Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.includes("100"));
+  expect(trigger).toBeDefined();
+  trigger!.click();
+  await settle();
+  const input = document.querySelector<HTMLInputElement>('[role="menu"] input[type="number"]');
+  expect(input).not.toBeNull();
+  return input!;
+}
+
+async function enterCustomPageSize(host: HTMLElement, size: string): Promise<void> {
+  const input = await openCustomPageSizeMenu(host);
+  input.value = size;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await settle();
 }
 
 afterEach(() => {
@@ -300,5 +325,55 @@ describe("DataGrid pagination shortcuts", () => {
     expect(paginate).not.toHaveBeenCalled();
     const actionIds: ShortcutActionId[] = shortcutCases.map(({ actionId }) => actionId);
     expect(actionIds).toHaveLength(4);
+  });
+});
+
+describe("DataGrid custom page size persistence", () => {
+  it("applying a custom page size is temporary and does not write editor settings", async () => {
+    const { host, paginate, settingsStore } = mountGrid();
+    await settle();
+    const updateEditorSettings = vi.spyOn(settingsStore, "updateEditorSettings");
+
+    await enterCustomPageSize(host, "250");
+    menuActionButton(i18n.global.t("grid.applyForThisQuery")).click();
+    await settle();
+
+    expect(paginate).toHaveBeenCalledOnce();
+    expect(paginate.mock.calls[0]?.slice(0, 2)).toEqual([0, 250]);
+    expect(updateEditorSettings).not.toHaveBeenCalled();
+    expect(settingsStore.editorSettings.pageSize).toBe(100);
+    expect(settingsStore.editorSettings.tableOpenPageSize).toBe(100);
+  });
+
+  it("set-as-default persists the table-open page size for table grids", async () => {
+    const { host, paginate, settingsStore } = mountGrid();
+    await settle();
+    const updateEditorSettings = vi.spyOn(settingsStore, "updateEditorSettings");
+
+    await enterCustomPageSize(host, "250");
+    menuActionButton(i18n.global.t("grid.applyAndSetDefault")).click();
+    await settle();
+
+    expect(paginate).toHaveBeenCalledOnce();
+    expect(paginate.mock.calls[0]?.slice(0, 2)).toEqual([0, 250]);
+    expect(updateEditorSettings).toHaveBeenCalledWith({ tableOpenPageSize: 250 });
+    expect(settingsStore.editorSettings.tableOpenPageSize).toBe(250);
+    expect(settingsStore.editorSettings.pageSize).toBe(100);
+  });
+
+  it("set-as-default persists the query page size for results grids", async () => {
+    const { host, paginate, settingsStore } = mountGrid({ pageSizePreference: "results" });
+    await settle();
+    const updateEditorSettings = vi.spyOn(settingsStore, "updateEditorSettings");
+
+    await enterCustomPageSize(host, "250");
+    menuActionButton(i18n.global.t("grid.applyAndSetDefault")).click();
+    await settle();
+
+    expect(paginate).toHaveBeenCalledOnce();
+    expect(paginate.mock.calls[0]?.slice(0, 2)).toEqual([0, 250]);
+    expect(updateEditorSettings).toHaveBeenCalledWith({ pageSize: 250 });
+    expect(settingsStore.editorSettings.pageSize).toBe(250);
+    expect(settingsStore.editorSettings.tableOpenPageSize).toBe(100);
   });
 });

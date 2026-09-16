@@ -2032,7 +2032,6 @@ export default withEnglishFallback({
     rowsPerPage: "1ページあたりの行数",
     customRowsPerPage: "カスタム行数",
     applyPageSize: "適用",
-    setDefaultPageSize: "デフォルトに設定",
     currentAndDefaultPageSize: "現在：{current} · デフォルト：{default}",
     applyForThisQuery: "今回のみ",
     applyAndSetDefault: "デフォルトに設定",

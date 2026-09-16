@@ -2044,7 +2044,6 @@ export default withEnglishFallback({
     rowsPerPage: "Səhifədəki sətir sayı",
     customRowsPerPage: "Fərdi sətir sayı",
     applyPageSize: "Tətbiq et",
-    setDefaultPageSize: "Standart təyin et",
     currentAndDefaultPageSize: "Cari: {current} · Standart: {default}",
     applyForThisQuery: "Bu dəfə",
     applyAndSetDefault: "Standart et",

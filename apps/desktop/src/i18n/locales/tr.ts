@@ -2039,7 +2039,6 @@ export default withEnglishFallback({
     rowsPerPage: "Sayfa başına satır",
     customRowsPerPage: "Özel satır sayısı",
     applyPageSize: "Uygula",
-    setDefaultPageSize: "Varsayılan olarak ayarla",
     currentAndDefaultPageSize: "Geçerli: {current} · Varsayılan: {default}",
     applyForThisQuery: "Bu sefer",
     applyAndSetDefault: "Varsayılan yap",

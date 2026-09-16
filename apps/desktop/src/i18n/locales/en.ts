@@ -2177,7 +2177,6 @@ export default {
     rowsPerPage: "Rows per page",
     customRowsPerPage: "Custom rows",
     applyPageSize: "Apply",
-    setDefaultPageSize: "Set as default",
     currentAndDefaultPageSize: "Current: {current} · Default: {default}",
     applyForThisQuery: "For now",
     applyAndSetDefault: "Set default",

@@ -2092,7 +2092,6 @@ export default withEnglishFallback({
     rowsPerPage: "每页行数",
     customRowsPerPage: "自定义行数",
     applyPageSize: "应用",
-    setDefaultPageSize: "设为默认",
     currentAndDefaultPageSize: "当前：{current} · 默认：{default}",
     applyForThisQuery: "仅本次",
     applyAndSetDefault: "设为默认",

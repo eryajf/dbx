@@ -2022,7 +2022,6 @@ export default withEnglishFallback({
     rowsPerPage: "Linhas por página",
     customRowsPerPage: "Linhas personalizadas",
     applyPageSize: "Aplicar",
-    setDefaultPageSize: "Definir como padrão",
     currentAndDefaultPageSize: "Atual: {current} · Padrão: {default}",
     applyForThisQuery: "Só agora",
     applyAndSetDefault: "Definir padrão",

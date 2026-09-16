@@ -2013,7 +2013,6 @@ export default withEnglishFallback({
     rowsPerPage: "페이지당 행",
     customRowsPerPage: "사용자 지정 행",
     applyPageSize: "적용",
-    setDefaultPageSize: "기본값으로 설정",
     currentAndDefaultPageSize: "현재: {current} · 기본값: {default}",
     applyForThisQuery: "이번만",
     applyAndSetDefault: "기본값 설정",
