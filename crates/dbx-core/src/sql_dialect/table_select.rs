@@ -71,13 +71,6 @@ fn large_value_preview_kind(
                 None
             }
         }
-        Some(DatabaseType::Db2) => {
-            if matches!(base.as_str(), "blob" | "longvarbinary") {
-                Some(LargeValuePreviewKind::Binary)
-            } else {
-                None
-            }
-        }
         Some(DatabaseType::Postgres) => {
             if normalized.contains('[') {
                 None
@@ -152,19 +145,12 @@ fn build_large_value_preview_columns(options: &TableDataSelectSqlOptions) -> Opt
                 (format!("left({quoted}::text, {prefix_size}) AS {quoted}"), "V")
             }
             Some(DatabaseType::Postgres) => (format!("left({quoted}, {prefix_size}) AS {quoted}"), "T"),
-            Some(DatabaseType::Db2) if kind == LargeValuePreviewKind::Binary => {
-                (format!("SUBSTR({quoted}, 1, {prefix_size}) AS {quoted}"), "B")
-            }
             _ => return None,
         };
-        let marker = match database_type {
-            Some(DatabaseType::Mysql) => {
-                format!("CONCAT('{marker_kind}:{preview_size}:', LENGTH({quoted})) AS {marker_alias}")
-            }
-            Some(DatabaseType::Db2) => {
-                format!("'{marker_kind}:{preview_size}:' || CHAR(LENGTH({quoted})) AS {marker_alias}")
-            }
-            _ => format!("'{marker_kind}:{preview_size}' AS {marker_alias}"),
+        let marker = if database_type == Some(DatabaseType::Mysql) {
+            format!("CONCAT('{marker_kind}:{preview_size}:', LENGTH({quoted})) AS {marker_alias}")
+        } else {
+            format!("'{marker_kind}:{preview_size}' AS {marker_alias}")
         };
         projections.push(preview);
         projections.push(marker);

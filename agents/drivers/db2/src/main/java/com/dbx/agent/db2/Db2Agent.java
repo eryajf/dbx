@@ -394,18 +394,9 @@ public final class Db2Agent extends AbstractJdbcAgent {
                 String value = rs.getString(index);
                 return rs.wasNull() ? null : value;
             }
-            if (sqlType == Types.BLOB || sqlType == Types.LONGVARBINARY || sqlType == Types.VARBINARY) {
+            if (sqlType == Types.BLOB || sqlType == Types.BINARY || sqlType == Types.VARBINARY || sqlType == Types.LONGVARBINARY) {
                 byte[] value = rs.getBytes(index);
-                if (rs.wasNull()) {
-                    return null;
-                }
-                StringBuilder hex = new StringBuilder(2 + value.length * 2).append("0x");
-                final char[] digits = "0123456789abcdef".toCharArray();
-                for (byte current : value) {
-                    int unsigned = current & 0xff;
-                    hex.append(digits[unsigned >>> 4]).append(digits[unsigned & 0x0f]);
-                }
-                return hex.toString();
+                return rs.wasNull() ? null : JdbcExecutor.bytesToHex(value);
             }
             Object value = rs.getObject(index);
             return rs.wasNull() ? null : value == null ? null : value.toString();

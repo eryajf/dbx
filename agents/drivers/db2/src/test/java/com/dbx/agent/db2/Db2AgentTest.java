@@ -87,6 +87,9 @@ class Db2AgentTest extends JdbcFakeExecutionBehaviorTest {
         });
 
         assertEquals("0x89504e", agent.resultValue(resultSet, 1, Types.BLOB));
+        assertEquals("0x89504e", agent.resultValue(resultSet, 1, Types.BINARY));
+        assertEquals("0x89504e", agent.resultValue(resultSet, 1, Types.VARBINARY));
+        assertEquals("0x89504e", agent.resultValue(resultSet, 1, Types.LONGVARBINARY));
     }
 
     @Test
