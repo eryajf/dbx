@@ -154,6 +154,31 @@ afterEach(() => {
 });
 
 describe("DataGrid pagination shortcuts", () => {
+  it("allows pointer focus and editing in the custom page size input", async () => {
+    const { host, paginate } = mountGrid();
+    await settle();
+    const trigger = Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.includes("100"));
+    expect(trigger).toBeDefined();
+    trigger!.click();
+    await settle();
+
+    const input = document.querySelector<HTMLInputElement>('[role="menu"] input[type="number"]');
+    expect(input).not.toBeNull();
+    const pointer = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
+    input!.dispatchEvent(pointer);
+    // Canceling pointerdown suppresses the browser's native focus behavior.
+    expect(pointer.defaultPrevented).toBe(false);
+    input!.focus();
+    input!.value = "250";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    expect(document.activeElement).toBe(input);
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await settle();
+    expect(paginate).toHaveBeenCalledOnce();
+    expect(paginate.mock.calls[0]?.slice(0, 2)).toEqual([0, 250]);
+  });
+
   it.each(shortcutCases)("runs $functionName through the configured $actionId shortcut", async ({ key, offset }) => {
     const { host, paginate } = mountGrid();
     await settle();
