@@ -228,13 +228,14 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
       if (!info.update_available) updateCheckMessage.value = t("updates.upToDate", { version: info.current_version });
       if (canDownloadAndInstallUpdate(info, isTauriRuntime()) && !isUpdateIgnored(info, settingsStore.editorSettings.ignoredUpdateVersion)) {
         const cached = downloaded.value;
-        if (!autoDownloadEnabled.value || !notificationsEnabled.value) {
+        if (cached && !isNewerRemoteVersion(info.latest_version, cached.version)) {
           // Keep a prepared package installable without replacing it automatically.
-          if (cached) setDownloaded(cached);
+          if (!autoDownloadEnabled.value || !notificationsEnabled.value) setDownloaded(cached);
           return;
         }
-        if (cached && !isNewerRemoteVersion(info.latest_version, cached.version)) return;
+        // A cached package older than the remote release must not mask the newer version.
         if (cached && !(await discardSupersededUpdate(cached))) return;
+        if (!autoDownloadEnabled.value || !notificationsEnabled.value) return;
         await downloadUpdateInBackground(true);
       }
     } catch (error) {

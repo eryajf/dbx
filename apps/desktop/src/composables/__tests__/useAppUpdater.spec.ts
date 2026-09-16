@@ -88,16 +88,35 @@ describe("silent update lifecycle", () => {
     expect(updater.updateDownloaded.value).toBe(true);
     expect(mocks.installDownloadedUpdate).not.toHaveBeenCalled();
   });
+  it("surfaces a newer release instead of a stale package with automatic downloads disabled", async () => {
+    settings.autoDownloadUpdates = false;
+    mocks.getDownloadedUpdate.mockResolvedValue(cache);
+    mocks.checkForUpdates.mockResolvedValue({ ...info, latest_version: "1.2.0", release_name: "v1.2.0" });
+    const updater = mount();
+    await updater.initialize();
+    await flush();
+    expect(updater.updateInfo.value?.latest_version).toBe("1.2.0");
+    expect(mocks.discardDownloadedUpdate).toHaveBeenCalledWith(cache.cache_id);
+    expect(mocks.downloadUpdate).not.toHaveBeenCalled();
+    expect(updater.updateDownloaded.value).toBe(false);
+    expect(updater.hasUpdateAvailable.value).toBe(true);
+    await updater.installDownloadedUpdate();
+    expect(mocks.installDownloadedUpdate).not.toHaveBeenCalled();
+    mocks.downloadUpdate.mockResolvedValue({ ...cache, version: "1.2.0" });
+    await updater.downloadUpdateInBackground();
+    expect(mocks.downloadUpdate).toHaveBeenCalledWith("official", "1.2.0", expect.any(String), "Changes");
+    expect(updater.updateDownloaded.value).toBe(true);
+  });
   it("preserves a prepared package with automatic downloads disabled", async () => {
     settings.autoDownloadUpdates = false;
     mocks.getDownloadedUpdate.mockResolvedValue(cache);
-    mocks.checkForUpdates.mockResolvedValue({ ...info, latest_version: "1.2.0" });
     const updater = mount();
     await updater.initialize();
     await flush();
     expect(mocks.discardDownloadedUpdate).not.toHaveBeenCalled();
     expect(mocks.downloadUpdate).not.toHaveBeenCalled();
     expect(updater.updateInfo.value?.latest_version).toBe(cache.version);
+    expect(updater.hasUpdateAvailable.value).toBe(true);
     await updater.installDownloadedUpdate();
     expect(mocks.installDownloadedUpdate).toHaveBeenCalledWith(cache.cache_id, cache.version);
   });
