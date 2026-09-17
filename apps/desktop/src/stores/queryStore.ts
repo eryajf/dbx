@@ -4923,6 +4923,16 @@ export const useQueryStore = defineStore("query", () => {
     savedSqlTargetPersistenceActive = false;
   });
 
+  function createExecutionTargetGuard(id: string): () => boolean {
+    const tab = tabs.value.find((candidate) => candidate.id === id);
+    const target = savedSqlExecutionTargetFromTab(tab);
+    if (!tab || !target) return () => false;
+    const revision = savedSqlTargetRequests.get(tab);
+    const savedSqlId = tab.savedSqlId;
+    return () =>
+      savedSqlTargetPersistenceActive && tabs.value.includes(tab) && savedSqlTargetRequests.get(tab) === revision && tab.savedSqlId === savedSqlId && tab.connectionId === target.connectionId && tab.database === target.database && tab.catalog === target.catalog && tab.schema === target.schema;
+  }
+
   function persistSavedSqlExecutionTarget(tab: QueryTab, options: UpdateExecutionTargetOptions) {
     const revision = (savedSqlTargetRequests.get(tab) ?? 0) + 1;
     savedSqlTargetRequests.set(tab, revision);
@@ -8682,6 +8692,7 @@ export const useQueryStore = defineStore("query", () => {
     hydrateSavedSqlTabs,
     togglePinnedTab,
     reorderTab,
+    createExecutionTargetGuard,
     updateDatabase,
     updateCatalog,
     updateSchema,
