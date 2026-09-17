@@ -5,6 +5,9 @@ import type { SavedSqlFile, SavedSqlFolder, SavedSqlLibrary } from "../../apps/d
 import { useSavedSqlStore } from "../../apps/desktop/src/stores/savedSqlStore.ts";
 import { useQueryStore } from "../../apps/desktop/src/stores/queryStore.ts";
 
+const toastMock = vi.hoisted(() => vi.fn());
+vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: toastMock }) }));
+
 const apiMock = vi.hoisted(() => ({
   loadSavedSqlLibrary: vi.fn<() => Promise<SavedSqlLibrary>>(),
   loadSavedSqlFile: vi.fn<(id: string) => Promise<SavedSqlFile | null>>(),
@@ -631,7 +634,7 @@ test("renaming a saved SQL file allows the same name in another folder of the da
   assert.equal(store.getFile("sql-1")?.name, "revenue.sql");
 });
 
-test("renaming a saved SQL file rejects the same name in its folder across catalogs", async () => {
+test("renaming a saved SQL file allows the same name in its folder across catalogs", async () => {
   const files: SavedSqlFile[] = [
     {
       id: "sql-hive",
@@ -660,10 +663,10 @@ test("renaming a saved SQL file rejects the same name in its folder across catal
 
   const store = useSavedSqlStore();
   await store.initFromStorage();
-  await assert.rejects(store.renameFile("sql-hive", "REPORT"), /already exists/);
+  await store.renameFile("sql-hive", "REPORT");
 
-  assert.equal(store.getFile("sql-hive")?.name, "draft.sql");
-  assert.equal(apiMock.saveSavedSqlFile.mock.calls.length, 0);
+  assert.equal(store.getFile("sql-hive")?.name, "REPORT.sql");
+  assert.equal(apiMock.saveSavedSqlFile.mock.calls.length, 1);
 });
 
 test("failed saved SQL rename releases the requested name for retry", async () => {
@@ -761,7 +764,7 @@ test("hydrates saved SQL before copying it to another database", async () => {
   assert.equal(apiMock.loadSavedSqlFile.mock.calls.length, 1);
 });
 
-test("concurrent saved SQL pastes reserve different copy names in the same folder across databases", async () => {
+test("concurrent saved SQL pastes can reuse copy names in different databases", async () => {
   const source: SavedSqlFile = {
     id: "sql-1",
     connectionId: "conn-1",
@@ -778,7 +781,7 @@ test("concurrent saved SQL pastes reserve different copy names in the same folde
   await store.initFromStorage();
   const [first, second] = await Promise.all([store.copyFilesToDatabase([source.id], { connectionId: "conn-1", catalog: "hive", database: "analytics" }), store.copyFilesToDatabase([source.id], { connectionId: "conn-1", catalog: "hive", database: "other" })]);
 
-  assert.deepEqual([first[0]?.name, second[0]?.name].sort(), ["report_copy1.sql", "report_copy2.sql"]);
+  assert.deepEqual([first[0]?.name, second[0]?.name].sort(), ["report_copy1.sql", "report_copy1.sql"]);
   assert.equal(first[0]?.catalog, "hive");
   assert.equal(second[0]?.catalog, "hive");
 });
@@ -989,14 +992,16 @@ test.each([
   assert.equal(apiMock.saveSavedSqlFile.mock.calls.length, 1);
 });
 
-test.each(["", "other"])("creating a SQL file rejects the same folder name despite database %j", async (database) => {
+test("creating a SQL file scopes names by connection, catalog, database, and folder", async () => {
   const store = useSavedSqlStore();
-  await store.saveFile({ connectionId: "conn-1", folderId: "folder-1", name: "report.sql", database: "analytics", sql: "SELECT 1;" });
+  await store.saveFile({ connectionId: "conn-1", catalog: "hive", folderId: "folder-1", name: "report.sql", database: "analytics", sql: "SELECT 1;" });
+  await store.saveFile({ connectionId: "conn-1", catalog: "hive", folderId: "folder-1", name: "REPORT", database: "reporting", sql: "SELECT 2;" });
+  await store.saveFile({ connectionId: "conn-1", catalog: "iceberg", folderId: "folder-1", name: "report", database: "analytics", sql: "SELECT 3;" });
 
-  await assert.rejects(store.saveFile({ connectionId: "conn-1", folderId: "folder-1", name: "REPORT", database, sql: "SELECT 2;" }), /already exists/);
+  await assert.rejects(store.saveFile({ connectionId: "conn-1", catalog: "hive", folderId: "folder-1", name: "REPORT", database: "analytics", sql: "SELECT 4;" }), /already exists/);
 
-  assert.equal(store.files.length, 1);
-  assert.equal(apiMock.saveSavedSqlFile.mock.calls.length, 1);
+  assert.equal(store.files.length, 3);
+  assert.equal(apiMock.saveSavedSqlFile.mock.calls.length, 3);
 });
 
 test("same SQL names remain independent across connections in the root folder", async () => {
@@ -1033,4 +1038,58 @@ test("SQL copy names ignore files in other folders of the same database", async 
 
   assert.equal(copy?.name, "report_copy1.sql");
   assert.equal(copy?.folderId, "folder-1");
+});
+
+
+test.each(["database", "catalog"])("a conflicting saved SQL %s switch restores the tab and permits saving again", async (change) => {
+  const savedSqlStore = useSavedSqlStore();
+  const original = await savedSqlStore.saveFile({ connectionId: "conn-1", catalog: "hive", database: "analytics", name: "report.sql", schema: "public", sql: "SELECT 1;" });
+  await savedSqlStore.saveFile({ connectionId: "conn-1", catalog: change === "catalog" ? "iceberg" : "hive", database: change === "database" ? "other" : "analytics", name: "report.sql", sql: "SELECT 2;" });
+  const queryStore = useQueryStore();
+  const tabId = queryStore.openSavedSql(original, { targetMode: "saved" });
+  if (change === "database") queryStore.updateDatabase(tabId, "other");
+  else queryStore.updateCatalog(tabId, "iceberg", "analytics");
+
+  await vi.waitFor(() => assert.equal(toastMock.mock.calls.length, 1));
+  const tab = queryStore.tabs.find((item) => item.id === tabId)!;
+  assert.deepEqual([tab.database, tab.catalog, tab.schema], ["analytics", "hive", "public"]);
+  assert.equal(savedSqlStore.getFile(original.id)?.database, tab.database);
+  assert.equal(savedSqlStore.getFile(original.id)?.catalog, tab.catalog);
+  assert.ok(toastMock.mock.calls[0]?.[0].includes("report.sql"));
+  await savedSqlStore.saveFile({ ...original, database: tab.database, catalog: tab.catalog, schema: tab.schema, sql: "SELECT 3;" });
+  assert.equal(savedSqlStore.getFile(original.id)?.sql, "SELECT 3;");
+});
+
+test("an older failed target save does not roll back a newer database selection", async () => {
+  const savedSqlStore = useSavedSqlStore();
+  const original = await savedSqlStore.saveFile({ connectionId: "conn-1", database: "first", name: "report.sql", sql: "SELECT 1;" });
+  const queryStore = useQueryStore();
+  const tabId = queryStore.openSavedSql(original, { targetMode: "saved" });
+  let rejectSave: (error: Error) => void = () => { throw new Error("save has not started"); };
+  apiMock.saveSavedSqlFile.mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
+  queryStore.updateDatabase(tabId, "second");
+  await vi.waitFor(() => assert.equal(apiMock.saveSavedSqlFile.mock.calls.length, 2));
+  queryStore.updateDatabase(tabId, "third");
+  rejectSave(new Error("disk full"));
+  await vi.waitFor(() => assert.equal(apiMock.saveSavedSqlFile.mock.calls.at(-1)?.[0].database, "third"));
+  assert.equal(queryStore.tabs.find((item) => item.id === tabId)?.database, "third");
+  assert.equal(savedSqlStore.getFile(original.id)?.database, "third");
+  assert.equal(toastMock.mock.calls.length, 0);
+});
+
+
+test("a target save failure after query store disposal does not restore tabs or notify", async () => {
+  const savedSqlStore = useSavedSqlStore();
+  const original = await savedSqlStore.saveFile({ connectionId: "conn-1", database: "first", name: "report.sql", sql: "SELECT 1;" });
+  const queryStore = useQueryStore();
+  const tabId = queryStore.openSavedSql(original, { targetMode: "saved" });
+  let rejectSave: (error: Error) => void = () => { throw new Error("save has not started"); };
+  apiMock.saveSavedSqlFile.mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
+  queryStore.updateDatabase(tabId, "second");
+  await vi.waitFor(() => assert.equal(apiMock.saveSavedSqlFile.mock.calls.length, 2));
+  queryStore.$dispose();
+  rejectSave(new Error("disk full"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(queryStore.tabs.find((item) => item.id === tabId)?.database, "second");
+  assert.equal(toastMock.mock.calls.length, 0);
 });

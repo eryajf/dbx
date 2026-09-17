@@ -106,9 +106,8 @@ function savedSqlNameKey(name: string): string {
   return ensureSqlExtension(name).toLocaleLowerCase();
 }
 
-function savedSqlNameScopeKey(file: Pick<SavedSqlNameScope, "connectionId" | "folderId">): string {
-  // Execution targets do not change the SQL library's folder-scoped names.
-  return JSON.stringify(["library-folder", file.connectionId, file.folderId || null]);
+function savedSqlNameScopeKey(file: Pick<SavedSqlNameScope, "connectionId" | "catalog" | "database" | "folderId">): string {
+  return JSON.stringify(["library-folder", savedSqlDatabaseScopeKey(file), file.folderId || null]);
 }
 
 function savedSqlNameIdentity(file: SavedSqlNameScope): string {
