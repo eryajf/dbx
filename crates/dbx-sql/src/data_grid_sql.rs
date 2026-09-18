@@ -4117,6 +4117,7 @@ mod tests {
             rows: vec![vec![json!(1), json!("Ada")]],
             exclude_primary_keys: true,
             include_computed_columns: false,
+            include_database_name: true,
             insert_mode: DataGridCopyInsertMode::Merged,
         });
 
