@@ -1049,7 +1049,7 @@ onMounted(loadUsers);
             {{ t("userAdmin.sqlPreview") }}
           </DialogTitle>
         </DialogHeader>
-        <div class="grid min-h-0 min-w-0 gap-3 overflow-hidden" :class="pendingResults.length > 0 ? 'h-[70vh] grid-rows-[minmax(0,1fr)_minmax(0,1fr)]' : 'h-[50vh] grid-rows-[minmax(0,1fr)]'">
+        <div class="grid min-h-0 max-h-full min-w-0 gap-3 overflow-hidden" :class="pendingResults.length > 0 ? 'h-[70vh] grid-rows-[minmax(0,1fr)_minmax(0,1fr)]' : 'h-[50vh] grid-rows-[minmax(0,1fr)]'">
           <pre class="min-h-0 min-w-0 overflow-auto overscroll-contain whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5" v-html="highlightedPendingSql" />
           <div v-if="pendingResults.length > 0" class="grid min-h-0 min-w-0 content-start gap-2 overflow-y-auto overscroll-contain rounded-md border p-3">
             <div class="text-xs font-semibold" :class="pendingStatus === 'success' ? 'text-green-600' : pendingStatus === 'partial' ? 'text-amber-600' : 'text-destructive'">

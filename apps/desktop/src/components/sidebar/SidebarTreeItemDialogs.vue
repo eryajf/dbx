@@ -604,7 +604,7 @@ watch(
       <DialogHeader>
         <DialogTitle>{{ t("contextMenu.createDatabaseSqlPreview") }}</DialogTitle>
       </DialogHeader>
-      <div class="grid min-h-0 min-w-0 gap-3 overflow-hidden" :class="createDatabaseAuthorizationResults.length > 0 ? 'h-[70vh] grid-rows-[minmax(0,1fr)_minmax(0,1fr)]' : 'h-[48vh] grid-rows-[minmax(0,1fr)]'">
+      <div class="grid min-h-0 max-h-full min-w-0 gap-3 overflow-hidden" :class="createDatabaseAuthorizationResults.length > 0 ? 'h-[70vh] grid-rows-[minmax(0,1fr)_minmax(0,1fr)]' : 'h-[48vh] grid-rows-[minmax(0,1fr)]'">
         <pre class="min-h-0 min-w-0 overflow-auto overscroll-contain whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5" v-html="highlight(createDatabasePreviewSql)" />
         <div v-if="createDatabaseAuthorizationResults.length > 0" class="grid min-h-0 min-w-0 content-start gap-2 overflow-y-auto overscroll-contain rounded-md border p-3">
           <div v-for="result in createDatabaseAuthorizationResults" :key="result.step.id" class="flex items-start gap-2 text-xs">
