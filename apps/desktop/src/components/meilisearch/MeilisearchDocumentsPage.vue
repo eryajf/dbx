@@ -703,7 +703,7 @@ onBeforeUnmount(() => {
         <DropdownMenuTrigger as-child>
           <Button variant="ghost" size="sm" class="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground" :disabled="exporting || importing">
             <LoaderCircle v-if="exporting" class="h-3.5 w-3.5 animate-spin" />
-            <Upload v-else class="h-3.5 w-3.5" />
+            <Download v-else class="h-3.5 w-3.5" />
             {{ t("meilisearch.exportResults") }}
             <ChevronDown class="h-3 w-3" />
           </Button>
@@ -716,7 +716,7 @@ onBeforeUnmount(() => {
       <input ref="importFileInput" type="file" accept="application/json,.json" class="hidden" @change="importDocuments" />
       <Button variant="ghost" size="sm" class="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground" :disabled="loading || exporting || importing" @click="importFileInput?.click()">
         <LoaderCircle v-if="importing" class="h-3.5 w-3.5 animate-spin" />
-        <Download v-else class="h-3.5 w-3.5" />
+        <Upload v-else class="h-3.5 w-3.5" />
         {{ t("meilisearch.importResults") }}
       </Button>
       <span v-if="!loading && !error" class="text-muted-foreground text-xs tabular-nums">{{ resultSummary }}</span>
