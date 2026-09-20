@@ -218,4 +218,18 @@ describe("MeilisearchDocumentsPage export", () => {
     expect(mocks.saveMeilisearchBatch.mock.calls[0]?.[4]).toEqual([JSON.stringify({ movie_id: 1 }), JSON.stringify({ movie_id: 2 })]);
     expect(mocks.toast).toHaveBeenCalledWith("meilisearch.importSuccess");
   });
+
+  it("imports decimal fields as raw JSON literals, not lossless number objects", async () => {
+    mocks.searchDocuments.mockResolvedValue({ hits: [], totalHits: 0, processingTimeMs: 1 });
+    await mountPage();
+    const fileInput = root!.querySelector<HTMLInputElement>('input[type="file"]');
+    const file = new File([JSON.stringify([{ movie_id: 1, rating: 8.5 }])], "movies.json", { type: "application/json" });
+    Object.defineProperty(fileInput, "files", { value: [file] });
+    fileInput?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => expect(mocks.saveMeilisearchBatch).toHaveBeenCalledTimes(1));
+    const batch = mocks.saveMeilisearchBatch.mock.calls[0]?.[4] as string[];
+    expect(batch).toEqual([JSON.stringify({ movie_id: 1, rating: 8.5 })]);
+    expect(JSON.parse(batch[0])).toEqual({ movie_id: 1, rating: 8.5 });
+  });
 });

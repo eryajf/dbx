@@ -19,7 +19,7 @@ import RedisJsonEditor from "@/components/redis/RedisJsonEditor.vue";
 import * as api from "@/lib/backend/api";
 import { compactLocalTimestamp, sanitizeExportBaseName, saveTextFile } from "@/lib/export/saveTextFile";
 import { parseDocumentStoreJsonDocument, serializeDocumentStoreId, stringifyDocumentStoreValue } from "@/lib/app/documentJsonValues";
-import { parseJsonPreservingLargeNumbers, safeJsonFormat } from "@/lib/common/safeJsonFormat";
+import { parseJsonPreservingLargeNumbers, safeJsonFormat, stringifyJsonPreservingLargeNumbers } from "@/lib/common/safeJsonFormat";
 import { useToast } from "@/composables/useToast";
 
 const props = defineProps<{
@@ -371,7 +371,7 @@ async function importDocuments(event: Event) {
     }
     const batchSize = 100;
     for (let offset = 0; offset < documents.length; offset += batchSize) {
-      const batch = documents.slice(offset, offset + batchSize).map((document) => JSON.stringify(document));
+      const batch = documents.slice(offset, offset + batchSize).map((document) => stringifyJsonPreservingLargeNumbers(document));
       await api.documentSaveMeilisearchBatch(props.connectionId, props.index, [], [], batch);
     }
     toast(t("meilisearch.importSuccess", { count: documents.length }));
