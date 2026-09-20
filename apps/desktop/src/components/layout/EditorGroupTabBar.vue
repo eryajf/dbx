@@ -925,6 +925,9 @@ function tabDropStyle(tab: QueryTab): CSSProperties | undefined {
   if (groupTabDrag.targetTabId !== tab.id) {
     return undefined;
   }
+  if (isVerticalLayout.value) {
+    return groupTabDrag.position === "before" ? { borderTop: "2px solid var(--ring)" } : { borderBottom: "2px solid var(--ring)" };
+  }
   if (groupTabDrag.position === "before") {
     return { boxShadow: "inset 3px 0 0 0 var(--ring)" };
   }
