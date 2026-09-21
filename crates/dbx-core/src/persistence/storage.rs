@@ -1991,6 +1991,17 @@ fn migrate_legacy_connection_secrets_sync(conn: &mut Connection) -> Result<(), S
 /// `connections.config_json`. Re-save only rows that still contain inline
 /// credentials so the existing connection persistence path moves every
 /// supported field into encrypted `connection_secrets` in one transaction.
+///
+/// The parsed JSON only carries the fields that were still inline, so every
+/// field an earlier release already externalized reads back as empty here.
+/// Re-saving writes those empty values through `persist_secret_in_tx`, which
+/// turns them into DELETEs: a legacy row with an empty inline `password` next to
+/// an inline `url_params` would silently lose its stored password. Snapshot the
+/// stored secrets first so the re-save can never drop one. Rows are copied
+/// verbatim, and `migrate_legacy_connection_secrets_sync` has already encrypted
+/// every legacy plaintext value before this runs, so the restored rows keep the
+/// at-rest guarantee. `save_password == false` is the one case where losing the
+/// password is intended, so that row is not restored.
 fn migrate_legacy_connection_config_json_sync(conn: &mut Connection) -> Result<(), String> {
     let rows = {
         let mut statement =
@@ -2017,12 +2028,73 @@ fn migrate_legacy_connection_config_json_sync(conn: &mut Connection) -> Result<(
     if legacy.is_empty() {
         return Ok(());
     }
+    let keep_password =
+        legacy.iter().filter(|config| config.save_password).map(|config| config.id.clone()).collect::<HashSet<_>>();
+    let connection_ids = legacy.iter().map(|config| config.id.clone()).collect::<HashSet<_>>();
+    let stored_secrets = load_stored_connection_secrets_sync(conn, &connection_ids)?;
+
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
     for config in legacy {
         tx.execute("DELETE FROM connections WHERE id = ?1", [&config.id]).map_err(|error| error.to_string())?;
         persist_connection_in_tx(&tx, &config)?;
     }
+    for (connection_id, key, secret, secret_enc) in stored_secrets {
+        if key == "password" && !keep_password.contains(&connection_id) {
+            continue;
+        }
+        if connection_secret_in_tx_exists(&tx, &connection_id, &key)? {
+            continue;
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO connection_secrets (connection_id, key, secret, secret_enc) VALUES (?1, ?2, ?3, ?4)",
+            params![connection_id, key, secret, secret_enc],
+        )
+        .map_err(|error| error.to_string())?;
+    }
     tx.commit().map_err(|error| error.to_string())
+}
+
+/// Read every non-empty secret row that belongs to `connection_ids` so a
+/// migration re-save can put back anything it would otherwise delete.
+fn load_stored_connection_secrets_sync(
+    conn: &Connection,
+    connection_ids: &HashSet<String>,
+) -> Result<Vec<(String, String, String, Option<String>)>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT connection_id, key, secret, secret_enc FROM connection_secrets
+             WHERE secret <> '' OR (secret_enc IS NOT NULL AND secret_enc <> '')",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(rows.into_iter().filter(|(connection_id, ..)| connection_ids.contains(connection_id)).collect())
+}
+
+fn connection_secret_in_tx_exists(
+    tx: &rusqlite::Transaction<'_>,
+    connection_id: &str,
+    key: &str,
+) -> Result<bool, String> {
+    tx.query_row(
+        "SELECT 1 FROM connection_secrets
+         WHERE connection_id = ?1 AND key = ?2 AND (secret <> '' OR (secret_enc IS NOT NULL AND secret_enc <> ''))",
+        params![connection_id, key],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+    .map_err(|error| error.to_string())
 }
 
 fn connection_config_has_inline_secrets(config: &ConnectionConfig) -> bool {
@@ -11192,6 +11264,81 @@ mod tests {
             .unwrap();
         assert!(migrated.0.is_empty());
         assert!(migrated.1.as_deref().is_some_and(|value| value.starts_with("dbxenc1.")));
+        std::fs::remove_file(&db).ok();
+    }
+
+    #[tokio::test]
+    async fn legacy_connection_config_migration_keeps_externalized_password() {
+        // Regression: re-saving a legacy inline config wrote the config's empty
+        // `password` field straight back into `connection_secrets`, which the
+        // persistence path turns into a DELETE. A connection whose password
+        // already lived in the secret store therefore lost it on upgrade.
+        let id = "legacy-inline-url-params";
+        let db = temp_db_path("legacy-connection-config-keeps-password");
+        let storage = Storage::open(&db).await.unwrap();
+        let mut config = plain_connection(id, "saved-password");
+        config.url_params = Some("authSource=dbx_test".to_string());
+        storage.save_connections(std::slice::from_ref(&config)).await.unwrap();
+
+        // Restore the shape an older release persisted: `url_params` is still
+        // inline in config_json while the password only exists as a secret.
+        let mut inline = config.clone();
+        inline.password = String::new();
+        let inline_json = serde_json::to_string(&inline).unwrap();
+        storage
+            .with_conn(move |conn| {
+                conn.execute(
+                    "UPDATE connections SET config_json = ?1 WHERE id = ?2",
+                    rusqlite::params![inline_json, id],
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+            })
+            .await
+            .unwrap();
+        drop(storage);
+
+        let reopened = Storage::open(&db).await.unwrap();
+        let raw = raw_connection_json(&reopened, id).await;
+        assert!(!raw.contains("authSource=dbx_test"));
+        assert_eq!(reopened.get_secret(id, "password").await.unwrap().as_deref(), Some("saved-password"));
+        let loaded = reopened.load_connections().await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].password, "saved-password");
+        assert_eq!(loaded[0].url_params.as_deref(), Some("authSource=dbx_test"));
+        std::fs::remove_file(&db).ok();
+    }
+
+    #[tokio::test]
+    async fn legacy_connection_config_migration_still_drops_password_when_not_saved() {
+        let id = "legacy-inline-url-params-unsaved";
+        let db = temp_db_path("legacy-connection-config-drops-unsaved-password");
+        let storage = Storage::open(&db).await.unwrap();
+        let mut config = plain_connection(id, "saved-password");
+        config.url_params = Some("authSource=dbx_test".to_string());
+        storage.save_connections(std::slice::from_ref(&config)).await.unwrap();
+
+        let mut inline = config.clone();
+        inline.password = String::new();
+        inline.save_password = false;
+        let inline_json = serde_json::to_string(&inline).unwrap();
+        storage
+            .with_conn(move |conn| {
+                conn.execute(
+                    "UPDATE connections SET config_json = ?1 WHERE id = ?2",
+                    rusqlite::params![inline_json, id],
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+            })
+            .await
+            .unwrap();
+        drop(storage);
+
+        // "Don't save password" must keep winning: the restore path must not
+        // resurrect a credential this connection is configured not to keep.
+        let reopened = Storage::open(&db).await.unwrap();
+        assert!(reopened.get_secret(id, "password").await.unwrap().is_none());
         std::fs::remove_file(&db).ok();
     }
 
