@@ -3658,6 +3658,7 @@ mod tests {
         save_webdav_password(&source, &webdav, "webdav-secret").await.unwrap();
         let snippet = SnippetSyncConfig {
             provider: SnippetProvider::GitHub,
+            instance_url: None,
             token: None,
             snippet_id: None,
             replace_legacy_snippet: false,

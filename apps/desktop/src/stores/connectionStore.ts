@@ -9456,7 +9456,7 @@ export const useConnectionStore = defineStore("connection", () => {
     await importedTunnelProfileStore.init();
     const imported = prepareConnectionConfigImport(
       selected,
-      connections.value.map((connection) => connection.id),
+      connections.value,
       importedTunnelProfileStore.profiles.map((profile) => profile.id),
       uuid,
     );
