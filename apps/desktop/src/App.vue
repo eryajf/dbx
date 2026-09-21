@@ -77,6 +77,7 @@ import { parsePluginInstallDeepLink } from "@/lib/plugins/pluginInstallDeepLink"
 import { parseConnectionDeepLink, type ConnectionDeepLinkDraft } from "@/lib/connection/connectionDeepLink";
 import { parseAiConfigDeepLink, type AiConfigDeepLinkDraft } from "@/lib/ai/aiConfigDeepLink";
 import { activeDesktopAiRuns, blockingDesktopAiRunsForQuit } from "@/lib/ai/desktopAiRunRegistry";
+
 import {
   isBrowserReloadShortcut,
   isCloseOtherTabsShortcut,

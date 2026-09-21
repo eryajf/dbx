@@ -346,7 +346,12 @@ DBX provides a web version that can be deployed via Docker. The examples use
 the `latest` tag to pull the current release.
 
 ```bash
-docker run -d --pull=always --name dbx -p 4224:4224 -v dbx-data:/app/data t8y2/dbx:latest
+# Create the key once. Never replace it for an existing deployment.
+(umask 077; test -e dbx_secret_key || openssl rand -hex 32 > dbx_secret_key)
+docker run -d --pull=always --name dbx -p 4224:4224 \
+  -v dbx-data:/app/data \
+  --mount type=bind,src="$(pwd)/dbx_secret_key",dst=/run/secrets/dbx_secret_key,readonly \
+  -e DBX_SECRET_KEY_FILE=/run/secrets/dbx_secret_key t8y2/dbx:latest
 ```
 
 This uses the cross-platform `dbx-data` named volume. Users in China can use
@@ -371,13 +376,62 @@ services:
       - "4224:4224"
     volumes:
       - dbx-data:/app/data
+    environment:
+      # Required for new installations and upgrades. Mount this file
+      # from a Docker secret or another persistent host path; do not rotate it
+      # between restarts unless you have exported and re-imported the data.
+      - DBX_SECRET_KEY_FILE=/run/secrets/dbx_secret_key
+    secrets:
+      - dbx_secret_key
     restart: unless-stopped
 
 volumes:
   dbx-data:
+
+secrets:
+  dbx_secret_key:
+    file: ./dbx_secret_key
 ```
 
 Open `http://localhost:4224` in your browser. Multi-arch images (amd64 / arm64) are available.
+
+Connection, plugin, AI, and tunnel credentials are encrypted before they are
+written to `dbx.db`. Desktop builds use the local platform credential store
+(macOS Keychain, Windows Credential Manager, or Linux Secret Service).
+Web/Docker requires an explicit persistent key for both new installations and
+upgrades: set `DBX_SECRET_KEY_FILE` to the mounted key file, or provide
+`DBX_SECRET_KEY` through your secret manager. Create the key once before
+starting Docker Compose, keep it across container restarts, and back it up
+separately from the database. Without a usable key, business APIs remain
+blocked and the browser displays the data security upgrade screen.
+
+When upgrading from a release that stored credentials in plain text, Desktop
+and Web display a **Data Security Upgrade** wizard before opening the main
+application. Choose **Start upgrade** to create a restricted backup, migrate
+legacy database/JSON credentials, and verify that encrypted values can be
+read. Failures retain the original data and backup; fix the issue shown in
+the wizard and choose **Retry**. The backup path is shown after success.
+Once you have verified your connections, **Delete migration backups** asks
+for confirmation and removes the migration backup directory and the legacy
+JSON `.bak` files created by that migration. Unrelated backup files are kept.
+Users with no legacy data proceed directly after the initial check.
+
+Local CLI and standalone MCP can reuse the existing platform credential
+store on the same device, or read an explicitly configured
+`DBX_SECRET_KEY_FILE`/`DBX_SECRET_KEY`. They do not create keys during the
+startup check or automatically migrate legacy data. A
+`DATA_MIGRATION_REQUIRED` error means that you must first open the same data
+directory in Desktop or Web and complete its upgrade wizard. For headless
+hosts without a platform credential store, configure the persistent key.
+
+Cross-device exports use a separate sync passphrase and never contain the
+local storage key. A direct `dbx.db` copy is not a cross-platform sync method:
+platform keys do not move with the database. Use encrypted export/import so
+the target device stores credentials using its own local key.
+
+For the complete design, migration state machine, implementation map,
+troubleshooting, and test plan, see
+[DBX Data Security Upgrade and Migration](docs/data-security-migration.md).
 
 To publish DBX under a reverse-proxy context path such as `/dbx`, set the
 runtime base path and proxy the same prefix to the container:
