@@ -10539,8 +10539,9 @@ export default withEnglishFallback({
     deleteBackup: "删除备份",
     exportDiagnostic: "导出脱敏诊断",
     openDataDir: "打开数据目录",
+    openBackupDir: "打开备份位置",
     exit: "退出 DBX",
-    confirmDelete: "确认删除迁移备份？删除后无法使用该备份回滚。",
+    confirmDelete: "确认删除这份升级备份？连接和密码已经保存在本机，删除备份不会删除你的连接列表或密码，但之后无法再用它回滚本次升级。",
     confirm: "确认删除",
     cancel: "取消",
     errors: {

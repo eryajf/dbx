@@ -10571,8 +10571,9 @@ export default {
     deleteBackup: "Delete backup",
     exportDiagnostic: "Export redacted diagnostics",
     openDataDir: "Open data directory",
+    openBackupDir: "Open backup location",
     exit: "Exit DBX",
-    confirmDelete: "Delete the migration backup? It cannot be used for rollback afterwards.",
+    confirmDelete: "Delete this upgrade backup? Your connections and passwords are already stored on this device, so removing the backup does not delete your connection list or passwords, but you can no longer use it to roll back this upgrade.",
     confirm: "Delete",
     cancel: "Cancel",
     errors: {

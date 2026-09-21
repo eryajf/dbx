@@ -14,7 +14,7 @@ const status = computed(() => props.store.state.status);
 const confirmingCleanup = ref(false);
 const diagnosticText = ref("");
 const exportingDiagnostic = ref(false);
-const canRevealDataDir = computed(() => Boolean(status.value?.dataDir && isTauriRuntime()));
+const canRevealPaths = computed(() => isTauriRuntime());
 const errorCode = computed(() => props.store.state.errorCode);
 const errorMessage = computed(() => props.store.state.errorMessage);
 const errorAdviceKey = computed(() => {
@@ -49,13 +49,12 @@ async function exitApp() {
   }
   window.close();
 }
-async function revealDataDir() {
-  const path = status.value?.dataDir;
+async function revealPath(path: string | null | undefined) {
   if (!path || !isTauriRuntime()) return;
   try {
     await api.revealPathInFileManager(path);
   } catch {
-    /* path remains visible */
+    /* the path stays visible so it can still be copied manually */
   }
 }
 async function diagnostic() {
@@ -81,7 +80,6 @@ async function diagnostic() {
         </div>
         <label class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span class="sr-only">{{ t("migration.language") }}</span>
-          <span aria-hidden="true">🌐</span>
           <select class="h-8 rounded-md border bg-card px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-primary" :value="locale" :aria-label="t('migration.language')" @change="changeLocale">
             <option v-for="option in LOCALE_OPTIONS" :key="option.value" :value="option.value">{{ option.flag }} {{ option.label }}</option>
           </select>
@@ -119,7 +117,19 @@ async function diagnostic() {
               <span class="text-muted-foreground">{{ t("migration.keyProviderLabel") }}</span> {{ status.persistentKeyConfigured ? t("migration.ready") : t("migration.pending") }}
             </div>
           </div>
-          <p v-if="status?.dataDir" class="break-all text-xs text-muted-foreground">{{ t("migration.dataDir") }}{{ status.dataDir }}</p>
+          <p v-if="status?.dataDir" class="break-all text-xs text-muted-foreground">
+            {{ t("migration.dataDir")
+            }}<!--
+            --><button
+              type="button"
+              class="break-all text-left underline decoration-dotted underline-offset-2 hover:text-foreground disabled:cursor-default disabled:no-underline"
+              :disabled="!canRevealPaths"
+              :title="canRevealPaths ? t('migration.openDataDir') : status.dataDir"
+              @click="revealPath(status.dataDir)"
+            >
+              {{ status.dataDir }}
+            </button>
+          </p>
           <p v-if="status?.keyProviderAvailable === false && !status.keyCreationAllowed" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{{ t("migration.keyUnavailable") }}</p>
           <p v-if="status?.keyFileConfigured === false && status?.persistentKeyConfigured === false" class="text-xs text-muted-foreground">{{ t("migration.dockerKeyHint") }}</p>
           <div v-if="props.store.state.error" class="space-y-1 rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
@@ -139,7 +149,8 @@ async function diagnostic() {
             >
               {{ status?.state === "failed" ? t("migration.retryMigration") : t("migration.start") }}</button
             ><button v-if="props.store.state.error" class="rounded-md border px-4 py-2" @click="diagnostic">{{ t("migration.exportDiagnostic") }}</button
-            ><button v-if="props.store.state.error && canRevealDataDir" class="rounded-md border px-4 py-2" @click="revealDataDir">{{ t("migration.openDataDir") }}</button><button v-if="props.store.state.error" class="rounded-md border px-4 py-2" @click="exitApp">{{ t("migration.exit") }}</button>
+            ><button v-if="props.store.state.error && status?.dataDir && canRevealPaths" class="rounded-md border px-4 py-2" @click="revealPath(status.dataDir)">{{ t("migration.openDataDir") }}</button
+            ><button v-if="props.store.state.error" class="rounded-md border px-4 py-2" @click="exitApp">{{ t("migration.exit") }}</button>
           </div>
         </div>
         <div v-else-if="props.store.state.step === 2" class="space-y-5">
@@ -163,20 +174,31 @@ async function diagnostic() {
           <div class="rounded-lg border border-primary/30 bg-primary/5 p-5">
             <h2 class="font-medium">{{ t("migration.successTitle") }}</h2>
             <p class="mt-2 text-sm text-muted-foreground">{{ t("migration.successIntro") }}</p>
+            <p v-if="status?.backupPath" class="mt-3 break-all text-xs text-muted-foreground">
+              {{ t("migration.backupPath")
+              }}<!--
+              --><button
+                type="button"
+                class="break-all text-left underline decoration-dotted underline-offset-2 hover:text-foreground disabled:cursor-default disabled:no-underline"
+                :disabled="!canRevealPaths"
+                :title="canRevealPaths ? t('migration.openBackupDir') : status.backupPath"
+                @click="revealPath(status.backupPath)"
+              >
+                {{ status.backupPath }}
+              </button>
+            </p>
           </div>
-          <div v-if="status?.backupPath" class="rounded-lg border p-4 text-sm">
-            <p class="font-medium">{{ t("migration.backupPath") }}</p>
-            <code class="mt-2 block break-all text-xs text-muted-foreground">{{ status.backupPath }}</code>
-          </div>
-          <div class="flex flex-wrap gap-3">
-            <button class="rounded-md bg-primary px-4 py-2 text-primary-foreground" :disabled="props.store.state.busy" @click="props.store.enter">{{ t("migration.enter") }}</button
-            ><button v-if="status?.backupPath && props.store.state.error !== 'cleanupFailed'" class="rounded-md border px-4 py-2 disabled:opacity-50" :disabled="props.store.state.busy" @click="confirmingCleanup = true">{{ t("migration.deleteBackup") }}</button>
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <button class="rounded-md bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50" :disabled="props.store.state.busy" @click="props.store.enter">{{ t("migration.enter") }}</button
+            ><button v-if="status?.backupPath && props.store.state.error !== 'cleanupFailed'" class="text-xs text-muted-foreground underline underline-offset-2 hover:text-destructive disabled:opacity-50" :disabled="props.store.state.busy" @click="confirmingCleanup = true">
+              {{ t("migration.deleteBackup") }}
+            </button>
           </div>
           <div v-if="confirmingCleanup" class="rounded border p-4 text-sm">
             <p>{{ t("migration.confirmDelete") }}</p>
             <div class="mt-3 flex gap-2">
               <button
-                class="rounded bg-destructive px-3 py-1 text-destructive-foreground"
+                class="rounded border border-destructive bg-card px-3 py-1 text-destructive hover:bg-destructive/10"
                 @click="
                   confirmingCleanup = false;
                   props.store.cleanup();
