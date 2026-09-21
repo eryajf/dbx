@@ -1537,6 +1537,7 @@ pub fn run() {
     builder
         .manage(CloseBehaviorState::new())
         .manage(commands::plugin_file::PluginFileState::new())
+        .manage(commands::plugin_storage::PluginUiStorageState::new())
         .manage(AppLocaleState::new())
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Started {
@@ -1896,6 +1897,9 @@ pub fn run() {
             commands::plugin_file::plugin_file_read,
             commands::plugin_file::plugin_file_write,
             commands::plugin_file::plugin_file_close,
+            commands::plugin_storage::plugin_ui_storage_get,
+            commands::plugin_storage::plugin_ui_storage_set,
+            commands::plugin_storage::plugin_ui_storage_delete,
             commands::plugins::list_plugins,
             commands::plugins::list_plugin_trusted_keys,
             commands::plugins::save_plugin_trusted_key,
@@ -1975,6 +1979,7 @@ pub fn run() {
             commands::schema::list_constraints,
             commands::schema::list_partitions,
             commands::schema::get_table_partition_status,
+            commands::schema::get_table_partitioning,
             commands::schema::list_invalid_indexes,
             commands::schema::list_subpartitions,
             commands::schema::get_table_ddl,
@@ -2056,6 +2061,8 @@ pub fn run() {
             commands::query::preview_sqlite_table_structure_change,
             commands::query::apply_sqlite_table_structure_change,
             commands::query::build_create_table_sql,
+            commands::query::build_create_partitioned_table_sql,
+            commands::query::build_table_partition_operation_sql,
             commands::query::build_single_column_alter_sql,
             commands::query::analyze_editable_query_editability,
             commands::query::prepare_data_grid_save,

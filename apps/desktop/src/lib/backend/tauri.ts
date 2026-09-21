@@ -129,7 +129,7 @@ import type { DmlChangePreviewSqlOptions, DmlChangePreviewSqlResult } from "@/li
 import type { DataGridExtractRequest, DataGridExtractResult } from "@/lib/dataGrid/dataGridCopyExtractor";
 import type { DataCompareFromTablesOptions, DataCompareFromTablesPreparation, DataCompareSyncPlan, DataCompareSyncPlanOptions, DataComparePreparation, DataComparePreparationOptions } from "@/lib/dataGrid/dataCompare";
 import type { SchemaDiffPreparation, SchemaDiffPreparationOptions, SchemaSyncSqlPlan, SelectedSchemaDiffInput, GenerateSchemaSyncPlanOptions, TableDiff, FunctionDiff, SequenceDiff, RuleDiff, OwnerDiff } from "@/lib/schema/schemaDiff";
-import type { BuildTableOwnerChangeSqlOptions, BuildTableStructureChangeSqlOptions, BuildSingleColumnAlterSqlOptions, SqliteTableStructureChangePreview, TableStructureChangeSql } from "@/lib/table/tableStructureEditorSql";
+import type { BuildCreatePartitionedTableSqlOptions, BuildTableOwnerChangeSqlOptions, BuildTableStructureChangeSqlOptions, BuildSingleColumnAlterSqlOptions, SqliteTableStructureChangePreview, TablePartitionSqlOptions, TableStructureChangeSql } from "@/lib/table/tableStructureEditorSql";
 import type { BuildTableSelectSqlOptions } from "@/lib/table/tableSelectSql";
 import type { DatabaseSearchSql, DatabaseSearchSqlOptions, SearchResultWhereOptions } from "@/lib/database/databaseSearch";
 import type { BuildEditableObjectSourceSqlInput, BuildRoutineRenameObjectSourceInput } from "@/lib/table/objectSourceEditor";
@@ -1726,13 +1726,14 @@ export async function closeClientConnectionSession(connectionId: string, databas
   });
 }
 
-export async function executeBatch(connectionId: string, database: string, statements: string[], schema?: string, timeoutSecs?: number): Promise<QueryResult> {
+export async function executeBatch(connectionId: string, database: string, statements: string[], schema?: string, timeoutSecs?: number, useTransaction?: boolean): Promise<QueryResult> {
   return invoke("execute_batch", {
     connectionId,
     database,
     statements,
     schema,
     timeoutSecs,
+    useTransaction,
   });
 }
 
@@ -1969,6 +1970,14 @@ export async function buildTableOwnerChangeSql(options: BuildTableOwnerChangeSql
   return invoke("build_table_owner_change_sql", { options });
 }
 
+export async function buildTablePartitionOperationSql(options: TablePartitionSqlOptions): Promise<TableStructureChangeSql> {
+  return invoke("build_table_partition_operation_sql", { options });
+}
+
+export async function buildCreatePartitionedTableSql(options: BuildCreatePartitionedTableSqlOptions): Promise<TableStructureChangeSql> {
+  return invoke("build_create_partitioned_table_sql", { options: options.options, partitioning: options.partitioning });
+}
+
 export async function previewSqliteTableStructureChange(connectionId: string, database: string, options: BuildTableStructureChangeSqlOptions): Promise<SqliteTableStructureChangePreview> {
   return invoke("preview_sqlite_table_structure_change", {
     connectionId,
@@ -2175,6 +2184,15 @@ export interface TablePartitionStatus {
 
 export async function getTablePartitionStatus(connectionId: string, database: string, schema: string, table: string): Promise<TablePartitionStatus> {
   return invoke("get_table_partition_status", {
+    connectionId,
+    database,
+    schema,
+    table,
+  });
+}
+
+export async function getTablePartitioning(connectionId: string, database: string, schema: string, table: string): Promise<import("@/types/database").PgTablePartitioning> {
+  return invoke("get_table_partitioning", {
     connectionId,
     database,
     schema,
@@ -2460,6 +2478,18 @@ export async function writePluginLocalFileChunk(pluginId: string, handleId: numb
 
 export async function closePluginLocalFile(pluginId: string, handleId: number): Promise<void> {
   return invoke("plugin_file_close", { pluginId, handleId });
+}
+
+export async function getPluginUiStorage(pluginId: string, key: string): Promise<unknown> {
+  return invoke("plugin_ui_storage_get", { pluginId, key });
+}
+
+export async function setPluginUiStorage(pluginId: string, key: string, value: unknown): Promise<void> {
+  return invoke("plugin_ui_storage_set", { pluginId, key, value });
+}
+
+export async function deletePluginUiStorage(pluginId: string, key: string): Promise<void> {
+  return invoke("plugin_ui_storage_delete", { pluginId, key });
 }
 
 export async function listPluginFilesystemEntries(pluginId: string, providerId: string, options: { connectionId?: string; uri?: string; cursor?: string; limit?: number } = {}): Promise<PluginFilesystemListResult> {
@@ -4717,6 +4747,11 @@ export interface MeilisearchIndexOverview {
   updatedAt: string | null;
   numberOfDocuments: number;
   isIndexing: boolean;
+  /** Raw document store size of this index (Meilisearch >= 1.14); null on older servers. */
+  documentSize: number | null;
+  /** Average document size of this index (Meilisearch >= 1.14); null on older servers. */
+  avgDocumentSize: number | null;
+  /** Instance-wide database size; every index shares it, so it is only a fallback. */
   databaseSize: number | null;
 }
 
