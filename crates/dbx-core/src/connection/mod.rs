@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
+use tokio_util::sync::CancellationToken;
 
 use mysql_async::prelude::Queryable;
 use mysql_async::Row as MysqlRow;
@@ -19,7 +20,8 @@ use crate::agent_connection::{
     agent_connect_params, agent_connect_params_with_role, h2_file_path_from_jdbc_url, hive_uses_zookeeper_discovery,
     is_h2_file_connection, mongo_legacy_error_with_auth_hint, mongo_uses_legacy_driver,
     oracle_alternate_connect_config_labels, oracle_alternate_connect_configs, oracle_error_with_driver_hint,
-    should_retry_mongo_with_legacy_driver, trino_like_jdbc_connection_string, AgentSessionRole,
+    pick_legacy_postgres_like_database, should_retry_mongo_with_legacy_driver, trino_like_jdbc_connection_string,
+    AgentSessionRole,
 };
 use crate::agent_manager::{AgentManager, JavaRuntimeMode, DEFAULT_JRE_KEY};
 use crate::agent_recovery::{RecoveryDecision, RecoveryPolicy, RecoveryScope};
@@ -38,7 +40,7 @@ use crate::nacos::config::{NACOS_CONSOLE_SESSION_PASSWORD, NACOS_PRIMARY_SESSION
 use crate::path_utils::expand_tilde;
 use crate::plugins::{
     PluginConnectionActionResult, PluginConnectionHandle, PluginDriverSession, PluginHost, PluginRegistry,
-    PluginRuntimeEnv,
+    PluginRuntimeEnv, PluginRuntimeProxy,
 };
 use crate::query_cancel::RunningQueries;
 use crate::session_credentials::SessionCredentialStore;
@@ -336,12 +338,36 @@ macro_rules! agent_connection_pool_database_type {
     };
 }
 
+#[derive(Clone)]
+pub struct ConnectionLifecycleSnapshot {
+    generation: u64,
+    cancellation: CancellationToken,
+}
+
+impl ConnectionLifecycleSnapshot {
+    pub fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+}
+
+struct ConnectionLifecycle {
+    generation: u64,
+    cancellation: CancellationToken,
+}
+
+struct SharedResourceBudget {
+    capacity: usize,
+    semaphore: Arc<Semaphore>,
+}
+
 pub struct AppState {
     connections: Arc<RwLock<ConnectionPoolRegistry>>,
     task_supervisor: TaskSupervisor,
     pool_activity: Arc<RwLock<HashMap<String, PoolActivity>>>,
     draining_pools: Arc<std::sync::Mutex<HashMap<String, watch::Sender<bool>>>>,
     connection_attempts: RwLock<HashMap<String, ConnectionAttemptState>>,
+    connection_lifecycles: std::sync::Mutex<HashMap<String, ConnectionLifecycle>>,
+    shared_resource_budgets: std::sync::Mutex<HashMap<String, SharedResourceBudget>>,
     pub configs: RwLock<HashMap<String, ConnectionConfig>>,
     pub running_queries: RunningQueries,
     pub tunnels: TunnelManager,
@@ -966,6 +992,19 @@ fn metadata_pool_database<'a>(config: Option<&ConnectionConfig>, database: Optio
     }
 }
 
+/// Always-present KingbaseES/Vastbase catalog used to discover a default database for
+/// legacy connections that were saved without one (see issue #9491).
+const LEGACY_POSTGRES_LIKE_PROBE_DATABASE: &str = "template1";
+const LEGACY_POSTGRES_LIKE_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Whether a connection relies on the historical `postgres` default that
+/// `ConnectionConfig::default_database()` applies to KingbaseES/Vastbase connections
+/// saved without an explicit database.
+fn needs_legacy_postgres_like_database_probe(config: &ConnectionConfig) -> bool {
+    matches!(config.db_type, DatabaseType::Kingbase | DatabaseType::Vastbase)
+        && config.database.as_deref().is_none_or(|database| database.trim().is_empty())
+}
+
 pub fn sqlserver_legacy_driver_error(agent_error: &str) -> String {
     // This mapper handles both AgentManager launch strings and Agent call errors, so context
     // must remain before any structured-error compatibility marker.
@@ -1230,6 +1269,68 @@ fn mysql_metadata_fallback_url(
 }
 
 impl AppState {
+    pub fn shared_resource_budget(&self, name: &str, capacity: usize) -> Result<Arc<Semaphore>, String> {
+        if capacity == 0 {
+            return Err("Shared resource budget capacity must be greater than zero".to_string());
+        }
+        let mut budgets = self.shared_resource_budgets.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(budget) = budgets.get(name) {
+            if budget.capacity != capacity {
+                return Err(format!(
+                    "Shared resource budget {name:?} already has capacity {}, not {capacity}",
+                    budget.capacity
+                ));
+            }
+            return Ok(budget.semaphore.clone());
+        }
+        let semaphore = Arc::new(Semaphore::new(capacity));
+        budgets.insert(name.to_string(), SharedResourceBudget { capacity, semaphore: semaphore.clone() });
+        Ok(semaphore)
+    }
+
+    pub fn connection_lifecycle_snapshot(&self, connection_id: &str) -> ConnectionLifecycleSnapshot {
+        let mut lifecycles = self.connection_lifecycles.lock().unwrap_or_else(|error| error.into_inner());
+        let lifecycle = lifecycles
+            .entry(connection_id.to_string())
+            .or_insert_with(|| ConnectionLifecycle { generation: 0, cancellation: CancellationToken::new() });
+        ConnectionLifecycleSnapshot { generation: lifecycle.generation, cancellation: lifecycle.cancellation.clone() }
+    }
+
+    pub fn connection_lifecycle_is_current(&self, connection_id: &str, snapshot: &ConnectionLifecycleSnapshot) -> bool {
+        self.connection_lifecycles.lock().unwrap_or_else(|error| error.into_inner()).get(connection_id).is_some_and(
+            |lifecycle| lifecycle.generation == snapshot.generation && !snapshot.cancellation.is_cancelled(),
+        )
+    }
+
+    pub fn invalidate_connection_lifecycle(&self, connection_id: &str) {
+        let previous = {
+            let mut lifecycles = self.connection_lifecycles.lock().unwrap_or_else(|error| error.into_inner());
+            let lifecycle = lifecycles
+                .entry(connection_id.to_string())
+                .or_insert_with(|| ConnectionLifecycle { generation: 0, cancellation: CancellationToken::new() });
+            let previous = std::mem::replace(&mut lifecycle.cancellation, CancellationToken::new());
+            lifecycle.generation = lifecycle.generation.wrapping_add(1);
+            previous
+        };
+        previous.cancel();
+    }
+
+    fn invalidate_all_connection_lifecycles(&self) {
+        let previous = {
+            let mut lifecycles = self.connection_lifecycles.lock().unwrap_or_else(|error| error.into_inner());
+            lifecycles
+                .values_mut()
+                .map(|lifecycle| {
+                    lifecycle.generation = lifecycle.generation.wrapping_add(1);
+                    std::mem::replace(&mut lifecycle.cancellation, CancellationToken::new())
+                })
+                .collect::<Vec<_>>()
+        };
+        for cancellation in previous {
+            cancellation.cancel();
+        }
+    }
+
     /// Return an owned pool handle. The registry read lock is released before
     /// the caller can perform any asynchronous database operation.
     pub async fn pool_handle(&self, pool_key: &str) -> Option<PoolKind> {
@@ -1261,6 +1362,25 @@ impl AppState {
     pub async fn with_connection_pools<R>(&self, inspect: impl FnOnce(&HashMap<String, PoolKind>) -> R) -> R {
         let connections = self.connections.read().await;
         inspect(&connections.pools)
+    }
+
+    /// Whether DBX currently holds a pool for `connection_id`, i.e. the
+    /// connection is open right now.
+    ///
+    /// A saved config proves nothing on its own: a disconnected connection keeps
+    /// its config while every one of its pools has been drained. The registry is
+    /// the only state that answers "is this connection open", so callers that
+    /// must not connect on a user's behalf gate on this instead of on
+    /// [`Self::configs`].
+    ///
+    /// Deliberately a pure registry read: it never calls
+    /// `get_or_create_pool`, so checking the state cannot itself open the
+    /// connection. Ownership uses the same key convention as
+    /// `drain_connection_pools` — the connection id, optionally followed by `:`
+    /// and the database/catalog/role/session suffix that `base_pool_key_for` and
+    /// its session-scoped variant build.
+    pub async fn is_connection_open(&self, connection_id: &str) -> bool {
+        self.connections.read().await.keys().any(|key| pool_key_belongs_to_connection(key, connection_id))
     }
 
     /// Mutate the registry atomically. The callback is deliberately
@@ -1384,6 +1504,8 @@ impl AppState {
             pool_activity: Arc::new(RwLock::new(HashMap::new())),
             draining_pools: Arc::new(std::sync::Mutex::new(HashMap::new())),
             connection_attempts: RwLock::new(HashMap::new()),
+            connection_lifecycles: std::sync::Mutex::new(HashMap::new()),
+            shared_resource_budgets: std::sync::Mutex::new(HashMap::new()),
             configs: RwLock::new(HashMap::new()),
             running_queries: RunningQueries::default(),
             tunnels: TunnelManager::new(data_dir),
@@ -2050,6 +2172,7 @@ impl AppState {
     }
 
     pub async fn shutdown(&self, deadline: Duration) {
+        self.invalidate_all_connection_lifecycles();
         self.running_queries.cancel_all();
         let removed_pools = self.drain_all_connection_pools().await;
         self.transaction_sessions.write().await.clear();
@@ -2184,6 +2307,91 @@ impl AppState {
         .await
     }
 
+    /// `KingbaseES`/`Vastbase` do not guarantee the `postgres` database that
+    /// `ConnectionConfig::default_database()` assumes for saved connections without an
+    /// explicit database (see issue #9491). When such a connection is opened — an
+    /// upgraded legacy record or a cleared "default database" — probe the
+    /// always-present `template1` catalog and open a database that actually exists
+    /// instead of failing the whole connection with `database "postgres" does not exist`.
+    async fn resolve_legacy_postgres_like_database(
+        &self,
+        connection_id: &str,
+        db_config: &ConnectionConfig,
+    ) -> Option<String> {
+        if !needs_legacy_postgres_like_database_probe(db_config) {
+            return None;
+        }
+        // Reuse the metadata pool machinery: it applies the active session credentials and
+        // the connection's transport layers, and it is cached by pool key, so repeated
+        // connects and the object browser share one probe connection. The pool stays
+        // registered so a concurrent reader of the object browser is never torn down;
+        // `remove_connection_pools` closes it together with the connection's other pools.
+        //
+        // The probe always passes `template1` explicitly, so the resolver cannot re-enter
+        // itself; `Box::pin` only satisfies the compiler's async-recursion requirement.
+        let pool_key = match Box::pin(self.get_or_create_metadata_pool_for_session(
+            connection_id,
+            Some(LEGACY_POSTGRES_LIKE_PROBE_DATABASE),
+            None,
+        ))
+        .await
+        {
+            Ok(pool_key) => pool_key,
+            Err(error) => {
+                log::warn!(
+                    "Failed to open a '{LEGACY_POSTGRES_LIKE_PROBE_DATABASE}' probe connection for '{connection_id}' while resolving a legacy default database: {error}"
+                );
+                return None;
+            }
+        };
+        let databases = {
+            let pool_handle = self.pool_handle(&pool_key).await;
+            let client = pool_handle.as_ref().and_then(|pool| match pool {
+                PoolKind::Agent(client) => Some(client.clone()),
+                _ => None,
+            });
+            match client {
+                Some(client) => client
+                    .lock()
+                    .await
+                    .list_databases::<Vec<db::DatabaseInfo>>(Some(LEGACY_POSTGRES_LIKE_PROBE_TIMEOUT))
+                    .await
+                    .map(|databases| databases.into_iter().map(|database| database.name).collect::<Vec<String>>()),
+                None => Err("Legacy default database probe pool is not an Agent pool".to_string()),
+            }
+        };
+        match databases {
+            Ok(databases) => {
+                let resolved = pick_legacy_postgres_like_database(&databases);
+                match &resolved {
+                    Some(database) => {
+                        log::info!(
+                            "Resolved legacy default database '{database}' for '{connection_id}' from {databases:?}"
+                        );
+                        // Write the discovered database back so the legacy record stops relying on
+                        // the `postgres` default and later starts skip the probe. Temporary
+                        // connection-test ids are not persisted and are simply ignored.
+                        if let Err(error) = self.save_connection_database(connection_id, database).await {
+                            log::warn!(
+                                "Failed to persist the resolved legacy default database '{database}' for '{connection_id}': {error}"
+                            );
+                        }
+                    }
+                    None => log::warn!(
+                        "No usable database found for the legacy default database of '{connection_id}' (candidates: {databases:?})"
+                    ),
+                }
+                resolved
+            }
+            Err(error) => {
+                log::warn!(
+                    "Failed to list databases for '{connection_id}' while resolving a legacy default database: {error}"
+                );
+                None
+            }
+        }
+    }
+
     async fn get_or_create_pool_for_session_inner(
         &self,
         connection_id: &str,
@@ -2235,10 +2443,15 @@ impl AppState {
 
         validate_h2_file_connection(&db_config)?;
         self.ensure_current_connection_attempt(connection_id, connection_attempt).await?;
-        let (host, port) = self.connection_host_port(connection_id, &db_config).await?;
+        let endpoint = self.connection_endpoint(connection_id, &db_config).await?;
+        let (host, port) = (endpoint.host, endpoint.port);
+        let runtime_proxy = endpoint.proxy;
         if let Err(err) = self.ensure_current_connection_attempt(connection_id, connection_attempt).await {
             self.reset_connection_transport_for_config(connection_id, &db_config).await;
             return Err(err);
+        }
+        if let Some(database) = self.resolve_legacy_postgres_like_database(connection_id, &db_config).await {
+            db_config.database = Some(database);
         }
         if db_config.db_type != DatabaseType::Plugin {
             probe_connection_endpoint(&db_config, &host, port).await?;
@@ -2825,9 +3038,9 @@ impl AppState {
                 }
                 self.external_driver_pool("jdbc", &jdbc_config).await?
             }
-            DatabaseType::Plugin => {
-                PoolKind::PluginConnection(self.plugin_host.connect_connection(&db_config, &host, port).await?)
-            }
+            DatabaseType::Plugin => PoolKind::PluginConnection(
+                self.plugin_host.connect_connection(&db_config, &host, port, runtime_proxy).await?,
+            ),
             #[cfg(feature = "mq-admin")]
             DatabaseType::MessageQueue => {
                 // MQ admin connections don't hold a data query pool. We just test
@@ -3059,9 +3272,29 @@ impl AppState {
         connection_id: &str,
         config: &ConnectionConfig,
     ) -> Result<(String, u16), String> {
+        let endpoint = self.connection_endpoint(connection_id, config).await?;
+        Ok((endpoint.host, endpoint.port))
+    }
+
+    /// Resolves the runtime dial endpoint for a plugin connection, including
+    /// the host-managed SOCKS5 route when the provider declares
+    /// `proxy_route` and transport layers are configured.
+    pub async fn plugin_connection_endpoint(
+        &self,
+        connection_id: &str,
+        config: &ConnectionConfig,
+    ) -> Result<ConnectionEndpoint, String> {
+        self.connection_endpoint(connection_id, config).await
+    }
+
+    async fn connection_endpoint(
+        &self,
+        connection_id: &str,
+        config: &ConnectionConfig,
+    ) -> Result<ConnectionEndpoint, String> {
         let transport_layers = self.resolved_transport_layers(config).await?;
         if transport_layers.is_empty() || db::sqlite_worker::sqlite_ssh_worker_requested(config) {
-            return Ok((config.host.clone(), config.port));
+            return Ok(ConnectionEndpoint::direct(config.host.clone(), config.port));
         }
         if config.uses_oracle_tns() {
             // A TNS descriptor may contain several failover addresses, so rewriting it
@@ -3078,10 +3311,31 @@ impl AppState {
                 == crate::mq::types::MqSystemKind::RocketMq
         {
             self.rocketmq_socks_proxy_for_transport_layers(connection_id, &transport_layers).await?;
-            return Ok((config.host.clone(), config.port));
+            return Ok(ConnectionEndpoint::direct(config.host.clone(), config.port));
+        }
+
+        // Multi-endpoint plugin providers (Kafka bootstrap + advertised
+        // listeners) route every endpoint through a host-managed SOCKS5
+        // dialer instead of a static tunnel, which can only reach a single
+        // broker. The payload keeps the logical endpoint so the plugin can
+        // still resolve its own seed list and metadata names.
+        if config.db_type == DatabaseType::Plugin && self.plugin_host.wants_proxy_route(config).await {
+            if let Some(proxy) = self.socks5_route_for_transport_layers(connection_id, &transport_layers).await? {
+                return Ok(ConnectionEndpoint { host: config.host.clone(), port: config.port, proxy: Some(proxy) });
+            }
         }
 
         let (remote_host, remote_port) = connection_remote_endpoint(config);
+        // Plugin providers commonly declare no host/port binding (Kafka keeps
+        // its endpoints in provider fields instead), so a static tunnel would
+        // silently forward to an empty target and every downstream dial would
+        // time out with no actionable hint. Fail here instead.
+        if config.db_type == DatabaseType::Plugin && remote_host.is_empty() {
+            return Err(
+                "Transport layers for this plugin connection need a remote host and port. The connection provider must declare host/port fields or support proxy_route (SOCKS5 routing); otherwise remove the SSH/proxy/HTTP tunnel layer."
+                    .to_string(),
+            );
+        }
         let local_port = db::transport_layer_tunnel::start_transport_layers(
             connection_id,
             &transport_layers,
@@ -3093,7 +3347,67 @@ impl AppState {
         )
         .await?;
 
-        Ok(("127.0.0.1".to_string(), local_port))
+        Ok(ConnectionEndpoint { host: "127.0.0.1".to_string(), port: local_port, proxy: None })
+    }
+
+    /// Builds the host-managed SOCKS5 route from the transport chain for
+    /// plugin providers declaring `proxy_route` (mirrors the
+    /// RocketMQ proxy path). `None` = fall back to the static tunnel path.
+    async fn socks5_route_for_transport_layers(
+        &self,
+        connection_id: &str,
+        transport_layers: &[TransportLayerConfig],
+    ) -> Result<Option<PluginRuntimeProxy>, String> {
+        use crate::models::connection::ProxyType;
+
+        let Some(final_layer) = transport_layers.last() else {
+            return Ok(None);
+        };
+        match final_layer {
+            TransportLayerConfig::Ssh(_) => {
+                // The final SSH hop exposes a dynamic SOCKS5 endpoint so every
+                // advertised broker is reachable through one tunnel.
+                let local_port = db::transport_layer_tunnel::start_transport_layers_with_final_ssh_socks5(
+                    connection_id,
+                    transport_layers,
+                    &self.tunnels,
+                    &self.proxy_tunnels,
+                    &self.http_tunnels,
+                )
+                .await?;
+                Ok(Some(PluginRuntimeProxy::socks5("127.0.0.1".to_string(), local_port, String::new(), String::new())))
+            }
+            TransportLayerConfig::Proxy(proxy) if proxy.proxy_type == ProxyType::Socks5 => {
+                if transport_layers.len() == 1 {
+                    Ok(Some(PluginRuntimeProxy::socks5(
+                        proxy.host.clone(),
+                        proxy.port,
+                        proxy.username.clone(),
+                        proxy.password.clone(),
+                    )))
+                } else {
+                    let local_port = db::transport_layer_tunnel::start_transport_layers(
+                        connection_id,
+                        &transport_layers[..transport_layers.len() - 1],
+                        &proxy.host,
+                        proxy.port,
+                        &self.tunnels,
+                        &self.proxy_tunnels,
+                        &self.http_tunnels,
+                    )
+                    .await?;
+                    Ok(Some(PluginRuntimeProxy::socks5(
+                        "127.0.0.1".to_string(),
+                        local_port,
+                        proxy.username.clone(),
+                        proxy.password.clone(),
+                    )))
+                }
+            }
+            // HTTP-tunnel chains cannot serve arbitrary endpoints; fall back
+            // to the static tunnel path (guarded below for empty endpoints).
+            TransportLayerConfig::Proxy(_) | TransportLayerConfig::HttpTunnel(_) => Ok(None),
+        }
     }
 
     pub async fn invoke_plugin_connection_action(
@@ -3108,8 +3422,12 @@ impl AppState {
         let transport_id = format!("{}:plugin-action:{action_id}", config.id);
         let has_transport_layers = config.has_effective_transport_layers();
         let connection_id = if has_transport_layers { transport_id.as_str() } else { config.id.as_str() };
-        let result = match self.connection_host_port(connection_id, &config).await {
-            Ok((host, port)) => self.plugin_host.invoke_connection_action(&config, action_id, &host, port).await,
+        let result = match self.plugin_connection_endpoint(connection_id, &config).await {
+            Ok(endpoint) => {
+                self.plugin_host
+                    .invoke_connection_action(&config, action_id, &endpoint.host, endpoint.port, endpoint.proxy)
+                    .await
+            }
             Err(error) => Err(error),
         };
         if has_transport_layers {
@@ -4680,6 +4998,16 @@ impl AppState {
         }
     }
 
+    /// Persist the database resolved for a legacy empty-database connection and keep the
+    /// runtime config in sync so peer pool creations reuse the discovered database.
+    pub async fn save_connection_database(&self, connection_id: &str, database: &str) -> Result<(), String> {
+        self.storage.save_connection_database(connection_id, database).await?;
+        if let Some(config) = self.configs.write().await.get_mut(connection_id) {
+            config.database = Some(database.to_string());
+        }
+        Ok(())
+    }
+
     pub async fn save_connection_database_info(
         &self,
         connection_id: &str,
@@ -5032,6 +5360,7 @@ impl AppState {
     }
 
     pub async fn remove_connection_pools(&self, connection_id: &str) {
+        self.invalidate_connection_lifecycle(connection_id);
         self.rollback_manual_transaction_sessions(connection_id).await;
         let removed = self.drain_connection_pools(connection_id).await;
         self.clear_metadata_gates_for_connection(connection_id).await;
@@ -5047,6 +5376,7 @@ impl AppState {
     /// user disconnect still goes through remove_connection_pools* and does
     /// send connection/disconnect.
     pub async fn drop_connection_pools_without_close(&self, connection_id: &str) {
+        self.invalidate_connection_lifecycle(connection_id);
         self.rollback_manual_transaction_sessions(connection_id).await;
         let removed = self.drain_connection_pools(connection_id).await;
         self.clear_metadata_gates_for_connection(connection_id).await;
@@ -5054,6 +5384,7 @@ impl AppState {
     }
 
     pub async fn remove_connection_pools_detached(&self, connection_id: &str) {
+        self.invalidate_connection_lifecycle(connection_id);
         self.rollback_manual_transaction_sessions(connection_id).await;
         let removed = self.drain_connection_pools(connection_id).await;
         self.clear_metadata_gates_for_connection(connection_id).await;
@@ -5448,6 +5779,24 @@ fn is_agent_validate_connection_unsupported(err: &str) -> bool {
     lower.contains("validate_connection") && (lower.contains("unknown method") || lower.contains("method not found"))
 }
 
+/// Runtime dial endpoint handed to a plugin lifecycle call: the logical
+/// `host:port` plus an optional host-managed SOCKS5 route for providers
+/// declaring `proxy_route`. When `proxy` is set the plugin is
+/// expected to dial every endpoint (its seed list and metadata names) through
+/// the route, keeping the logical endpoint only for metadata discovery.
+#[derive(Debug, Clone)]
+pub struct ConnectionEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub proxy: Option<PluginRuntimeProxy>,
+}
+
+impl ConnectionEndpoint {
+    fn direct(host: String, port: u16) -> Self {
+        Self { host, port, proxy: None }
+    }
+}
+
 fn connection_remote_endpoint(config: &ConnectionConfig) -> (String, u16) {
     if config.db_type == DatabaseType::MongoDb {
         config
@@ -5659,15 +6008,24 @@ fn is_manual_transaction_pool_key(pool_key: &str) -> bool {
     pool_key.contains(":session:manual-txn-")
 }
 
+/// Whether `pool_key` names a pool owned by `connection_id`.
+///
+/// Every pool key starts with its connection id and appends `:` plus the
+/// database, catalog, role, or session suffix, so the separator is what keeps
+/// `conn` from matching a `conn-2` pool. Used by
+/// [`AppState::is_connection_open`] and [`config_for_pool_key`];
+/// `drain_connection_pools` filters on the same convention.
+fn pool_key_belongs_to_connection(pool_key: &str, connection_id: &str) -> bool {
+    pool_key.strip_prefix(connection_id).is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
+}
+
 pub(crate) fn config_for_pool_key<'a>(
     pool_key: &str,
     configs: &'a HashMap<String, ConnectionConfig>,
 ) -> Option<&'a ConnectionConfig> {
     configs
         .iter()
-        .filter(|(connection_id, _)| {
-            pool_key.strip_prefix(connection_id.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
-        })
+        .filter(|(connection_id, _)| pool_key_belongs_to_connection(pool_key, connection_id))
         .max_by_key(|(connection_id, _)| connection_id.len())
         .map(|(_, config)| config)
 }
@@ -6737,6 +7095,7 @@ mod tests {
             rows: vec![vec![serde_json::json!("M")]],
             affected_rows: 0,
             execution_time_ms: 1,
+            server_execute_time_us: None,
             truncated: false,
             session_id: None,
             has_more: false,
@@ -7148,6 +7507,64 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let storage = Storage::open(&dir.join("storage.db")).await.unwrap();
         (AppState::new(storage), dir)
+    }
+
+    #[tokio::test]
+    async fn connection_lifecycle_invalidation_rotates_generation_and_cancels_previous_snapshot() {
+        let (state, dir) = test_app_state().await;
+        let first = state.connection_lifecycle_snapshot("conn");
+        assert!(state.connection_lifecycle_is_current("conn", &first));
+
+        state.invalidate_connection_lifecycle("conn");
+
+        tokio::time::timeout(Duration::from_millis(100), first.cancellation().cancelled())
+            .await
+            .expect("previous lifecycle must be cancelled");
+        assert!(!state.connection_lifecycle_is_current("conn", &first));
+        let second = state.connection_lifecycle_snapshot("conn");
+        assert!(state.connection_lifecycle_is_current("conn", &second));
+        assert!(!second.cancellation().is_cancelled());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn every_connection_pool_removal_boundary_invalidates_lifecycle_snapshots() {
+        let (state, dir) = test_app_state().await;
+
+        let removed = state.connection_lifecycle_snapshot("removed");
+        state.remove_connection_pools("removed").await;
+        assert!(removed.cancellation().is_cancelled());
+
+        let dropped = state.connection_lifecycle_snapshot("dropped");
+        state.drop_connection_pools_without_close("dropped").await;
+        assert!(dropped.cancellation().is_cancelled());
+
+        let detached = state.connection_lifecycle_snapshot("detached");
+        state.remove_connection_pools_detached("detached").await;
+        assert!(detached.cancellation().is_cancelled());
+
+        let shutdown = state.connection_lifecycle_snapshot("shutdown");
+        state.shutdown(Duration::from_millis(100)).await;
+        assert!(shutdown.cancellation().is_cancelled());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn named_resource_budget_is_shared_across_app_state_views() {
+        let (state, dir) = test_app_state().await;
+        let first = state.shared_resource_budget("fixed-owner", 2).unwrap();
+        let second = state.shared_resource_budget("fixed-owner", 2).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let first_permit = first.clone().try_acquire_owned().unwrap();
+        let second_permit = second.clone().try_acquire_owned().unwrap();
+        assert!(first.clone().try_acquire_owned().is_err());
+        drop(first_permit);
+        assert!(second.clone().try_acquire_owned().is_ok());
+        drop(second_permit);
+
+        assert!(state.shared_resource_budget("fixed-owner", 3).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn agent_pool_stub() -> PoolKind {
@@ -7874,6 +8291,32 @@ mod tests {
     }
 
     #[test]
+    fn legacy_postgres_like_database_probe_only_applies_to_unconfigured_kingbase() {
+        let mut config = mysql_config(Some("SAMPLES"));
+        config.db_type = DatabaseType::Kingbase;
+        assert!(!super::needs_legacy_postgres_like_database_probe(&config));
+
+        config.database = None;
+        assert!(super::needs_legacy_postgres_like_database_probe(&config));
+
+        config.database = Some("   ".to_string());
+        assert!(super::needs_legacy_postgres_like_database_probe(&config));
+
+        config.database = Some("application".to_string());
+        assert!(!super::needs_legacy_postgres_like_database_probe(&config));
+
+        config.database = None;
+        config.db_type = DatabaseType::Vastbase;
+        assert!(super::needs_legacy_postgres_like_database_probe(&config));
+
+        config.db_type = DatabaseType::Postgres;
+        assert!(!super::needs_legacy_postgres_like_database_probe(&config));
+
+        config.db_type = DatabaseType::Mysql;
+        assert!(!super::needs_legacy_postgres_like_database_probe(&config));
+    }
+
+    #[test]
     fn database_scoped_pool_keys_preserve_identifier_whitespace() {
         assert_eq!(
             super::base_pool_key_for(Some(DatabaseType::Mysql), "mysql-conn", Some(" analytics"), false),
@@ -8386,6 +8829,41 @@ mod tests {
         assert!(!conns.contains_key("conn:session:tab-1"));
         assert!(!conns.contains_key("conn:analytics:session:tab-1"));
         assert!(conns.contains_key("other"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The plan Host API gates on this, so it has to be exactly "DBX holds a pool
+    /// for this connection": no pool means closed, and the read must not create
+    /// the pool it is checking for.
+    #[tokio::test]
+    async fn connection_is_open_only_while_one_of_its_pools_exists() {
+        let (state, dir) = test_app_state().await;
+        let pool = crate::db::sqlite::connect_path(":memory:").await.unwrap();
+
+        assert!(!state.is_connection_open("conn").await);
+        assert!(state.with_connection_pools(|pools| pools.is_empty()).await, "the check must not create a pool");
+
+        for pool_key in ["conn", "conn:analytics", "conn:analytics:catalog:app", "conn:analytics:session:tab-1"] {
+            state.update_connection_pools(|connections| connections.clear()).await;
+            state
+                .update_connection_pools(|connections| {
+                    connections.insert(pool_key.to_string(), PoolKind::Sqlite(pool.clone()))
+                })
+                .await;
+            assert!(state.is_connection_open("conn").await, "{pool_key} belongs to conn");
+        }
+
+        // A sibling id that merely starts with the same characters is another
+        // connection, and draining one must not report the other as open.
+        state.update_connection_pools(|connections| connections.clear()).await;
+        state
+            .update_connection_pools(|connections| {
+                connections.insert("conn-2:analytics".to_string(), PoolKind::Sqlite(pool))
+            })
+            .await;
+        assert!(!state.is_connection_open("conn").await);
+        assert!(state.is_connection_open("conn-2").await);
 
         let _ = std::fs::remove_dir_all(dir);
     }

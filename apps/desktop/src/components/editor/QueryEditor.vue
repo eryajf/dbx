@@ -163,6 +163,7 @@ import { createQueryEditorEscapeHandler } from "@/lib/editor/queryEditorEscape";
 import { buildQueryEditorLineNumbersExtension, createQueryEditorLineNumberAlignmentExtension } from "@/lib/editor/queryEditorLineNumbers";
 import { searchKeymapWithoutModD } from "@/lib/editor/codemirrorSearchKeymap";
 import { defaultKeymapForGlobalShortcuts } from "@/lib/editor/codemirrorDefaultKeymap";
+import { createShowWhitespaceExtension } from "@/lib/editor/codemirrorShowWhitespace";
 import { appendSqlCompletionSpace } from "@/lib/editor/sqlCompletionInsertion";
 import { batchColumnSelectionColumnList, batchColumnSelectionInsertReplacement, batchColumnSelectionReplaceTo, completionReplacementTo, isBatchColumnSelectionCompletionActive, shouldResolveSqlColumnCompletion } from "@/lib/editor/batchColumnSelection";
 import { compareSqlCompletions, completionLabelPresentation } from "@/lib/editor/sqlCompletionPresentation";
@@ -182,6 +183,7 @@ import { createDbxCodeMirrorSqlDialect, type CodeMirrorSqlDialectName } from "@/
 import { sqlSemanticTableNameSpansForSyntaxTree } from "@/lib/editor/codemirrorSqlSemanticHighlight";
 import { startsQueryEditorRectangularSelection, startsQueryEditorSelectionDrag, usesQueryEditorObjectNavigationModifier } from "@/lib/editor/queryEditorPointerSelection";
 import { LARGE_PASTE_HISTORY_USER_EVENT, normalizeQueryEditorPasteText, recoverableNativePasteSuffix, shouldRecoverLargeTauriPaste } from "@/lib/editor/queryEditorLargePaste";
+import { queryEditorClipboardPasteChange } from "@/lib/editor/queryEditorClipboardPaste";
 import { computePasteCaretResyncTarget } from "@/lib/editor/queryEditorPasteCaretResync";
 import { queryEditorCommentTokens, queryEditorLineCommentToken, queryEditorWordLanguageData } from "@/lib/editor/queryEditorLineComment";
 import { createShellLineCommentHighlight } from "@/lib/editor/codemirrorShellLineCommentHighlight";
@@ -254,6 +256,7 @@ const props = defineProps<{
   canExplain?: boolean;
   initialViewport?: { scrollTop: number; scrollLeft: number };
   initialSelection?: { anchor: number; head: number };
+  revealRequest?: { id: number; line: number; column?: number };
   statementExecutionMarkers?: StatementExecutionMarker[];
 }>();
 
@@ -299,6 +302,7 @@ const emit = defineEmits<{
   viewportChange: [viewport: { scrollTop: number; scrollLeft: number }, tabId?: string];
   selectionStateChange: [selection: { anchor: number; head: number }];
   editorStateFlushed: [];
+  editorRevealConsumed: [];
   sendSelectionToAi: [sql: string];
 }>();
 
@@ -698,6 +702,7 @@ let hoverCloseEffect: StateEffect<unknown> | null = null;
 let fontThemeComp: import("@codemirror/state").Compartment | null = null;
 let codeMirrorTheme: import("@codemirror/state").Compartment | null = null;
 let wordWrapComp: import("@codemirror/state").Compartment | null = null;
+let showWhitespaceComp: import("@codemirror/state").Compartment | null = null;
 let lineNumbersComp: import("@codemirror/state").Compartment | null = null;
 let vimModeComp: import("@codemirror/state").Compartment | null = null;
 let closeBracketsComp: import("@codemirror/state").Compartment | null = null;
@@ -1019,6 +1024,7 @@ const queryEditorAppearanceSettings = computed(() => {
     customThemes: settings.customThemes,
     activeCustomThemeId: settings.activeCustomThemeId,
     wordWrap: settings.wordWrap,
+    showWhitespace: settings.showWhitespace,
     vimModeEnabled: settings.vimModeEnabled,
     autoCloseBrackets: settings.autoCloseBrackets,
     showLineNumbers: settings.showLineNumbers,
@@ -1908,8 +1914,7 @@ async function pasteClipboardSqlFromContextMenu() {
     const selection = currentView.state.selection.main;
     // 粘贴：替换选中内容或在光标处插入
     currentView.dispatch({
-      changes: { from: selection.from, to: selection.to, insert: text },
-      selection: { anchor: selection.from + text.length, head: selection.from + text.length },
+      ...queryEditorClipboardPasteChange(text, selection.from, selection.to),
       scrollIntoView: true,
       userEvent: "input.paste",
     });
@@ -2705,6 +2710,38 @@ function acceptCompletionOrNextSnippetField(view: EditorViewType): boolean {
   return codeMirrorNextSnippetField?.(view) ?? false;
 }
 
+function acceptSqlServerCompletionOnSpace(view: EditorViewType): boolean {
+  if (isEditorComposing(view)) return false;
+  if (props.databaseType !== "sqlserver" || !settingsStore.editorSettings.sqlServerSpaceConfirmsCompletion) return false;
+  if (codeMirrorCompletionStatus?.(view.state) !== "active") return false;
+  // A non-empty selection belongs to block editing, not word completion.
+  if (!view.state.selection.main.empty) return false;
+  const selected = codeMirrorSelectedCompletion?.(view.state) as QueryCompletionOption | null | undefined;
+  const completionType = selected?.type;
+  if (completionType !== "keyword" && completionType !== "table" && completionType !== "column") return false;
+  // Batch-selection rows own Space for checkbox toggling; this Prec.highest binding outranks their keymap.
+  if (selected?.dbxBatchColumnSelection || selected?.dbxBatchColumnSelectionAction) return false;
+  if (!(codeMirrorAcceptCompletion?.(view) ?? false)) return false;
+
+  const selection = view.state.selection.main;
+  if (!selection.empty) return true;
+  const cursor = selection.head;
+  const previousCharacter = cursor > 0 ? view.state.sliceDoc(cursor - 1, cursor) : "";
+  if (/\s/.test(previousCharacter)) return true;
+
+  const nextCharacter = view.state.sliceDoc(cursor, cursor + 1);
+  if (/\s/.test(nextCharacter)) {
+    view.dispatch({ selection: { anchor: cursor + 1 }, scrollIntoView: true });
+  } else {
+    view.dispatch({
+      changes: { from: cursor, insert: " " },
+      selection: { anchor: cursor + 1 },
+      scrollIntoView: true,
+    });
+  }
+  return true;
+}
+
 function clearPendingCompletionTab() {
   if (pendingCompletionTabTimer === null) return;
   clearTimeout(pendingCompletionTabTimer);
@@ -2746,6 +2783,11 @@ function waitForCompletionTab(view: EditorViewType): boolean {
 function wordWrapExtension() {
   if (!editorViewModule) return [];
   return props.forceWordWrap || settingsStore.editorSettings.wordWrap ? editorViewModule.EditorView.lineWrapping : [];
+}
+
+function showWhitespaceExtension(enabled = settingsStore.editorSettings.showWhitespace) {
+  if (!editorViewModule) return [];
+  return createShowWhitespaceExtension(editorViewModule, enabled);
 }
 
 function lineNumbersExtension(enabled = settingsStore.editorSettings.showLineNumbers) {
@@ -4219,12 +4261,14 @@ interface BatchColumnSelectionActionItem {
   detail: string;
   boost: number;
   batchColumnSelectionAction: true;
+  /** Toggles every candidate checkbox instead of inserting the selection. */
+  batchColumnSelectionToggleAll?: true;
   sessionKey: string;
 }
 
 type QueryCompletionOption = Completion & {
   dbxBatchColumnSelection?: { sessionKey: string; candidateKey: string };
-  dbxBatchColumnSelectionAction?: { sessionKey: string };
+  dbxBatchColumnSelectionAction?: { sessionKey: string; toggleAll?: true };
 };
 
 let batchColumnSelectionSession: BatchColumnSelectionSession | null = null;
@@ -4245,7 +4289,7 @@ interface BatchColumnSelectionDragState {
 }
 
 const batchColumnSelectionCheckboxMarkers = new WeakMap<HTMLElement, BatchColumnSelectionCheckboxMarker>();
-const batchColumnSelectionActionMarkers = new WeakMap<HTMLElement, string>();
+const batchColumnSelectionActionMarkers = new WeakMap<HTMLElement, { sessionKey: string; toggleAll: boolean }>();
 const batchColumnSelectionTooltipParents = new WeakMap<EditorViewType, HTMLElement>();
 let batchColumnSelectionDragState: BatchColumnSelectionDragState | null = null;
 let batchColumnSelectionRefreshCleanup: (() => void) | null = null;
@@ -4280,17 +4324,35 @@ function setBatchColumnSelectionValue(sessionKey: string, candidateKey: string, 
   if (checkbox) checkbox.checked = selected;
 }
 
+function batchColumnSelectionAllSelected(session: BatchColumnSelectionSession): boolean {
+  return session.candidates.length > 0 && session.selectedKeys.size === session.candidates.length;
+}
+
 function updateBatchColumnSelectionActionLabel(view: EditorViewType, sessionKey: string) {
   const session = batchColumnSelectionSession;
   if (!session || session.key !== sessionKey) return;
-  const label = t("editor.completion.insertSelectedColumns", { count: session.selectedKeys.size });
+  const insertLabel = t("editor.completion.insertSelectedColumns", { count: session.selectedKeys.size });
+  const toggleAllLabel = batchColumnSelectionAllSelected(session) ? t("editor.completion.deselectAllColumns") : t("editor.completion.selectAllColumns");
   const tooltipParent = batchColumnSelectionTooltipParents.get(view) ?? view.dom;
   tooltipParent.querySelectorAll<HTMLElement>(".cm-batch-column-selection-action-marker").forEach((marker) => {
-    if (batchColumnSelectionActionMarkers.get(marker) !== sessionKey) return;
+    const markerState = batchColumnSelectionActionMarkers.get(marker);
+    if (!markerState || markerState.sessionKey !== sessionKey) return;
     const element = marker.closest("li")?.querySelector<HTMLElement>(".cm-completionLabel");
     if (!element) return;
+    const label = markerState.toggleAll ? toggleAllLabel : insertLabel;
     if (element.textContent !== label) element.textContent = label;
   });
+}
+
+/** Check or clear every field checkbox of the active batch selection. */
+function toggleAllBatchColumnSelection(view: EditorViewType, sessionKey: string) {
+  const session = batchColumnSelectionSession;
+  if (!session || session.key !== sessionKey) return;
+  const selectAll = !batchColumnSelectionAllSelected(session);
+  session.selectedKeys = selectAll ? new Set(session.candidates.map((candidate) => candidate.key)) : new Set();
+  updateBatchColumnSelectionActionLabel(view, sessionKey);
+  // Reopen the list so every rendered checkbox and both action rows reflect the new state.
+  scheduleBatchColumnSelectionRefresh(view, sessionKey, session.candidates[0]?.key ?? "");
 }
 
 function scheduleBatchColumnSelectionRefresh(view: EditorViewType, sessionKey: string, focusCandidateKey: string, scrollState?: { element: HTMLElement | null; top: number; left: number }) {
@@ -4650,7 +4712,7 @@ function renderBatchColumnSelectionActionMarker(completion: Completion): Node | 
   const marker = document.createElement("span");
   marker.className = "cm-batch-column-selection-action-marker";
   marker.hidden = true;
-  batchColumnSelectionActionMarkers.set(marker, action.sessionKey);
+  batchColumnSelectionActionMarkers.set(marker, { sessionKey: action.sessionKey, toggleAll: action.toggleAll === true });
   return marker;
 }
 
@@ -4772,19 +4834,32 @@ function buildCompletionResult(items: Array<QueryCompletionItem | BatchColumnSel
 function buildSqlCompletionResult(items: SqlCompletionItem[], completionContext: SqlCompletionContext, fullDoc: string, position: number) {
   const replacement = prepareSqlCompletionReplacement(fullDoc, position, completionContext, items);
   const session = prepareBatchColumnSelectionSession(replacement.items, fullDoc, replacement.from, position);
-  const action: BatchColumnSelectionActionItem | undefined = session
-    ? {
-        label: t("editor.completion.insertSelectedColumns", { count: session.selectedKeys.size }),
-        filterText: completionContext.prefix,
-        type: "text",
-        detail: t("editor.completion.insertSelectedColumnsDetail"),
-        // Keep ordinary single-field completion as the default Enter target.
-        boost: -1000,
-        batchColumnSelectionAction: true,
-        sessionKey: session.key,
-      }
-    : undefined;
-  return buildCompletionResult(action ? [...replacement.items, action] : replacement.items, replacement.from, getSqlCompletionResultValidFor(fullDoc, position), completionContext.prefix);
+  const actions: BatchColumnSelectionActionItem[] = session
+    ? [
+        {
+          label: batchColumnSelectionAllSelected(session) ? t("editor.completion.deselectAllColumns") : t("editor.completion.selectAllColumns"),
+          filterText: completionContext.prefix,
+          type: "text",
+          detail: t("editor.completion.selectAllColumnsDetail"),
+          // Keep ordinary single-field completion as the default Enter target.
+          boost: -1000,
+          batchColumnSelectionAction: true,
+          batchColumnSelectionToggleAll: true,
+          sessionKey: session.key,
+        },
+        {
+          label: t("editor.completion.insertSelectedColumns", { count: session.selectedKeys.size }),
+          filterText: completionContext.prefix,
+          type: "text",
+          detail: t("editor.completion.insertSelectedColumnsDetail"),
+          // Keep ordinary single-field completion as the default Enter target.
+          boost: -1000,
+          batchColumnSelectionAction: true,
+          sessionKey: session.key,
+        },
+      ]
+    : [];
+  return buildCompletionResult(actions.length > 0 ? [...replacement.items, ...actions] : replacement.items, replacement.from, getSqlCompletionResultValidFor(fullDoc, position), completionContext.prefix);
 }
 
 // CodeMirror's built-in matcher only matches single-character queries against
@@ -4851,11 +4926,17 @@ function completionOptionForItem(item: QueryCompletionItem | BatchColumnSelectio
     return {
       ...labelPresentation,
       ...(sortText ? { sortText } : {}),
-      dbxBatchColumnSelectionAction: { sessionKey: item.sessionKey },
+      dbxBatchColumnSelectionAction: { sessionKey: item.sessionKey, ...(item.batchColumnSelectionToggleAll ? { toggleAll: true as const } : {}) },
       type: item.type,
       detail: item.detail,
       boost: item.boost,
       apply(view: EditorViewType, _completionItem: unknown, from: number, to: number) {
+        if (item.batchColumnSelectionToggleAll) {
+          // Toggling the selection never edits the document; the checkout rows
+          // (and the insert action) are refreshed in place instead.
+          toggleAllBatchColumnSelection(view, item.sessionKey);
+          return;
+        }
         applyBatchColumnSelection(view, item, from, to);
       },
     };
@@ -5211,6 +5292,7 @@ async function provideSqlCompletions(context: CompletionContext) {
         keywordCase: settingsStore.editorSettings.sqlFormatter.keywordCase,
         functionCase: settingsStore.editorSettings.sqlFormatter.functionCase,
         autoAliasTables: settingsStore.editorSettings.autoAliasTables,
+        quoteIdentifiers: settingsStore.editorSettings.generateSqlQuoteIdentifiers,
       });
       return buildSqlCompletionResult(items, completionContext, fullDoc, position);
     }
@@ -5272,6 +5354,7 @@ async function provideSqlCompletions(context: CompletionContext) {
         keywordCase: settingsStore.editorSettings.sqlFormatter.keywordCase,
         functionCase: settingsStore.editorSettings.sqlFormatter.functionCase,
         autoAliasTables: settingsStore.editorSettings.autoAliasTables,
+        quoteIdentifiers: settingsStore.editorSettings.generateSqlQuoteIdentifiers,
       });
       return buildSqlCompletionResult(items, completionContext, fullDoc, position);
     }
@@ -5612,6 +5695,7 @@ function buildLocalSqlCompletionResult(completionContext: ReturnType<typeof getS
     keywordCase: settingsStore.editorSettings.sqlFormatter.keywordCase,
     functionCase: settingsStore.editorSettings.sqlFormatter.functionCase,
     autoAliasTables: settingsStore.editorSettings.autoAliasTables,
+    quoteIdentifiers: settingsStore.editorSettings.generateSqlQuoteIdentifiers,
   });
 
   return buildSqlCompletionResult(items, completionContext, fullDoc, position);
@@ -6115,6 +6199,7 @@ async function performAsyncCompletionWithResult(epoch: number, completionContext
     keywordCase: settingsStore.editorSettings.sqlFormatter.keywordCase,
     functionCase: settingsStore.editorSettings.sqlFormatter.functionCase,
     autoAliasTables: settingsStore.editorSettings.autoAliasTables,
+    quoteIdentifiers: settingsStore.editorSettings.generateSqlQuoteIdentifiers,
   });
 
   return buildSqlCompletionResult(items, completionContext, fullDoc, position);
@@ -6234,6 +6319,8 @@ onMounted(async () => {
       lineNumbers,
       highlightActiveLineGutter,
       highlightSpecialChars,
+      highlightWhitespace,
+      WidgetType,
       drawSelection,
       dropCursor,
       crosshairCursor,
@@ -6270,6 +6357,10 @@ onMounted(async () => {
     EditorView,
     keymap,
     rectangularSelection,
+    highlightWhitespace,
+    WidgetType,
+    Decoration,
+    ViewPlugin,
   } as typeof import("@codemirror/view");
   hoverCloseEffect = closeHoverTooltips;
   codeMirrorLineNumbers = lineNumbers;
@@ -6279,6 +6370,7 @@ onMounted(async () => {
   fontThemeComp = new Compartment();
   codeMirrorTheme = new Compartment();
   wordWrapComp = new Compartment();
+  showWhitespaceComp = new Compartment();
   lineNumbersComp = new Compartment();
   vimModeComp = new Compartment();
   closeBracketsComp = new Compartment();
@@ -6942,6 +7034,7 @@ onMounted(async () => {
       vimModeComp.of(vimModeExtension(initialSettings.vimModeEnabled)),
       defaultKeymapComp.of(defaultKeymapExtension()),
       keymap.of([...searchKeymapWithoutModD(searchKeymap), ...historyKeymap, ...foldKeymap, ...completionKeymap]),
+      Prec.highest(keymap.of([{ key: "Space", run: acceptSqlServerCompletionOnSpace }])),
       sqlLanguageComp.of(buildSqlLanguageExtension()),
       sqlSemanticHighlightComp.of(buildSqlSemanticHighlightExtension()),
       tooltips({ parent: tooltipParent }),
@@ -7009,6 +7102,7 @@ onMounted(async () => {
         }),
       ),
       wordWrapComp.of(props.forceWordWrap || initialSettings.wordWrap ? EditorView.lineWrapping : []),
+      showWhitespaceComp.of(showWhitespaceExtension(initialSettings.showWhitespace)),
       readOnlyComp.of([EditorState.readOnly.of(!!props.readOnly), EditorView.editable.of(!props.readOnly)]),
       indentComp.of(indentExtension()),
       // Alt+drag belongs exclusively to rectangular selection. Registering the
@@ -7460,6 +7554,7 @@ onMounted(async () => {
 
   restoreEditorSelection(props.initialSelection, !props.initialViewport);
   restoreEditorViewport();
+  performEditorReveal();
   syncContextMenuState(view.value);
   emit("previewChangesAvailable", !!previewContextSql.value);
   syncEditorFontCssVars(liveFontSize.value, initialSettings.fontFamily);
@@ -7641,6 +7736,16 @@ watch(
   { deep: true },
 );
 
+// A content-search jump. Fires on id change (a new or reused tab, or a repeat
+// click on the same result), and on mount when the request is already pending.
+watch(
+  () => props.revealRequest?.id,
+  (id, previousId) => {
+    if (!id || id === previousId) return;
+    performEditorReveal();
+  },
+);
+
 watch(
   () => props.formatRequestId,
   (val) => {
@@ -7800,6 +7905,7 @@ async function applyEditorAppearance() {
     effects: [
       codeMirrorTheme.reconfigure(themeExt),
       wordWrapComp.reconfigure(props.forceWordWrap || ss.wordWrap ? editorViewModule.EditorView.lineWrapping : []),
+      ...(showWhitespaceComp ? [showWhitespaceComp.reconfigure(showWhitespaceExtension(ss.showWhitespace))] : []),
       lineNumbersComp.reconfigure(lineNumbersExtension(ss.showLineNumbers)),
       vimModeComp.reconfigure(vimModeExtension(settingsStore.editorSettings.vimModeEnabled)),
       closeBracketsComp.reconfigure(closeBracketsExtension(settingsStore.editorSettings.autoCloseBrackets)),
@@ -8010,6 +8116,28 @@ function restoreEditorSelection(selection = props.initialSelection ?? latestSele
   const normalizedSelection = normalizedEditorSelection(selection, props.modelValue.length);
   if (!view.value || !normalizedSelection) return;
   view.value.dispatch({ selection: normalizedSelection, scrollIntoView });
+}
+
+/** Move cursor/scroll to a 1-based line/column, e.g. from a global content-search match. */
+function revealEditorSelection(line: number, column?: number) {
+  const currentView = view.value;
+  const EditorSelection = codeMirrorEditorSelection;
+  if (!currentView || !EditorSelection) return;
+  const doc = currentView.state.doc;
+  const targetLine = Math.max(1, Math.min(line ?? 1, doc.lines));
+  const lineOffset = doc.line(targetLine).from;
+  const charColumn = Math.max(1, column ?? 1);
+  const offset = Math.min(lineOffset + charColumn - 1, doc.length);
+  currentView.dispatch({ selection: EditorSelection.cursor(offset), scrollIntoView: true });
+  focusEditorView(currentView);
+}
+
+/** Consume a pending reveal request (fires once per new id / on mount). */
+function performEditorReveal() {
+  const request = props.revealRequest;
+  if (!request || !view.value) return;
+  revealEditorSelection(request.line, request.column);
+  emit("editorRevealConsumed");
 }
 
 function restoreEditorFocus() {

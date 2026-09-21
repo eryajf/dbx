@@ -83,6 +83,7 @@ import {
   type DesktopIconTheme,
   type InterfaceLayout,
   type DisconnectTabHandlingMode,
+  type DeleteConnectionTabHandlingMode,
   type DataTabReuseMode,
   type DataGridFilterEditorView,
   type MultiStatementDefaultView,
@@ -113,6 +114,7 @@ import { EDITOR_FONT_FAMILY_CSS_VAR, EDITOR_FONT_SIZE_CSS_VAR, createRunStatemen
 import { orderAiConfigsForDisplay } from "@/lib/ai/aiConfigOrdering";
 import { isAiConnectionTestConfigCurrent } from "@/lib/ai/aiConnectionTest";
 import { MAX_AGENT_TURNS_DEFAULT, MAX_AGENT_TURNS_MAX, MAX_AGENT_TURNS_MIN, maxAgentTurnsOutOfRange, normalizeMaxAgentTurns } from "@/lib/ai/maxAgentTurns";
+import type { DriverStoreTab } from "@/lib/connection/agentDriverInstallHint";
 import ThemeCustomizerDialog from "./ThemeCustomizerDialog.vue";
 import DataGridTypeColorSchemeDialog from "@/components/grid/DataGridTypeColorSchemeDialog.vue";
 import { DATA_GRID_TYPE_COLOR_SCHEME_AUTO_ID, cloneDataGridTypeColorSchemes, type DataGridTypeColorScheme } from "@/lib/dataGrid/dataGridTypeColorScheme";
@@ -203,6 +205,7 @@ import {
   type McpLaunchConfig,
 } from "@/lib/mcp/mcpConfigTemplates";
 import { beginMcpStatusRequest, mcpUpdateAvailability } from "@/lib/mcp/mcpUpdateStatus";
+import { notifyComponentUpdatesChanged } from "@/lib/updates/componentUpdateEvents";
 import { isMcpPolicyMutationBlocked, MCP_CAPABILITY_ROWS, MCP_EXECUTION_MODE_COLUMNS, MCP_TOOL_OPTIONS, mcpExecutionModeFromPolicy, mcpPolicyFieldsForExecutionMode, toggleMcpAllowedToolName, type McpExecutionMode } from "@/lib/mcp/mcpPolicySelection";
 import { isMacOS, isWindows } from "@/lib/backend/platform";
 import { combineDataTypeForDatabase, dataTypeLengthInputValue, getDataTypeOptions, getDefaultLengthForType, isDataTypeLengthDisabled, splitDataType } from "@/lib/table/tableStructureEditorState";
@@ -252,6 +255,7 @@ import {
 import { applyEditorSettingsDraftToRefs, type EditorSettingsDraftRefMap } from "@/lib/settings/applyEditorSettingsDraft";
 import { serializeSettingsTransfer, sortTransferCategories, transferCategoryForKey, type SettingsTransferCategoryId } from "@/lib/settings/settingsTransfer";
 import { useConnectionStore } from "@/stores/connectionStore";
+import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { usePromptTemplateStore } from "@/stores/promptTemplateStore";
 import { useTunnelProfileStore } from "@/stores/tunnelProfileStore";
@@ -290,6 +294,7 @@ const { t, locale } = useI18n();
 const { toast } = useToast();
 const settingsStore = useSettingsStore();
 const connectionStore = useConnectionStore();
+const hasSqlServerConnection = computed(() => connectionStore.connections.some((connection) => effectiveDatabaseTypeForConnection(connection) === "sqlserver"));
 const savedSqlStore = useSavedSqlStore();
 const promptTemplateStore = usePromptTemplateStore();
 const tunnelProfileStore = useTunnelProfileStore();
@@ -383,13 +388,59 @@ const props = defineProps<{
   aiConfigRequestId?: number;
   appVersion?: string;
   checkingUpdates?: boolean;
+  updatingAllUpdates?: boolean;
+  appUpdateAvailable?: boolean;
+  appUpdateVersion?: string;
+  driverUpdateCount?: number;
+  jdbcUpdateAvailable?: boolean;
+  mcpUpdateAvailable?: boolean;
+  pluginUpdateCount?: number;
 }>();
 
 const emit = defineEmits<{
   "update:open": [value: boolean];
   "check-updates": [];
+  "update-all": [];
+  "open-driver-store": [target?: DriverStoreTab];
+  "open-plugin-center": [];
+  "open-mcp-settings": [];
+  "open-update-center": [];
   "ai-config-deep-link-handled": [];
 }>();
+
+const hasAnyUpdate = computed(() => Boolean(props.appUpdateAvailable || (props.driverUpdateCount || 0) > 0 || props.jdbcUpdateAvailable || props.mcpUpdateAvailable || (props.pluginUpdateCount || 0) > 0));
+const updateCheckItemKeys = ["app", "drivers", "jdbc", "mcp", "plugins"] as const;
+type UpdateCheckItem = (typeof updateCheckItemKeys)[number];
+const updateCheckLoading = ref<Record<UpdateCheckItem, boolean>>({ app: false, drivers: false, jdbc: false, mcp: false, plugins: false });
+let updateCheckRevealTimers: ReturnType<typeof setTimeout>[] = [];
+let updateCheckWasActive = false;
+
+watch(
+  () => props.checkingUpdates,
+  (checking) => {
+    for (const timer of updateCheckRevealTimers) clearTimeout(timer);
+    updateCheckRevealTimers = [];
+    if (checking) {
+      updateCheckWasActive = true;
+      for (const key of updateCheckItemKeys) updateCheckLoading.value[key] = true;
+      return;
+    }
+    if (!updateCheckWasActive) return;
+    updateCheckWasActive = false;
+    updateCheckItemKeys.forEach((key, index) => {
+      updateCheckRevealTimers.push(
+        setTimeout(() => {
+          updateCheckLoading.value[key] = false;
+        }, index * 120),
+      );
+    });
+  },
+  { immediate: true },
+);
+
+onUnmounted(() => {
+  for (const timer of updateCheckRevealTimers) clearTimeout(timer);
+});
 
 const isSettingsPage = computed(() => props.variant === "page");
 const settingsVisible = computed(() => isSettingsPage.value || props.open === true);
@@ -521,6 +572,8 @@ const editShowCurrentStatementFrame = ref(settingsStore.editorSettings.showCurre
 const editShowInsertValueHints = ref(settingsStore.editorSettings.showInsertValueHints);
 const editAutoAliasTables = ref(settingsStore.editorSettings.autoAliasTables);
 const editInsertSpaceAfterCompletion = ref(settingsStore.editorSettings.insertSpaceAfterCompletion);
+const editSqlServerSpaceConfirmsCompletion = ref(settingsStore.editorSettings.sqlServerSpaceConfirmsCompletion);
+const showSqlServerSpaceConfirmsCompletion = computed(() => hasSqlServerConnection.value || settingsStore.editorSettings.sqlServerSpaceConfirmsCompletion || editSqlServerSpaceConfirmsCompletion.value);
 const editSortCompletionColumnsAlphabetically = ref(settingsStore.editorSettings.sortCompletionColumnsAlphabetically);
 const editSelectFirstCompletionOnOpen = ref(settingsStore.editorSettings.selectFirstCompletionOnOpen);
 const editCompletionTriggerMode = ref<SqlCompletionTriggerMode>(settingsStore.editorSettings.completionTriggerMode);
@@ -533,6 +586,7 @@ const completionTriggerModeDescription = computed(() => {
   return t(key, { shortcut: formatShortcutDisplay(editShortcuts.value.triggerCompletion) });
 });
 const editWordWrap = ref(settingsStore.editorSettings.wordWrap);
+const editShowWhitespace = ref(settingsStore.editorSettings.showWhitespace);
 const editVimModeEnabled = ref(settingsStore.editorSettings.vimModeEnabled);
 const editAutoCloseBrackets = ref(settingsStore.editorSettings.autoCloseBrackets);
 const editSqlSemanticDiagnosticsMode = ref<SqlSemanticDiagnosticsMode>(settingsStore.editorSettings.sqlSemanticDiagnosticsMode);
@@ -671,6 +725,15 @@ const editAutoSelectActiveSidebarNode = ref(settingsStore.editorSettings.autoSel
 const editSidebarBrowseObjectsOnDatabaseActivation = ref(settingsStore.editorSettings.sidebarBrowseObjectsOnDatabaseActivation);
 const editOpenTabsRestoreMode = ref<OpenTabsRestoreMode>(settingsStore.editorSettings.openTabsRestoreMode);
 const editDisconnectTabHandlingMode = ref<DisconnectTabHandlingMode>(settingsStore.editorSettings.disconnectTabHandlingMode);
+const editDeleteConnectionTabHandlingMode = ref<DeleteConnectionTabHandlingMode>(settingsStore.editorSettings.deleteConnectionTabHandlingMode);
+const editRememberConnectionDatabaseOnDelete = ref(settingsStore.editorSettings.rememberConnectionDatabaseOnDelete);
+// 「记住的连接名 → 数据库」是累积数据而非偏好设置，不进弹窗草稿；这里直接读写 store，
+// 让清除操作立即生效，不受弹窗的保存/取消影响。
+const rememberedConnectionDatabaseCount = computed(() => Object.keys(settingsStore.editorSettings.rememberedConnectionDatabases).length);
+
+function clearRememberedConnectionDatabases() {
+  settingsStore.clearRememberedConnectionDatabases();
+}
 const editDataTabReuseMode = ref<DataTabReuseMode>(settingsStore.editorSettings.dataTabReuseMode);
 const editOpenDataTabsNextToActive = ref(settingsStore.editorSettings.openDataTabsNextToActive);
 const editPrefillNewQueryWithSelect = ref(settingsStore.editorSettings.prefillNewQueryWithSelect);
@@ -688,8 +751,11 @@ const tableHoverLookupModeDescription = computed(() => {
   return t(key);
 });
 const editClickTableNavigationTarget = ref<ClickTableNavigationTarget>(settingsStore.editorSettings.clickTableNavigationTarget);
-const editUpdateNotificationsEnabled = ref(settingsStore.editorSettings.updateNotificationsEnabled);
-const editAutoDownloadUpdates = ref(settingsStore.editorSettings.autoDownloadUpdates);
+const editAutoUpdateApp = ref(settingsStore.editorSettings.autoUpdateApp);
+const editAutoUpdateDrivers = ref(settingsStore.editorSettings.autoUpdateDrivers);
+const editAutoUpdateJdbc = ref(settingsStore.editorSettings.autoUpdateJdbc);
+const editAutoUpdateMcp = ref(settingsStore.editorSettings.autoUpdateMcp);
+const editAutoUpdatePlugins = ref(settingsStore.editorSettings.autoUpdatePlugins);
 const editSidebarHiddenTablePrefixes = ref(settingsStore.editorSettings.sidebarHiddenTablePrefixes.join("\n"));
 const editSidebarCopyTableNameSeparator = ref<ColumnNameCopySeparator>(settingsStore.editorSettings.sidebarCopyTableNameSeparator);
 const editSidebarCopyTableNameIncludeSchema = ref(settingsStore.editorSettings.sidebarCopyTableNameIncludeSchema);
@@ -742,6 +808,20 @@ const disconnectTabHandlingModeDescriptionKey = computed(() => {
   }
 
   return "disconnectTabHandlingModeCloseTabsDescription";
+});
+const deleteConnectionTabHandlingModeDescriptionKey = computed(() => {
+  switch (editDeleteConnectionTabHandlingMode.value) {
+    case "close-tabs":
+      return "deleteConnectionTabHandlingModeCloseTabsDescription";
+    case "keep-sql-tabs":
+      return "deleteConnectionTabHandlingModeKeepSqlTabsDescription";
+    case "keep-pinned-sql-tabs":
+      return "deleteConnectionTabHandlingModeKeepPinnedSqlTabsDescription";
+    case "keep-all-tabs":
+      return "deleteConnectionTabHandlingModeKeepAllTabsDescription";
+  }
+
+  return "deleteConnectionTabHandlingModeCloseTabsDescription";
 });
 const normalizedEditTableColumnTemplateFields = computed(() => tableColumnTemplateRowsToSettings(editTableColumnTemplateRows.value));
 const visibleTableColumnTemplateRows = computed(() =>
@@ -854,10 +934,12 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     showInsertValueHints: editShowInsertValueHints.value,
     autoAliasTables: editAutoAliasTables.value,
     insertSpaceAfterCompletion: editInsertSpaceAfterCompletion.value,
+    sqlServerSpaceConfirmsCompletion: editSqlServerSpaceConfirmsCompletion.value,
     sortCompletionColumnsAlphabetically: editSortCompletionColumnsAlphabetically.value,
     selectFirstCompletionOnOpen: editSelectFirstCompletionOnOpen.value,
     completionTriggerMode: editCompletionTriggerMode.value,
     wordWrap: editWordWrap.value,
+    showWhitespace: editShowWhitespace.value,
     vimModeEnabled: editVimModeEnabled.value,
     autoCloseBrackets: editAutoCloseBrackets.value,
     sqlSemanticDiagnosticsMode: editSqlSemanticDiagnosticsMode.value,
@@ -912,6 +994,8 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     sidebarBrowseObjectsOnDatabaseActivation: editSidebarBrowseObjectsOnDatabaseActivation.value,
     openTabsRestoreMode: editOpenTabsRestoreMode.value,
     disconnectTabHandlingMode: editDisconnectTabHandlingMode.value,
+    deleteConnectionTabHandlingMode: editDeleteConnectionTabHandlingMode.value,
+    rememberConnectionDatabaseOnDelete: editRememberConnectionDatabaseOnDelete.value,
     dataTabReuseMode: editDataTabReuseMode.value,
     openDataTabsNextToActive: editOpenDataTabsNextToActive.value,
     prefillNewQueryWithSelect: editPrefillNewQueryWithSelect.value,
@@ -920,8 +1004,13 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     formatSqlOnSqlFileSave: editFormatSqlOnSqlFileSave.value,
     showTableDdlHoverPreview: editShowTableDdlHoverPreview.value,
     tableHoverLookupMode: editTableHoverLookupMode.value,
-    updateNotificationsEnabled: editUpdateNotificationsEnabled.value,
-    autoDownloadUpdates: editAutoDownloadUpdates.value,
+    updateNotificationsEnabled: editAutoUpdateApp.value,
+    autoDownloadUpdates: editAutoUpdateApp.value,
+    autoUpdateApp: editAutoUpdateApp.value,
+    autoUpdateDrivers: editAutoUpdateDrivers.value,
+    autoUpdateJdbc: editAutoUpdateJdbc.value,
+    autoUpdateMcp: editAutoUpdateMcp.value,
+    autoUpdatePlugins: editAutoUpdatePlugins.value,
     sidebarObjectInfoMode: editSidebarObjectInfoMode.value,
     sidebarAllowHorizontalScroll: editSidebarAllowHorizontalScroll.value,
     sidebarShowTooltips: editSidebarShowTooltips.value,
@@ -1486,10 +1575,12 @@ function syncEditorSettingsDraftFromStore() {
   editShowInsertValueHints.value = settingsStore.editorSettings.showInsertValueHints;
   editAutoAliasTables.value = settingsStore.editorSettings.autoAliasTables;
   editInsertSpaceAfterCompletion.value = settingsStore.editorSettings.insertSpaceAfterCompletion;
+  editSqlServerSpaceConfirmsCompletion.value = settingsStore.editorSettings.sqlServerSpaceConfirmsCompletion;
   editSortCompletionColumnsAlphabetically.value = settingsStore.editorSettings.sortCompletionColumnsAlphabetically;
   editSelectFirstCompletionOnOpen.value = settingsStore.editorSettings.selectFirstCompletionOnOpen;
   editCompletionTriggerMode.value = settingsStore.editorSettings.completionTriggerMode;
   editWordWrap.value = settingsStore.editorSettings.wordWrap;
+  editShowWhitespace.value = settingsStore.editorSettings.showWhitespace;
   editVimModeEnabled.value = settingsStore.editorSettings.vimModeEnabled;
   editAutoCloseBrackets.value = settingsStore.editorSettings.autoCloseBrackets;
   editSqlSemanticDiagnosticsMode.value = settingsStore.editorSettings.sqlSemanticDiagnosticsMode;
@@ -1546,6 +1637,8 @@ function syncEditorSettingsDraftFromStore() {
   editSidebarBrowseObjectsOnDatabaseActivation.value = settingsStore.editorSettings.sidebarBrowseObjectsOnDatabaseActivation;
   editOpenTabsRestoreMode.value = settingsStore.editorSettings.openTabsRestoreMode;
   editDisconnectTabHandlingMode.value = settingsStore.editorSettings.disconnectTabHandlingMode;
+  editDeleteConnectionTabHandlingMode.value = settingsStore.editorSettings.deleteConnectionTabHandlingMode;
+  editRememberConnectionDatabaseOnDelete.value = settingsStore.editorSettings.rememberConnectionDatabaseOnDelete;
   editDataTabReuseMode.value = settingsStore.editorSettings.dataTabReuseMode;
   editOpenDataTabsNextToActive.value = settingsStore.editorSettings.openDataTabsNextToActive;
   editPrefillNewQueryWithSelect.value = settingsStore.editorSettings.prefillNewQueryWithSelect;
@@ -1555,8 +1648,11 @@ function syncEditorSettingsDraftFromStore() {
   editShowTableDdlHoverPreview.value = settingsStore.editorSettings.showTableDdlHoverPreview;
   editTableHoverLookupMode.value = settingsStore.editorSettings.tableHoverLookupMode;
   editClickTableNavigationTarget.value = settingsStore.editorSettings.clickTableNavigationTarget;
-  editUpdateNotificationsEnabled.value = settingsStore.editorSettings.updateNotificationsEnabled;
-  editAutoDownloadUpdates.value = settingsStore.editorSettings.autoDownloadUpdates;
+  editAutoUpdateApp.value = settingsStore.editorSettings.autoUpdateApp;
+  editAutoUpdateDrivers.value = settingsStore.editorSettings.autoUpdateDrivers;
+  editAutoUpdateJdbc.value = settingsStore.editorSettings.autoUpdateJdbc;
+  editAutoUpdateMcp.value = settingsStore.editorSettings.autoUpdateMcp;
+  editAutoUpdatePlugins.value = settingsStore.editorSettings.autoUpdatePlugins;
   editSidebarHiddenTablePrefixes.value = settingsStore.editorSettings.sidebarHiddenTablePrefixes.join("\n");
   editSidebarCopyTableNameSeparator.value = settingsStore.editorSettings.sidebarCopyTableNameSeparator;
   editSidebarCopyTableNameIncludeSchema.value = settingsStore.editorSettings.sidebarCopyTableNameIncludeSchema;
@@ -1613,9 +1709,11 @@ const editorSettingsDraftRefs: EditorSettingsDraftRefMap = {
   showInsertValueHints: editShowInsertValueHints,
   autoAliasTables: editAutoAliasTables,
   insertSpaceAfterCompletion: editInsertSpaceAfterCompletion,
+  sqlServerSpaceConfirmsCompletion: editSqlServerSpaceConfirmsCompletion,
   sortCompletionColumnsAlphabetically: editSortCompletionColumnsAlphabetically,
   selectFirstCompletionOnOpen: editSelectFirstCompletionOnOpen,
   wordWrap: editWordWrap,
+  showWhitespace: editShowWhitespace,
   vimModeEnabled: editVimModeEnabled,
   autoCloseBrackets: editAutoCloseBrackets,
   sqlSemanticDiagnosticsMode: editSqlSemanticDiagnosticsMode,
@@ -1668,6 +1766,8 @@ const editorSettingsDraftRefs: EditorSettingsDraftRefMap = {
   sidebarBrowseObjectsOnDatabaseActivation: editSidebarBrowseObjectsOnDatabaseActivation,
   openTabsRestoreMode: editOpenTabsRestoreMode,
   disconnectTabHandlingMode: editDisconnectTabHandlingMode,
+  deleteConnectionTabHandlingMode: editDeleteConnectionTabHandlingMode,
+  rememberConnectionDatabaseOnDelete: editRememberConnectionDatabaseOnDelete,
   dataTabReuseMode: editDataTabReuseMode,
   openDataTabsNextToActive: editOpenDataTabsNextToActive,
   prefillNewQueryWithSelect: editPrefillNewQueryWithSelect,
@@ -1676,8 +1776,13 @@ const editorSettingsDraftRefs: EditorSettingsDraftRefMap = {
   formatSqlOnSqlFileSave: editFormatSqlOnSqlFileSave,
   showTableDdlHoverPreview: editShowTableDdlHoverPreview,
   tableHoverLookupMode: editTableHoverLookupMode,
-  updateNotificationsEnabled: editUpdateNotificationsEnabled,
-  autoDownloadUpdates: editAutoDownloadUpdates,
+  updateNotificationsEnabled: editAutoUpdateApp,
+  autoDownloadUpdates: editAutoUpdateApp,
+  autoUpdateApp: editAutoUpdateApp,
+  autoUpdateDrivers: editAutoUpdateDrivers,
+  autoUpdateJdbc: editAutoUpdateJdbc,
+  autoUpdateMcp: editAutoUpdateMcp,
+  autoUpdatePlugins: editAutoUpdatePlugins,
   sidebarObjectInfoMode: editSidebarObjectInfoMode,
   sidebarAllowHorizontalScroll: editSidebarAllowHorizontalScroll,
   sidebarShowTooltips: editSidebarShowTooltips,
@@ -2051,10 +2156,12 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editShowInsertValueHints.value = DEFAULT_EDITOR_SETTINGS.showInsertValueHints;
     editAutoAliasTables.value = DEFAULT_EDITOR_SETTINGS.autoAliasTables;
     editInsertSpaceAfterCompletion.value = DEFAULT_EDITOR_SETTINGS.insertSpaceAfterCompletion;
+    editSqlServerSpaceConfirmsCompletion.value = DEFAULT_EDITOR_SETTINGS.sqlServerSpaceConfirmsCompletion;
     editSortCompletionColumnsAlphabetically.value = DEFAULT_EDITOR_SETTINGS.sortCompletionColumnsAlphabetically;
     editSelectFirstCompletionOnOpen.value = DEFAULT_EDITOR_SETTINGS.selectFirstCompletionOnOpen;
     editCompletionTriggerMode.value = DEFAULT_EDITOR_SETTINGS.completionTriggerMode;
     editWordWrap.value = DEFAULT_EDITOR_SETTINGS.wordWrap;
+    editShowWhitespace.value = DEFAULT_EDITOR_SETTINGS.showWhitespace;
     editVimModeEnabled.value = DEFAULT_EDITOR_SETTINGS.vimModeEnabled;
     editAutoCloseBrackets.value = DEFAULT_EDITOR_SETTINGS.autoCloseBrackets;
     editSqlSemanticDiagnosticsMode.value = DEFAULT_EDITOR_SETTINGS.sqlSemanticDiagnosticsMode;
@@ -2101,6 +2208,8 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editSidebarBrowseObjectsOnDatabaseActivation.value = DEFAULT_EDITOR_SETTINGS.sidebarBrowseObjectsOnDatabaseActivation;
     editOpenTabsRestoreMode.value = DEFAULT_EDITOR_SETTINGS.openTabsRestoreMode;
     editDisconnectTabHandlingMode.value = DEFAULT_EDITOR_SETTINGS.disconnectTabHandlingMode;
+    editDeleteConnectionTabHandlingMode.value = DEFAULT_EDITOR_SETTINGS.deleteConnectionTabHandlingMode;
+    editRememberConnectionDatabaseOnDelete.value = DEFAULT_EDITOR_SETTINGS.rememberConnectionDatabaseOnDelete;
     editDataTabReuseMode.value = DEFAULT_EDITOR_SETTINGS.dataTabReuseMode;
     editOpenDataTabsNextToActive.value = DEFAULT_EDITOR_SETTINGS.openDataTabsNextToActive;
     editPrefillNewQueryWithSelect.value = DEFAULT_EDITOR_SETTINGS.prefillNewQueryWithSelect;
@@ -2164,10 +2273,13 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editShortcuts.value = normalizeShortcutSettings(DEFAULT_EDITOR_SETTINGS.shortcuts);
   } else if (tab === "snippets") {
     editSnippets.value = DEFAULT_SQL_SNIPPETS.map((s) => ({ ...s }));
-  } else if (tab === "about") {
+  } else if (tab === "updates") {
+    editAutoUpdateApp.value = DEFAULT_EDITOR_SETTINGS.autoUpdateApp;
+    editAutoUpdateDrivers.value = DEFAULT_EDITOR_SETTINGS.autoUpdateDrivers;
+    editAutoUpdateJdbc.value = DEFAULT_EDITOR_SETTINGS.autoUpdateJdbc;
+    editAutoUpdateMcp.value = DEFAULT_EDITOR_SETTINGS.autoUpdateMcp;
+    editAutoUpdatePlugins.value = DEFAULT_EDITOR_SETTINGS.autoUpdatePlugins;
     editUpdateDownloadSource.value = DEFAULT_EDITOR_SETTINGS.updateDownloadSource;
-    editUpdateNotificationsEnabled.value = DEFAULT_EDITOR_SETTINGS.updateNotificationsEnabled;
-    editAutoDownloadUpdates.value = DEFAULT_EDITOR_SETTINGS.autoDownloadUpdates;
   }
 }
 
@@ -2193,9 +2305,11 @@ function resetAllDefaults() {
   editShowInsertValueHints.value = DEFAULT_EDITOR_SETTINGS.showInsertValueHints;
   editAutoAliasTables.value = DEFAULT_EDITOR_SETTINGS.autoAliasTables;
   editInsertSpaceAfterCompletion.value = DEFAULT_EDITOR_SETTINGS.insertSpaceAfterCompletion;
+  editSqlServerSpaceConfirmsCompletion.value = DEFAULT_EDITOR_SETTINGS.sqlServerSpaceConfirmsCompletion;
   editSortCompletionColumnsAlphabetically.value = DEFAULT_EDITOR_SETTINGS.sortCompletionColumnsAlphabetically;
   editSelectFirstCompletionOnOpen.value = DEFAULT_EDITOR_SETTINGS.selectFirstCompletionOnOpen;
   editWordWrap.value = DEFAULT_EDITOR_SETTINGS.wordWrap;
+  editShowWhitespace.value = DEFAULT_EDITOR_SETTINGS.showWhitespace;
   editVimModeEnabled.value = DEFAULT_EDITOR_SETTINGS.vimModeEnabled;
   editAutoCloseBrackets.value = DEFAULT_EDITOR_SETTINGS.autoCloseBrackets;
   editSqlSemanticDiagnosticsMode.value = DEFAULT_EDITOR_SETTINGS.sqlSemanticDiagnosticsMode;
@@ -2258,6 +2372,8 @@ function resetAllDefaults() {
   editSidebarBrowseObjectsOnDatabaseActivation.value = DEFAULT_EDITOR_SETTINGS.sidebarBrowseObjectsOnDatabaseActivation;
   editOpenTabsRestoreMode.value = DEFAULT_EDITOR_SETTINGS.openTabsRestoreMode;
   editDisconnectTabHandlingMode.value = DEFAULT_EDITOR_SETTINGS.disconnectTabHandlingMode;
+  editDeleteConnectionTabHandlingMode.value = DEFAULT_EDITOR_SETTINGS.deleteConnectionTabHandlingMode;
+  editRememberConnectionDatabaseOnDelete.value = DEFAULT_EDITOR_SETTINGS.rememberConnectionDatabaseOnDelete;
   editDataTabReuseMode.value = DEFAULT_EDITOR_SETTINGS.dataTabReuseMode;
   editOpenDataTabsNextToActive.value = DEFAULT_EDITOR_SETTINGS.openDataTabsNextToActive;
   editPrefillNewQueryWithSelect.value = DEFAULT_EDITOR_SETTINGS.prefillNewQueryWithSelect;
@@ -2266,8 +2382,11 @@ function resetAllDefaults() {
   editFormatSqlOnSqlFileSave.value = DEFAULT_EDITOR_SETTINGS.formatSqlOnSqlFileSave;
   editShowTableDdlHoverPreview.value = DEFAULT_EDITOR_SETTINGS.showTableDdlHoverPreview;
   editTableHoverLookupMode.value = DEFAULT_EDITOR_SETTINGS.tableHoverLookupMode;
-  editUpdateNotificationsEnabled.value = DEFAULT_EDITOR_SETTINGS.updateNotificationsEnabled;
-  editAutoDownloadUpdates.value = DEFAULT_EDITOR_SETTINGS.autoDownloadUpdates;
+  editAutoUpdateApp.value = DEFAULT_EDITOR_SETTINGS.autoUpdateApp;
+  editAutoUpdateDrivers.value = DEFAULT_EDITOR_SETTINGS.autoUpdateDrivers;
+  editAutoUpdateJdbc.value = DEFAULT_EDITOR_SETTINGS.autoUpdateJdbc;
+  editAutoUpdateMcp.value = DEFAULT_EDITOR_SETTINGS.autoUpdateMcp;
+  editAutoUpdatePlugins.value = DEFAULT_EDITOR_SETTINGS.autoUpdatePlugins;
   editSidebarObjectInfoMode.value = DEFAULT_EDITOR_SETTINGS.sidebarObjectInfoMode;
   editSidebarAllowHorizontalScroll.value = DEFAULT_EDITOR_SETTINGS.sidebarAllowHorizontalScroll;
   editSidebarShowTooltips.value = DEFAULT_EDITOR_SETTINGS.sidebarShowTooltips;
@@ -2511,6 +2630,12 @@ function onDisconnectTabHandlingModeChange(v: any) {
   }
 }
 
+function onDeleteConnectionTabHandlingModeChange(v: any) {
+  if (v === "close-tabs" || v === "keep-sql-tabs" || v === "keep-pinned-sql-tabs" || v === "keep-all-tabs") {
+    editDeleteConnectionTabHandlingMode.value = v;
+  }
+}
+
 function onLocaleChange(v: any) {
   if (typeof v === "string") void setLocale(v as Locale);
 }
@@ -2689,10 +2814,11 @@ const settingsCategoryNav = computed<{ value: SettingsCategory; label: string }[
   { value: "sync", label: t("settings.syncTab") },
   { value: "ai", label: t("settings.aiTab") },
   { value: "mcp" as const, label: t("settings.mcpTab") },
+  { value: "updates" as const, label: t("settings.updatesTab") },
   ...(isWeb ? [{ value: "security" as const, label: t("settings.securityTab") }] : []),
   { value: "about", label: t("settings.aboutTab") },
 ]);
-const settingsTabsWithApplyFooter = new Set<SettingsCategory>(["editor", "formatter", "appearance", "navigation", "data", "shortcuts", "snippets"]);
+const settingsTabsWithApplyFooter = new Set<SettingsCategory>(["editor", "formatter", "appearance", "navigation", "data", "shortcuts", "snippets", "updates"]);
 
 function hasSettingsApplyFooter(value: SettingsCategory): boolean {
   return settingsTabsWithApplyFooter.has(value);
@@ -2722,6 +2848,8 @@ const settingsSearchEntries = computed(() =>
     [...SETTINGS_SEARCH_DEFINITIONS, ...createShortcutSettingsSearchDefinitions(SHORTCUT_DEFINITIONS)],
     {
       isWeb,
+      hasSqlServerConnection: hasSqlServerConnection.value,
+      sqlServerSpaceConfirmsCompletionEnabled: settingsStore.editorSettings.sqlServerSpaceConfirmsCompletion || editSqlServerSpaceConfirmsCompletion.value,
       visibleCategories: new Set(settingsCategoryNav.value.map((category) => category.value)),
     },
     translateWithExecuteShortcut,
@@ -3666,6 +3794,7 @@ async function installMcp() {
     mcpInstallError.value = false;
     // 安装成功后刷新状态
     await refreshMcpStatus();
+    notifyComponentUpdatesChanged();
   } catch (e: any) {
     mcpInstallMessage.value = e?.message || String(e);
     mcpInstallError.value = true;
@@ -3688,6 +3817,7 @@ async function uninstallMcp() {
   try {
     mcpInstallMessage.value = await uninstallMcpServer();
     await refreshMcpStatus();
+    notifyComponentUpdatesChanged();
   } catch (e: any) {
     mcpInstallMessage.value = t("settings.mcpUninstallFailed", { error: e?.message || String(e) });
     mcpInstallError.value = true;
@@ -3718,9 +3848,13 @@ const webdavError = ref(false);
 const syncMethodTab = ref<"webdav" | "snippet">("webdav");
 
 const snippetProvider = ref<SnippetProvider>((localStorage.getItem("dbx-snippet-provider") as SnippetProvider) || "github");
+const snippetInstanceUrl = ref(localStorage.getItem("dbx-gitlab-instance-url") || "https://gitlab.com");
+const activeSnippetInstanceUrl = ref(snippetInstanceUrl.value);
+const snippetInstanceError = ref("");
+const snippetPreferenceKey = () => `dbx-snippet-remember-token-${snippetProvider.value}${snippetProvider.value === "gitlab" ? `-${activeSnippetInstanceUrl.value}` : ""}`;
 const snippetId = ref("");
 const snippetToken = ref("");
-const snippetRememberToken = ref(localStorage.getItem(`dbx-snippet-remember-token-${snippetProvider.value}`) === "true");
+const snippetRememberToken = ref(localStorage.getItem(snippetPreferenceKey()) === "true");
 const snippetHasSavedToken = ref(false);
 const snippetPassphrase = ref("");
 const snippetSecretsPassphrase = ref("");
@@ -3734,7 +3868,7 @@ const pendingLegacyCleanupId = ref("");
 const snippetSyncSettingsLoading = ref(true);
 
 const webdavReady = computed(() => !!webdavEndpoint.value.trim() && !webdavBusy.value && (!webdavSyncSecrets.value || !!webdavSecretsPassphrase.value.trim() || webdavHasSavedSecretsPassphrase.value));
-const snippetReady = computed(() => !snippetSyncSettingsLoading.value && !snippetBusy.value && (!!snippetToken.value.trim() || snippetHasSavedToken.value));
+const snippetReady = computed(() => !snippetSyncSettingsLoading.value && !snippetBusy.value && (snippetProvider.value !== "gitlab" || (!snippetInstanceError.value && snippetInstanceUrl.value === activeSnippetInstanceUrl.value)) && (!!snippetToken.value.trim() || snippetHasSavedToken.value));
 const snippetUploadReady = computed(() => snippetReady.value && !!snippetPassphrase.value.trim() && (!snippetIncludeSecrets.value || !!snippetSecretsPassphrase.value.trim()));
 // Legacy plaintext snippets have no outer encryption password. Let the
 // backend require one only after it detects an encrypted envelope so those
@@ -3744,6 +3878,7 @@ const snippetDownloadReady = computed(() => snippetReady.value && (!snippetResto
 function currentSnippetConfig(replaceLegacySnippet = false): SnippetSyncConfig {
   return {
     provider: snippetProvider.value,
+    instanceUrl: snippetProvider.value === "gitlab" ? activeSnippetInstanceUrl.value : undefined,
     token: snippetToken.value.trim() || undefined,
     snippetId: snippetId.value.trim() || undefined,
     replaceLegacySnippet: replaceLegacySnippet || undefined,
@@ -3755,43 +3890,70 @@ function currentSnippetAccountConfig(): SnippetSyncConfig {
 }
 
 async function refreshSnippetTokenStatus() {
+  const account = `${snippetProvider.value}:${activeSnippetInstanceUrl.value}`;
   try {
     const status = await snippetTokenStatus(currentSnippetAccountConfig());
+    if (account !== `${snippetProvider.value}:${activeSnippetInstanceUrl.value}`) return;
     snippetHasSavedToken.value = status.hasSavedToken;
     if (status.hasSavedToken) snippetRememberToken.value = true;
   } catch {
-    snippetHasSavedToken.value = false;
+    if (account === `${snippetProvider.value}:${activeSnippetInstanceUrl.value}`) snippetHasSavedToken.value = false;
   }
 }
 
-async function refreshSnippetSyncSettings(provider = snippetProvider.value) {
+async function refreshSnippetSyncSettings(provider = snippetProvider.value, instanceUrl = activeSnippetInstanceUrl.value) {
+  const isCurrent = () => provider === snippetProvider.value && instanceUrl === activeSnippetInstanceUrl.value;
   try {
-    const settings = await snippetSyncSettings(provider);
-    if (provider !== snippetProvider.value) return;
+    const settings = await snippetSyncSettings(provider, provider === "gitlab" ? instanceUrl : undefined);
+    if (!isCurrent()) return;
     pendingLegacyCleanupId.value = settings.legacyCleanupRequiredId || "";
     if (settings.snippetId) {
       snippetId.value = settings.snippetId;
       return;
     }
-    const legacyId = localStorage.getItem(`dbx-snippet-id-${provider}`)?.trim();
+    const legacyId = provider === "gitlab" ? undefined : localStorage.getItem(`dbx-snippet-id-${provider}`)?.trim();
     if (legacyId) {
       await saveSnippetSyncId(provider, legacyId);
       localStorage.removeItem(`dbx-snippet-id-${provider}`);
     }
-    if (provider !== snippetProvider.value) return;
+    if (!isCurrent()) return;
     snippetId.value = legacyId || "";
   } catch {
-    if (provider === snippetProvider.value) {
+    if (isCurrent()) {
       snippetId.value = "";
       pendingLegacyCleanupId.value = "";
     }
   } finally {
-    if (provider === snippetProvider.value) snippetSyncSettingsLoading.value = false;
+    if (isCurrent()) snippetSyncSettingsLoading.value = false;
   }
 }
 
 async function persistSnippetSyncId() {
-  await saveSnippetSyncId(snippetProvider.value, snippetId.value.trim() || undefined);
+  await saveSnippetSyncId(snippetProvider.value, snippetId.value.trim() || undefined, snippetProvider.value === "gitlab" ? activeSnippetInstanceUrl.value : undefined);
+}
+
+function commitSnippetInstance() {
+  try {
+    const url = new URL(snippetInstanceUrl.value.trim());
+    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
+    snippetInstanceUrl.value = url.href.replace(/\/$/, "");
+    snippetInstanceError.value = "";
+  } catch {
+    snippetInstanceError.value = t("settings.syncGitLabInstanceInvalid");
+    return;
+  }
+  if (snippetInstanceUrl.value === activeSnippetInstanceUrl.value) return;
+  activeSnippetInstanceUrl.value = snippetInstanceUrl.value;
+  localStorage.setItem("dbx-gitlab-instance-url", activeSnippetInstanceUrl.value);
+  snippetRememberToken.value = localStorage.getItem(snippetPreferenceKey()) === "true";
+  snippetToken.value = "";
+  snippetHasSavedToken.value = false;
+  snippetId.value = "";
+  legacySnippetId.value = "";
+  pendingLegacyCleanupId.value = "";
+  snippetSyncSettingsLoading.value = true;
+  void refreshSnippetTokenStatus();
+  void refreshSnippetSyncSettings();
 }
 
 async function applySnippetTokenPreference() {
@@ -3813,7 +3975,7 @@ async function runSnippetAction(kind: "test" | "upload" | "download" | "migrate"
   snippetError.value = false;
   try {
     localStorage.setItem("dbx-snippet-provider", snippetProvider.value);
-    localStorage.setItem(`dbx-snippet-remember-token-${snippetProvider.value}`, String(snippetRememberToken.value));
+    localStorage.setItem(snippetPreferenceKey(), String(snippetRememberToken.value));
     if (persistCurrentSnippetId) await persistSnippetSyncId();
     await applySnippetTokenPreference();
     snippetMessage.value = await action();
@@ -4198,8 +4360,9 @@ watch([webdavAutoUploadEnabled, webdavAutoUploadIntervalMinutes], () => {
 watch(snippetProvider, (provider) => {
   localStorage.setItem("dbx-snippet-provider", provider);
   snippetId.value = "";
-  snippetRememberToken.value = localStorage.getItem(`dbx-snippet-remember-token-${provider}`) === "true";
+  snippetRememberToken.value = localStorage.getItem(snippetPreferenceKey()) === "true";
   snippetToken.value = "";
+  snippetHasSavedToken.value = false;
   legacySnippetId.value = "";
   pendingLegacyCleanupId.value = "";
   snippetSyncSettingsLoading.value = true;
@@ -5974,6 +6137,16 @@ onUnmounted(() => {
                   <Switch id="editor-insert-space-after-completion" v-model="editInsertSpaceAfterCompletion" class="mt-0.5" />
                 </div>
 
+                <div v-if="showSqlServerSpaceConfirmsCompletion" class="settings-item flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
+                  <div class="space-y-1">
+                    <Label for="editor-sqlserver-space-confirms-completion">{{ t("settings.sqlServerSpaceConfirmsCompletion") }}</Label>
+                    <p class="text-xs text-muted-foreground">
+                      {{ t("settings.sqlServerSpaceConfirmsCompletionDescription") }}
+                    </p>
+                  </div>
+                  <Switch id="editor-sqlserver-space-confirms-completion" v-model="editSqlServerSpaceConfirmsCompletion" class="mt-0.5" />
+                </div>
+
                 <div class="settings-item flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
                   <div class="space-y-1">
                     <Label for="editor-sort-completion-columns-alphabetically">{{ t("settings.sortCompletionColumnsAlphabetically") }}</Label>
@@ -6006,6 +6179,16 @@ onUnmounted(() => {
                     </p>
                   </div>
                   <Switch id="editor-show-insert-value-hints" v-model="editShowInsertValueHints" class="mt-0.5" />
+                </div>
+
+                <div class="settings-item flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
+                  <div class="space-y-1">
+                    <Label for="editor-show-whitespace">{{ t("settings.showWhitespace") }}</Label>
+                    <p class="text-xs text-muted-foreground">
+                      {{ t("settings.showWhitespaceDescription") }}
+                    </p>
+                  </div>
+                  <Switch id="editor-show-whitespace" v-model="editShowWhitespace" class="mt-0.5" />
                 </div>
 
                 <div class="settings-item flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
@@ -7014,6 +7197,52 @@ onUnmounted(() => {
                 <p class="text-xs text-muted-foreground">
                   {{ t(`settings.${disconnectTabHandlingModeDescriptionKey}`) }}
                 </p>
+              </div>
+              <div class="settings-item space-y-2 rounded-md border bg-muted/20 px-3 py-2">
+                <div class="flex items-center gap-2">
+                  <Label for="delete-connection-tab-handling-mode">{{ t("settings.deleteConnectionTabHandlingMode") }}</Label>
+                  <HelpTooltip :label="t('settings.deleteConnectionTabHandlingMode')">
+                    {{ t("settings.deleteConnectionTabHandlingModeDescription") }}
+                  </HelpTooltip>
+                </div>
+                <Select :model-value="editDeleteConnectionTabHandlingMode" @update:model-value="onDeleteConnectionTabHandlingModeChange">
+                  <SelectTrigger id="delete-connection-tab-handling-mode" class="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="close-tabs">{{ t("settings.deleteConnectionTabHandlingModeCloseTabs") }}</SelectItem>
+                    <SelectItem value="keep-sql-tabs">{{ t("settings.deleteConnectionTabHandlingModeKeepSqlTabs") }}</SelectItem>
+                    <SelectItem value="keep-pinned-sql-tabs">
+                      {{ t("settings.deleteConnectionTabHandlingModeKeepPinnedSqlTabs") }}
+                    </SelectItem>
+                    <SelectItem value="keep-all-tabs">{{ t("settings.deleteConnectionTabHandlingModeKeepAllTabs") }}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p class="text-xs text-muted-foreground">
+                  {{ t(`settings.${deleteConnectionTabHandlingModeDescriptionKey}`) }}
+                </p>
+              </div>
+              <div class="settings-item flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2">
+                <div class="min-w-0 space-y-1">
+                  <div class="flex items-center gap-2">
+                    <Label for="remember-connection-database-on-delete">{{ t("settings.rememberConnectionDatabaseOnDelete") }}</Label>
+                    <HelpTooltip :label="t('settings.rememberConnectionDatabaseOnDelete')">
+                      {{ t("settings.rememberConnectionDatabaseOnDeleteDescription") }}
+                    </HelpTooltip>
+                  </div>
+                  <p class="text-xs text-muted-foreground">
+                    {{ t("settings.rememberConnectionDatabaseOnDeleteHint") }}
+                  </p>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs text-muted-foreground">
+                      {{ t("settings.rememberedConnectionDatabaseCount", { count: rememberedConnectionDatabaseCount }) }}
+                    </span>
+                    <Button variant="outline" size="sm" :disabled="rememberedConnectionDatabaseCount === 0" @click="clearRememberedConnectionDatabases">
+                      {{ t("settings.clearRememberedConnectionDatabases") }}
+                    </Button>
+                  </div>
+                </div>
+                <Switch id="remember-connection-database-on-delete" v-model="editRememberConnectionDatabaseOnDelete" />
               </div>
               <div class="settings-item space-y-2 rounded-md border bg-muted/20 px-3 py-2">
                 <div class="flex items-center gap-2">
@@ -8263,7 +8492,7 @@ LIMIT 100;</pre
               <Tabs v-model="syncMethodTab" class="w-full">
                 <TabsList v-if="!isWeb" class="grid w-full grid-cols-2">
                   <TabsTrigger value="webdav">WebDAV</TabsTrigger>
-                  <TabsTrigger value="snippet">GitHub / Gitee</TabsTrigger>
+                  <TabsTrigger value="snippet">{{ t("settings.syncSnippetTitle") }}</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="webdav" data-settings-search-id="sync-webdav" :class="['mt-5 space-y-5', settingsSearchTargetClass('sync-webdav')]">
@@ -8390,8 +8619,15 @@ LIMIT 100;</pre
                         <SelectContent>
                           <SelectItem value="github">GitHub Gist</SelectItem>
                           <SelectItem value="gitee">{{ t("settings.syncSnippetProviderGitee") }}</SelectItem>
+                          <SelectItem value="gitlab">GitLab Snippets</SelectItem>
                         </SelectContent>
                       </Select>
+                    </div>
+                    <div v-if="snippetProvider === 'gitlab'" class="space-y-2 md:col-span-2">
+                      <Label for="gitlab-instance-url">{{ t("settings.syncGitLabInstance") }}</Label>
+                      <Input id="gitlab-instance-url" v-model="snippetInstanceUrl" type="url" autocomplete="url" :disabled="!!snippetBusy" placeholder="https://gitlab.example.com" @blur="commitSnippetInstance" @keydown.enter="commitSnippetInstance" />
+                      <p v-if="snippetInstanceError" class="text-xs text-destructive">{{ snippetInstanceError }}</p>
+                      <p v-if="activeSnippetInstanceUrl.startsWith('http://')" class="text-xs text-destructive">{{ t("settings.syncGitLabHttpWarning") }}</p>
                     </div>
                     <div class="space-y-2">
                       <Label for="snippet-sync-id">{{ t("settings.syncSnippetId") }}</Label>
@@ -9860,6 +10096,111 @@ LIMIT 100;</pre
               </Tabs>
             </section>
 
+            <section v-else-if="activeSettingsTab === 'updates'" data-settings-search-id="updates" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('updates')]">
+              <div class="space-y-3 rounded-lg border bg-muted/20 p-4">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="min-w-0 space-y-1">
+                    <Label>{{ t("settings.updateStatusTitle") }}</Label>
+                    <p class="text-sm text-muted-foreground">{{ t("settings.updateStatusDescription") }}</p>
+                  </div>
+                  <div class="flex shrink-0 items-center gap-2">
+                    <Button type="button" variant="outline" size="sm" class="h-8 min-w-20" :disabled="props.checkingUpdates || props.updatingAllUpdates" :aria-label="t('settings.checkUpdates')" @click="emit('check-updates')">
+                      <Loader2 v-if="props.checkingUpdates" class="h-3.5 w-3.5 animate-spin" />
+                      <span v-else>{{ t("settings.checkUpdates") }}</span>
+                    </Button>
+                    <Button v-if="hasAnyUpdate" type="button" size="sm" class="h-8" :disabled="props.checkingUpdates || props.updatingAllUpdates" @click="emit('update-all')">
+                      <Loader2 v-if="props.updatingAllUpdates" class="h-3.5 w-3.5 animate-spin" />
+                      <RefreshCw v-else class="h-3.5 w-3.5" />
+                      {{ t("settings.updateAll") }}
+                    </Button>
+                  </div>
+                </div>
+                <div class="grid gap-2 sm:grid-cols-2">
+                  <div class="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2.5 text-sm">
+                    <button type="button" class="min-w-0 space-y-0.5 rounded-sm text-left transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" @click="emit('open-update-center')">
+                      <div class="font-medium">{{ t("settings.updateClient") }}</div>
+                      <div class="flex items-center gap-1.5" :class="updateCheckLoading.app ? 'text-muted-foreground' : props.appUpdateAvailable ? 'text-primary' : 'text-muted-foreground'">
+                        <Loader2 v-if="updateCheckLoading.app" class="h-3 w-3 animate-spin" />
+                        <span>{{ updateCheckLoading.app ? t("updates.checking") : props.appUpdateAvailable ? props.appUpdateVersion || t("settings.updateAvailable") : t("settings.upToDate") }}</span>
+                      </div>
+                    </button>
+                    <div class="flex shrink-0 items-center gap-2">
+                      <Label for="auto-update-app" class="text-xs font-normal text-muted-foreground">{{ t("settings.autoUpdate") }}</Label>
+                      <Switch id="auto-update-app" v-model="editAutoUpdateApp" :aria-label="t('settings.autoUpdateApp')" />
+                    </div>
+                  </div>
+                  <div class="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2.5 text-sm">
+                    <button type="button" class="min-w-0 space-y-0.5 rounded-sm text-left transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" @click="emit('open-driver-store', 'agent')">
+                      <div class="font-medium">{{ t("settings.updateDrivers") }}</div>
+                      <div class="flex items-center gap-1.5" :class="updateCheckLoading.drivers ? 'text-muted-foreground' : (props.driverUpdateCount || 0) > 0 ? 'text-primary' : 'text-muted-foreground'">
+                        <Loader2 v-if="updateCheckLoading.drivers" class="h-3 w-3 animate-spin" />
+                        <span>{{ updateCheckLoading.drivers ? t("updates.checking") : (props.driverUpdateCount || 0) > 0 ? t("settings.updateCount", { count: props.driverUpdateCount }) : t("settings.upToDate") }}</span>
+                      </div>
+                    </button>
+                    <div class="flex shrink-0 items-center gap-2">
+                      <Label for="auto-update-drivers" class="text-xs font-normal text-muted-foreground">{{ t("settings.autoUpdate") }}</Label>
+                      <Switch id="auto-update-drivers" v-model="editAutoUpdateDrivers" :aria-label="t('settings.autoUpdateDrivers')" />
+                    </div>
+                  </div>
+                  <div class="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2.5 text-sm">
+                    <button type="button" class="min-w-0 space-y-0.5 rounded-sm text-left transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" @click="emit('open-driver-store', 'jdbc')">
+                      <div class="font-medium">{{ t("settings.updateJdbc") }}</div>
+                      <div class="flex items-center gap-1.5" :class="updateCheckLoading.jdbc ? 'text-muted-foreground' : props.jdbcUpdateAvailable ? 'text-primary' : 'text-muted-foreground'">
+                        <Loader2 v-if="updateCheckLoading.jdbc" class="h-3 w-3 animate-spin" />
+                        <span>{{ updateCheckLoading.jdbc ? t("updates.checking") : props.jdbcUpdateAvailable ? t("settings.updateAvailable") : t("settings.upToDate") }}</span>
+                      </div>
+                    </button>
+                    <div class="flex shrink-0 items-center gap-2">
+                      <Label for="auto-update-jdbc" class="text-xs font-normal text-muted-foreground">{{ t("settings.autoUpdate") }}</Label>
+                      <Switch id="auto-update-jdbc" v-model="editAutoUpdateJdbc" :aria-label="t('settings.autoUpdateJdbc')" />
+                    </div>
+                  </div>
+                  <div class="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2.5 text-sm">
+                    <button type="button" class="min-w-0 space-y-0.5 rounded-sm text-left transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" @click="emit('open-mcp-settings')">
+                      <div class="font-medium">{{ t("settings.updateMcp") }}</div>
+                      <div class="flex items-center gap-1.5" :class="updateCheckLoading.mcp ? 'text-muted-foreground' : props.mcpUpdateAvailable ? 'text-primary' : 'text-muted-foreground'">
+                        <Loader2 v-if="updateCheckLoading.mcp" class="h-3 w-3 animate-spin" />
+                        <span>{{ updateCheckLoading.mcp ? t("updates.checking") : props.mcpUpdateAvailable ? t("settings.updateAvailable") : t("settings.upToDate") }}</span>
+                      </div>
+                    </button>
+                    <div class="flex shrink-0 items-center gap-2">
+                      <Label for="auto-update-mcp" class="text-xs font-normal text-muted-foreground">{{ t("settings.autoUpdate") }}</Label>
+                      <Switch id="auto-update-mcp" v-model="editAutoUpdateMcp" :aria-label="t('settings.autoUpdateMcp')" />
+                    </div>
+                  </div>
+                  <div class="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2.5 text-sm">
+                    <button type="button" class="min-w-0 space-y-0.5 rounded-sm text-left transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" @click="emit('open-plugin-center')">
+                      <div class="font-medium">{{ t("settings.updatePlugins") }}</div>
+                      <div class="flex items-center gap-1.5" :class="updateCheckLoading.plugins ? 'text-muted-foreground' : (props.pluginUpdateCount || 0) > 0 ? 'text-primary' : 'text-muted-foreground'">
+                        <Loader2 v-if="updateCheckLoading.plugins" class="h-3 w-3 animate-spin" />
+                        <span>{{ updateCheckLoading.plugins ? t("updates.checking") : (props.pluginUpdateCount || 0) > 0 ? t("settings.updateCount", { count: props.pluginUpdateCount }) : t("settings.upToDate") }}</span>
+                      </div>
+                    </button>
+                    <div class="flex shrink-0 items-center gap-2">
+                      <Label for="auto-update-plugins" class="text-xs font-normal text-muted-foreground">{{ t("settings.autoUpdate") }}</Label>
+                      <Switch id="auto-update-plugins" v-model="editAutoUpdatePlugins" :aria-label="t('settings.autoUpdatePlugins')" />
+                    </div>
+                  </div>
+                </div>
+                <p class="border-t pt-3 text-xs text-muted-foreground">{{ t("settings.updateRestartHint") }}</p>
+              </div>
+
+              <div class="flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0 space-y-1">
+                  <Label>{{ t("settings.updateDownloadSource") }}</Label>
+                  <p class="text-sm text-muted-foreground">{{ t("settings.updateDownloadSourceDescription") }}</p>
+                </div>
+                <Select :model-value="editUpdateDownloadSource" @update:model-value="onUpdateDownloadSourceChange">
+                  <SelectTrigger class="h-9 w-full sm:w-[180px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="official">{{ t("settings.updateDownloadSourceOfficial") }}</SelectItem>
+                    <SelectItem value="cnb">{{ t("settings.updateDownloadSourceCnb") }}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <ChangelogPanel :checking-updates="props.checkingUpdates" @check-updates="emit('check-updates')" />
+            </section>
+
             <section v-else-if="activeSettingsTab === 'security' && isWeb" data-settings-search-id="security" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('security')]">
               <div class="space-y-3">
                 <Label class="text-base">{{ t("auth.changePassword") }}</Label>
@@ -9958,46 +10299,6 @@ LIMIT 100;</pre
                   </Button>
                 </div>
               </div>
-
-              <div class="settings-item flex flex-col gap-4 rounded-lg border p-4">
-                <div class="flex items-center justify-between gap-4">
-                  <div class="min-w-0 space-y-1">
-                    <Label for="update-notifications-enabled">{{ t("settings.updateNotificationsEnabled") }}</Label>
-                    <p class="text-sm text-muted-foreground">
-                      {{ t("settings.updateNotificationsEnabledDescription") }}
-                    </p>
-                  </div>
-                  <Switch id="update-notifications-enabled" v-model="editUpdateNotificationsEnabled" />
-                </div>
-                <div class="flex items-center justify-between gap-4">
-                  <div class="min-w-0 space-y-1">
-                    <Label for="auto-download-updates">{{ t("settings.autoDownloadUpdates") }}</Label>
-                    <p class="text-sm text-muted-foreground">
-                      {{ t("settings.autoDownloadUpdatesDescription") }}
-                    </p>
-                  </div>
-                  <Switch id="auto-download-updates" v-model="editAutoDownloadUpdates" />
-                </div>
-                <div class="flex flex-col gap-3 border-t border-border/60 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div class="min-w-0 space-y-1">
-                    <Label>{{ t("settings.updateDownloadSource") }}</Label>
-                    <p class="text-sm text-muted-foreground">
-                      {{ t("settings.updateDownloadSourceDescription") }}
-                    </p>
-                  </div>
-                  <Select :model-value="editUpdateDownloadSource" @update:model-value="onUpdateDownloadSourceChange">
-                    <SelectTrigger class="h-9 w-full sm:w-[180px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="official">{{ t("settings.updateDownloadSourceOfficial") }}</SelectItem>
-                      <SelectItem value="cnb">{{ t("settings.updateDownloadSourceCnb") }}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <ChangelogPanel :checking-updates="props.checkingUpdates" @check-updates="emit('check-updates')" />
 
               <div class="grid gap-3 sm:grid-cols-3">
                 <button type="button" class="rounded-lg border p-4 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="openExternalUrl('https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=1087880322')">

@@ -1,6 +1,7 @@
 import type { SqlExecutionCandidate } from "@/lib/sql/sqlExecutionTarget";
 import { cursorBelongsToTrailingStatementDelimiter } from "@/lib/sql/statementDelimiter";
 import { splitMongoCommandRanges } from "@/lib/mongo/mongoShellCommand";
+import { isRedisCommentLine } from "@/lib/redis/redisCommandTokenizer";
 import { readSqlBracedParameterAt, type SqlParameterOptions } from "@/lib/sql/sqlParameters";
 import { isElasticsearchCompatibleDatabaseType, isMeilisearchDatabaseType, type DatabaseType } from "@/types/database";
 
@@ -1106,8 +1107,13 @@ function isMysqlAlterTableTruncatePartitionContinuation(sql: string, statementFr
 }
 
 function isMergeActionContinuation(sql: string, statementFrom: number, lineStartFrom: number, keyword: string, databaseType?: DatabaseType, parameterOptions?: SqlParameterOptions): boolean {
-  if (keyword !== "INSERT" || !startsWithSqlWords(sql, statementFrom, ["MERGE"], databaseType, parameterOptions)) return false;
+  // Oracle (and friends) allow each MERGE action on its own line after
+  // `WHEN ... MATCHED THEN`, e.g. `UPDATE SET ...` (#9516); only INSERT was
+  // recognized, so UPDATE/DELETE action lines split the statement in two.
+  if (keyword !== "INSERT" && keyword !== "UPDATE" && keyword !== "DELETE" && keyword !== "SET") return false;
+  if (!startsWithSqlWords(sql, statementFrom, ["MERGE"], databaseType, parameterOptions)) return false;
   const words = topLevelWordsBefore(sql, statementFrom, lineStartFrom, 5, databaseType, parameterOptions);
+  if (keyword === "SET") return words[words.length - 1] === "UPDATE" && words.includes("THEN") && words.includes("MATCHED");
   return words[words.length - 1] === "THEN" && words.includes("WHEN") && words.includes("MATCHED");
 }
 
@@ -1982,6 +1988,7 @@ function oraclePlSqlBlockEnd(sql: string): number | null {
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (token.kind === "semicolon") {
+      if (stack[stack.length - 1] === "ROUTINE_HEADER") stack.pop();
       const complete = objectKind !== null ? stack.length === 0 : sawBegin && stack.length === 0;
       if (complete) return token.to;
       continue;
@@ -1992,12 +1999,21 @@ function oraclePlSqlBlockEnd(sql: string): number | null {
       if (stack[stack.length - 1] !== "DECLARATION") stack.push("DECLARATION");
       continue;
     }
+    // Local PROCEDURE/FUNCTION in a DECLARE section owns its own BEGIN..END.
+    if ((token.value === "PROCEDURE" || token.value === "FUNCTION") && (stack[stack.length - 1] === "DECLARATION" || stack[stack.length - 1] === "ROUTINE")) {
+      stack.push("ROUTINE_HEADER");
+      continue;
+    }
+    if ((token.value === "IS" || token.value === "AS") && stack[stack.length - 1] === "ROUTINE_HEADER") {
+      stack[stack.length - 1] = "ROUTINE";
+      continue;
+    }
     if (token.value === "BEGIN") {
       if (tokens[index - 1]?.kind === "word" && tokens[index - 1]?.value === "TRANSACTION") continue;
       const previous = previousWordToken(tokens, index);
       if (previous === "END") continue;
       sawBegin = true;
-      if (stack[stack.length - 1] === "DECLARATION") stack[stack.length - 1] = "BLOCK";
+      if (stack[stack.length - 1] === "DECLARATION" || stack[stack.length - 1] === "ROUTINE") stack[stack.length - 1] = "BLOCK";
       else stack.push("BLOCK");
       continue;
     }
@@ -2359,7 +2375,7 @@ function redisExecutableCommandRanges(sql: string): SqlTextRange[] {
     const leadingWhitespace = rawLine.length - rawLine.trimStart().length;
     const trailingWhitespace = rawLine.length - rawLine.trimEnd().length;
     const trimmedLine = rawLine.trim();
-    if (trimmedLine && !trimmedLine.startsWith("#")) {
+    if (trimmedLine && !isRedisCommentLine(trimmedLine)) {
       const from = lineStart + leadingWhitespace;
       const to = lineStart + rawLine.length - trailingWhitespace;
       ranges.push({ from, to, sql: sql.slice(from, to) });
@@ -2381,7 +2397,7 @@ function redisCommandRangeAtCursor(sql: string, cursorPos: number): SqlTextRange
   const rawLine = sql.slice(lineStart, lineEnd);
   const leadingWhitespace = rawLine.length - rawLine.trimStart().length;
   const trimmedLine = rawLine.trim();
-  if (!trimmedLine || trimmedLine.startsWith("#")) return null;
+  if (!trimmedLine || isRedisCommentLine(trimmedLine)) return null;
 
   const from = lineStart + leadingWhitespace;
   const to = lineStart + rawLine.length - (rawLine.length - rawLine.trimEnd().length);
