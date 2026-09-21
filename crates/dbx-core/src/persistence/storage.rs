@@ -2721,12 +2721,6 @@ fn scrub_nacos_auth_secrets(config: &mut ConnectionConfig) {
     }
 }
 
-fn scrub_plugin_connection_secrets(config: &mut ConnectionConfig) {
-    for secret in config.connection_secrets.values_mut() {
-        secret.clear();
-    }
-}
-
 fn scrub_cassandra_tls_secrets(config: &mut ConnectionConfig) {
     if config.db_type != DatabaseType::Cassandra {
         return;

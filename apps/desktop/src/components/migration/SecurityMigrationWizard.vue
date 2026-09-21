@@ -12,7 +12,7 @@ const props = defineProps<{ store: ReturnType<typeof useMigrationStore> }>();
 const { t, locale } = useI18n({ useScope: "global" });
 const status = computed(() => props.store.state.status);
 const confirmingCleanup = ref(false);
-const diagnosticText = ref("");
+const diagnosticText = computed(() => (props.store.state.error ? JSON.stringify(props.store.diagnostic(), null, 2) : ""));
 const exportingDiagnostic = ref(false);
 const canRevealPaths = computed(() => isTauriRuntime());
 const errorCode = computed(() => props.store.state.errorCode);
@@ -59,7 +59,6 @@ async function revealPath(path: string | null | undefined) {
 }
 async function diagnostic() {
   if (exportingDiagnostic.value) return;
-  diagnosticText.value = JSON.stringify(props.store.diagnostic(), null, 2);
   exportingDiagnostic.value = true;
   try {
     await saveTextFile(diagnosticText.value, "dbx-migration-diagnostic.json", "JSON", "json");

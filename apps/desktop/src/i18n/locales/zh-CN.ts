@@ -10751,6 +10751,7 @@ export default withEnglishFallback({
     running: "迁移中…",
     retryMigration: "重试迁移",
     enter: "进入 DBX",
+    launching: "正在启动 DBX…",
     deleteBackup: "删除备份",
     exportDiagnostic: "导出脱敏诊断",
     openDataDir: "打开数据目录",

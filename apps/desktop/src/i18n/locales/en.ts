@@ -10783,6 +10783,7 @@ export default {
     running: "Migrating…",
     retryMigration: "Retry migration",
     enter: "Enter DBX",
+    launching: "Starting DBX…",
     deleteBackup: "Delete backup",
     exportDiagnostic: "Export redacted diagnostics",
     openDataDir: "Open data directory",

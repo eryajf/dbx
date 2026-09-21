@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineAsyncComponent, onMounted, ref } from "vue";
+import { defineAsyncComponent, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import LoginPage from "@/components/auth/LoginPage.vue";
 import SecurityMigrationWizard from "@/components/migration/SecurityMigrationWizard.vue";
@@ -17,6 +17,24 @@ const checkingAuth = ref(true);
 const loginRequired = ref(false);
 const setupRequired = ref(false);
 const authFailed = ref(false);
+const enteringApp = ref(false);
+let launchTransitionTimer: number | undefined;
+
+watch(
+  () => migration.state.entered,
+  (entered) => {
+    if (entered) {
+      enteringApp.value = true;
+    }
+  },
+);
+
+function appReady() {
+  window.clearTimeout(launchTransitionTimer);
+  launchTransitionTimer = window.setTimeout(() => {
+    enteringApp.value = false;
+  }, 650);
+}
 async function initialize() {
   checkingAuth.value = true;
   authFailed.value = false;
@@ -53,5 +71,54 @@ onMounted(initialize);
   </div>
   <LoginPage v-else-if="loginRequired" :setup-mode="setupRequired" @authenticated="authenticated" />
   <SecurityMigrationWizard v-else-if="blocking" :store="migration" />
-  <App v-else />
+  <div v-else class="relative min-h-screen">
+    <Suspense @resolve="appReady">
+      <App />
+    </Suspense>
+    <Transition name="startup-fade">
+      <div v-if="enteringApp" class="fixed inset-0 z-[1100] flex items-center justify-center bg-background text-foreground" role="status" aria-live="polite">
+        <div class="flex flex-col items-center gap-5 text-center">
+          <span class="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-2xl text-primary" aria-hidden="true">✓</span>
+          <div>
+            <p class="text-lg font-semibold">{{ t("migration.successTitle") }}</p>
+            <p class="mt-2 text-sm text-muted-foreground">{{ t("migration.launching") }}</p>
+          </div>
+          <span class="h-1.5 w-24 overflow-hidden rounded-full bg-primary/15" aria-hidden="true"><span class="startup-progress block h-full w-1/2 rounded-full bg-primary" /></span>
+        </div>
+      </div>
+    </Transition>
+  </div>
 </template>
+
+<style scoped>
+.startup-fade-enter-active,
+.startup-fade-leave-active {
+  transition: opacity 280ms ease;
+}
+
+.startup-fade-enter-from,
+.startup-fade-leave-to {
+  opacity: 0;
+}
+
+.startup-progress {
+  animation: startup-progress 1.2s ease-in-out infinite;
+}
+
+@keyframes startup-progress {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(200%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-progress {
+    animation: none;
+    transform: translateX(50%);
+  }
+}
+</style>
