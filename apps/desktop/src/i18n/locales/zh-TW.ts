@@ -4300,6 +4300,7 @@ export default withEnglishFallback({
     partitionHashBoundInvalid: "HASH 需要模數 > 0，且 0 <= 餘數 < 模數。",
     partitionSqlPreview: "將執行的 SQL",
     partitionNameRequired: "請輸入分割區名稱。",
+    notNull: "非空",
   },
   diagram: {
     title: "關係圖",
