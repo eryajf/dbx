@@ -4941,6 +4941,7 @@ export default {
     removeEnumValue: "Remove enum value",
     enumValuePlaceholder: "Value (empty is allowed)",
     nullable: "Nullable",
+    notNull: "Not null",
     primaryKey: "Primary Key",
     defaultValue: "Default",
     defaultValuePresets: "Default value presets",
