@@ -18,6 +18,10 @@ export function useMigrationStore(backend: MigrationApi = api) {
     step: 1 | 2 | 3;
   }>({ status: null, report: null, loading: true, busy: false, error: null, errorCode: null, errorMessage: null, entered: false, step: 1 });
   const completed = computed(() => state.status !== null && !state.status.needsMigration && ["succeeded", "not_required"].includes(state.status.state));
+  // A managed data-directory key is intentionally created when migration
+  // starts. Its absence during the read-only preflight is actionable, not a
+  // migration failure, as long as the backend explicitly allows creation.
+  const hasBlockingError = () => Boolean(state.errorCode && !(state.errorCode === "MISSING_MANAGED_KEY" && state.status?.keyCreationAllowed === true));
   const blocking = computed(() => state.loading || state.busy || state.error === "statusFailed" || !completed.value || (!state.entered && Boolean(state.report || state.status?.backupPath)));
   function clearError() {
     state.error = null;
@@ -41,7 +45,7 @@ export function useMigrationStore(backend: MigrationApi = api) {
       // performed it. On later launches, retained backups are recovery assets,
       // not a reason to block the normal application startup.
       state.entered = completed.value;
-      if (state.status?.state === "failed" || state.errorCode) state.error = "migrationFailed";
+      if (state.status?.state === "failed" || hasBlockingError()) state.error = "migrationFailed";
     } catch {
       state.error = "statusFailed";
     } finally {
@@ -64,7 +68,7 @@ export function useMigrationStore(backend: MigrationApi = api) {
         state.step = 3;
         state.error = null;
       }
-      if (!completed.value || state.errorCode) state.error = "migrationFailed";
+      if (!completed.value || hasBlockingError()) state.error = "migrationFailed";
     } catch {
       state.error = "statusFailed";
     } finally {

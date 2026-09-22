@@ -84,6 +84,26 @@ describe("migration store", () => {
     expect(store.state.errorMessage).toBe("Configure a persistent key.");
   });
 
+  it("does not show a failure for a managed key created by migration", async () => {
+    const store = useMigrationStore({
+      migrationStatus: vi.fn().mockResolvedValue({
+        ...pending(),
+        keyProviderAvailable: false,
+        keyCreationAllowed: true,
+        errorCode: "MISSING_MANAGED_KEY",
+        errorMessage: "A managed data-directory secret key will be created when migration starts",
+      }),
+      migrationStart: vi.fn(),
+      migrationRetry: vi.fn(),
+      migrationCleanupBackups: vi.fn(),
+    });
+
+    await store.initialize();
+
+    expect(store.state.error).toBeNull();
+    expect(store.state.errorCode).toBe("MISSING_MANAGED_KEY");
+  });
+
   it("keeps completion through a failed cleanup and successful cleanup retry", async () => {
     let finishCleanup!: () => void;
     const cleanup = vi
