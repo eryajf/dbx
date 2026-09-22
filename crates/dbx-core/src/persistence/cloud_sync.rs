@@ -487,15 +487,15 @@ pub async fn apply_sync_snapshot(
         if let Some(payload) = &sensitive_payload {
             let ai_configs = if let Some(configs) = &payload.ai_configs {
                 Some(configs.clone())
-            } else if let Some(old_config) = &payload.ai_config {
-                Some(vec![AiConfigItem {
-                    id: AiConfigItem::new_id(),
-                    name: old_config.provider.as_str().to_string(),
-                    is_default: true,
-                    config: old_config.clone(),
-                }])
             } else {
-                None
+                payload.ai_config.as_ref().map(|old_config| {
+                    vec![AiConfigItem {
+                        id: AiConfigItem::new_id(),
+                        name: old_config.provider.as_str().to_string(),
+                        is_default: true,
+                        config: old_config.clone(),
+                    }]
+                })
             };
             (
                 Some(
@@ -567,7 +567,7 @@ pub async fn apply_sync_snapshot(
             desktop_settings: snapshot.desktop_settings.clone(),
             editor_settings: snapshot.editor_settings.clone(),
             connection_secrets,
-            preserve_plugin_secrets: preserve_plugin_secrets,
+            preserve_plugin_secrets,
             sync_credentials,
             ai_configs,
         })

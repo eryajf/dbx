@@ -1373,11 +1373,9 @@ impl Storage {
             && (database_plaintext_count > 0 || sync_credentials > 0 || files.iter().any(|file| file.exists));
         let mut key_error_code = key_probe.as_ref().err().cloned();
         if let Ok(resolved) = key_probe.as_ref() {
-            if encrypted > 0 {
-                if self.validate_existing_encrypted_data(resolved.codec).await.is_err() {
-                    key_provider_available = false;
-                    key_error_code = Some("SECRET_KEY_MISMATCH".to_string());
-                }
+            if encrypted > 0 && self.validate_existing_encrypted_data(resolved.codec).await.is_err() {
+                key_provider_available = false;
+                key_error_code = Some("SECRET_KEY_MISMATCH".to_string());
             }
         } else if encrypted > 0
             && matches!(
@@ -1404,10 +1402,11 @@ impl Storage {
             )
         });
         let source_changed = stored.source_fingerprint.as_deref().is_some_and(|value| value != current_fingerprint);
-        let state = if fatal_key_error || missing_required_key || missing_existing_key {
-            MigrationState::Pending
-        } else if has_legacy_data
-            && (source_changed || matches!(stored.state, MigrationState::Succeeded | MigrationState::NotRequired))
+        let state = if fatal_key_error
+            || missing_required_key
+            || missing_existing_key
+            || (has_legacy_data
+                && (source_changed || matches!(stored.state, MigrationState::Succeeded | MigrationState::NotRequired)))
         {
             MigrationState::Pending
         } else if !has_legacy_data && matches!(stored.state, MigrationState::Pending) {
@@ -1703,7 +1702,8 @@ impl Storage {
 
     async fn load_migration_state(&self) -> Result<MigrationStateRecord, String> {
         self.with_conn(|conn| {
-            let row: Option<(String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = conn
+            type MigrationStateRow = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
+            let row: Option<MigrationStateRow> = conn
                 .query_row(
                     "SELECT state, backup_path, error_code, error_message, source_fingerprint, counts_json FROM data_migrations WHERE migration_id = ?1",
                     [SECRET_STORE_MIGRATION_ID],
@@ -1929,8 +1929,8 @@ impl Storage {
             ensure_connection_secret_columns_sync(conn)?;
             if migrate_legacy {
                 let codec = migration_codec.as_ref().ok_or_else(|| "KEY_PROVIDER_UNAVAILABLE".to_string())?;
-                migrate_legacy_connection_secrets_sync(conn, &codec)?;
-                migrate_legacy_connection_config_json_sync(conn, &codec)?;
+                migrate_legacy_connection_secrets_sync(conn, codec)?;
+                migrate_legacy_connection_config_json_sync(conn, codec)?;
             }
             ensure_saved_sql_columns_sync(conn)?;
             ensure_tab_runtime_cache_columns_sync(conn)?;
@@ -1938,8 +1938,8 @@ impl Storage {
             ensure_ai_configs_columns_sync(conn)?;
             if migrate_legacy {
                 let codec = migration_codec.as_ref().ok_or_else(|| "KEY_PROVIDER_UNAVAILABLE".to_string())?;
-                migrate_legacy_config_secrets_sync(conn, &codec)?;
-                migrate_legacy_app_settings_secrets_sync(conn, &codec)?;
+                migrate_legacy_config_secrets_sync(conn, codec)?;
+                migrate_legacy_app_settings_secrets_sync(conn, codec)?;
             }
             ensure_state_store_columns_sync(conn)?;
             ensure_ai_conversations_columns_sync(conn)?;
@@ -2142,12 +2142,14 @@ fn migrate_legacy_connection_config_json_sync(conn: &mut Connection, codec: &Sec
     tx.commit().map_err(|error| error.to_string())
 }
 
+type StoredConnectionSecretRow = (String, String, String, Option<String>);
+
 /// Read every non-empty secret row that belongs to `connection_ids` so a
 /// migration re-save can put back anything it would otherwise delete.
 fn load_stored_connection_secrets_sync(
     conn: &Connection,
     connection_ids: &HashSet<String>,
-) -> Result<Vec<(String, String, String, Option<String>)>, String> {
+) -> Result<Vec<StoredConnectionSecretRow>, String> {
     let mut statement = conn
         .prepare(
             "SELECT connection_id, key, secret, secret_enc FROM connection_secrets
@@ -2290,7 +2292,7 @@ fn migrate_legacy_config_secrets_sync(conn: &mut Connection, codec: &SecretCodec
         let sanitized_json = serde_json::to_string(&sanitized).map_err(|error| error.to_string())?;
         tx.execute("UPDATE ai_configs SET config_json = ?1 WHERE id = ?2", params![sanitized_json, id])
             .map_err(|error| error.to_string())?;
-        migrate_config_blob_in_tx(&tx, &codec, &format!("{AI_SECRET_NAMESPACE_PREFIX}{id}"), &secrets)?;
+        migrate_config_blob_in_tx(&tx, codec, &format!("{AI_SECRET_NAMESPACE_PREFIX}{id}"), &secrets)?;
     }
     if let Some(json) = legacy_ai_single {
         let config: AiConfig = serde_json::from_str(&json).map_err(|error| error.to_string())?;
@@ -2298,7 +2300,7 @@ fn migrate_legacy_config_secrets_sync(conn: &mut Connection, codec: &SecretCodec
         let sanitized_json = serde_json::to_string(&sanitized).map_err(|error| error.to_string())?;
         tx.execute("UPDATE ai_config SET config_json = ?1 WHERE id = 1", [sanitized_json])
             .map_err(|error| error.to_string())?;
-        migrate_config_blob_in_tx(&tx, &codec, &format!("{AI_SECRET_NAMESPACE_PREFIX}legacy"), &secrets)?;
+        migrate_config_blob_in_tx(&tx, codec, &format!("{AI_SECRET_NAMESPACE_PREFIX}legacy"), &secrets)?;
     }
     for (provider, json) in legacy_ai_providers {
         let config: AiConfig = serde_json::from_str(&json).map_err(|error| error.to_string())?;
@@ -2309,7 +2311,7 @@ fn migrate_legacy_config_secrets_sync(conn: &mut Connection, codec: &SecretCodec
             params![sanitized_json, provider],
         )
         .map_err(|error| error.to_string())?;
-        migrate_config_blob_in_tx(&tx, &codec, &format!("{AI_SECRET_NAMESPACE_PREFIX}provider.{provider}"), &secrets)?;
+        migrate_config_blob_in_tx(&tx, codec, &format!("{AI_SECRET_NAMESPACE_PREFIX}provider.{provider}"), &secrets)?;
     }
     for (id, json) in legacy_tunnels {
         let profile: TransportLayerConfig = serde_json::from_str(&json).map_err(|error| error.to_string())?;
@@ -2321,7 +2323,7 @@ fn migrate_legacy_config_secrets_sync(conn: &mut Connection, codec: &SecretCodec
         if sanitized != profile {
             migrate_config_blob_in_tx(
                 &tx,
-                &codec,
+                codec,
                 &format!("{TUNNEL_SECRET_NAMESPACE_PREFIX}{id}"),
                 &serde_json::to_value(profile).map_err(|error| error.to_string())?,
             )?;
@@ -5101,7 +5103,7 @@ async fn load_plugin_connection_secrets(
     connection_id: &str,
 ) -> Result<HashMap<String, String>, String> {
     let connection_id = connection_id.to_string();
-    let codec = storage.secret_codec(false)?;
+    let secret_storage = storage.clone();
     storage
         .with_conn(move |conn| {
             let like = format!("{PLUGIN_CONNECTION_SECRET_PREFIX}%");
@@ -5120,7 +5122,7 @@ async fn load_plugin_connection_secrets(
                 let (key, secret, encrypted) = row.map_err(|error| error.to_string())?;
                 let secret = encrypted
                     .filter(|value| !value.is_empty())
-                    .map(|value| codec.decrypt(&connection_id, &key, &value))
+                    .map(|value| secret_storage.secret_codec(false)?.decrypt(&connection_id, &key, &value))
                     .transpose()?
                     .unwrap_or(secret);
                 if let Some(key) = key.strip_prefix(PLUGIN_CONNECTION_SECRET_PREFIX) {
@@ -8701,6 +8703,31 @@ mod tests {
         assert!(loaded[0].save_password);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn plugin_secret_reads_require_a_key_only_for_ciphertext() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open_unmigrated(&dir.path().join("dbx.db"))
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        assert!(storage.secret_codec(false).is_err());
+        assert!(super::load_plugin_connection_secrets(&storage, "conn").await.unwrap().is_empty());
+        let codec = super::SecretCodec::new([7; 32]);
+        let key = format!("{PLUGIN_CONNECTION_SECRET_PREFIX}token");
+        let encrypted = codec.encrypt("conn", &key, "secret").unwrap();
+        storage
+            .with_conn(move |conn| {
+                conn.execute(
+                "INSERT INTO connection_secrets (connection_id, key, secret, secret_enc) VALUES ('conn', ?1, '', ?2)",
+                rusqlite::params![key, encrypted],
+            ).map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(super::load_plugin_connection_secrets(&storage, "conn").await.is_err());
     }
 
     #[tokio::test]
