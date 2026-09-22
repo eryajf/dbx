@@ -87,7 +87,10 @@ async fn migration_gate(
 ) -> Response {
     let suffix = auth::middleware_api_path_suffix(request.uri().path(), &state.public_base_path);
     let allowed = suffix.is_some_and(|path| {
-        matches!(path, "migration/status" | "migration/start" | "migration/retry" | "ping") || path.starts_with("auth/")
+        matches!(
+            path,
+            "migration/status" | "migration/start" | "migration/retry" | "migration/cleanup-backups" | "ping"
+        ) || path.starts_with("auth/")
     });
     if !allowed && !state.migration_ready.load(Ordering::Acquire) {
         return (
@@ -1280,7 +1283,7 @@ mod tests {
     use tower_http::compression::predicate::Predicate;
 
     #[tokio::test]
-    async fn migration_http_gate_blocks_business_and_cleanup_until_ready() {
+    async fn migration_http_gate_blocks_business_until_ready_but_allows_cleanup_handler() {
         use std::sync::{atomic::Ordering, Arc};
         let directory = tempfile::tempdir().unwrap();
         let storage = dbx_core::storage::Storage::open_unmigrated(&directory.path().join("dbx.db")).await.unwrap();
@@ -1301,15 +1304,15 @@ mod tests {
             client.get(format!("http://{address}/api/migration/status")).send().await.unwrap().status(),
             StatusCode::OK
         );
-        for (method, path) in [
-            (reqwest::Method::GET, "/api/connection/list"),
-            (reqwest::Method::POST, "/api/migration/cleanup-backups"),
-            (reqwest::Method::POST, "/mcp"),
-        ] {
+        for (method, path) in [(reqwest::Method::GET, "/api/connection/list"), (reqwest::Method::POST, "/mcp")] {
             let response = client.request(method, format!("http://{address}{path}")).send().await.unwrap();
             assert_eq!(response.status(), StatusCode::LOCKED);
             assert_eq!(response.json::<serde_json::Value>().await.unwrap()["code"], "DATA_MIGRATION_REQUIRED");
         }
+        assert_eq!(
+            client.post(format!("http://{address}/api/migration/cleanup-backups")).send().await.unwrap().status(),
+            StatusCode::OK
+        );
         state.migration_ready.store(true, Ordering::Release);
         assert_eq!(
             client.get(format!("http://{address}/api/connection/list")).send().await.unwrap().status(),

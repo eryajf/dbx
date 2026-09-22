@@ -36,6 +36,7 @@ pub fn allowed_command(command: &str) -> bool {
         "migration_status"
             | "migration_start"
             | "migration_retry"
+            | "migration_cleanup_backups"
             | "mark_frontend_ready"
             | "show_main_window"
             | "quit_app"
@@ -96,7 +97,7 @@ mod tests {
             headers: Default::default(),
             invoke_key: tauri::test::INVOKE_KEY.into(),
         };
-        for command in ["load_connections", "plugin_invoke", "webdav_sync_upload", "migration_cleanup_backups"] {
+        for command in ["load_connections", "plugin_invoke", "webdav_sync_upload"] {
             assert_eq!(
                 get_ipc_response(&webview, request(command)).unwrap_err(),
                 serde_json::json!("DATA_MIGRATION_REQUIRED")
@@ -104,9 +105,14 @@ mod tests {
         }
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert!(get_ipc_response(&webview, request("migration_status")).is_ok());
+        // Cleanup is guarded by the storage layer (it only succeeds after a
+        // successful migration), so the startup gate must allow the command
+        // through while the wizard is still visible.
+        assert!(get_ipc_response(&webview, request("migration_cleanup_backups")).is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
         gate.set_ready(true);
         assert!(get_ipc_response(&webview, request("load_connections")).is_ok());
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
     #[tokio::test]
     async fn wait_releases_only_after_ready() {
