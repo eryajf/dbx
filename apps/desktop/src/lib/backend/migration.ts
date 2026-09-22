@@ -21,6 +21,7 @@ export interface MigrationPreflight {
   keyFileConfigured?: boolean;
   keyFileReadable?: boolean;
   persistentKeyConfigured?: boolean;
+  keySource?: "explicit_file" | "explicit_env" | "managed_data_dir" | "platform_store" | "unavailable" | string;
 }
 export interface MigrationReport {
   migrationId: string;

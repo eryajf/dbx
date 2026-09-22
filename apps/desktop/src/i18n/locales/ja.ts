@@ -10302,7 +10302,7 @@ export default withEnglishFallback({
     yes: "はい",
     no: "いいえ",
     keyUnavailable: "デバイスの鍵を利用できません。キーチェーンへのアクセスを許可するか、永続鍵を設定してください。",
-    dockerKeyHint: "Docker/CLIではDBX_SECRET_KEY_FILEと永続データボリュームが必要です。",
+    keyRecoveryHint: "このデータディレクトリで使用していた元のキーを復元するか、既存データの暗号化に使用した同じ外部キーを設定してください。新しいキーで置き換えないでください。",
     progress: "バックアップを作成し、移行と検証を実行しています。DBXを終了しないでください…",
     failed: "移行を完了できませんでした。元のデータは保持されています。",
     cleanupFailed: "移行は完了しましたが、バックアップを削除できませんでした。",

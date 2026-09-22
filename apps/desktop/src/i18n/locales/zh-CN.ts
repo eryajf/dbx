@@ -10739,7 +10739,7 @@ export default withEnglishFallback({
     yes: "是",
     no: "否",
     keyUnavailable: "当前设备密钥不可用，请允许钥匙串访问或配置持久化密钥。",
-    dockerKeyHint: "Docker/CLI 请配置 DBX_SECRET_KEY_FILE 并使用持久化数据卷。",
+    keyRecoveryHint: "请恢复该数据目录原有的密钥，或配置用于加密现有数据的同一外部密钥。不要使用新密钥替换原密钥。",
     progress: "正在创建备份、迁移并验证，请勿关闭 DBX…",
     failed: "迁移没有完成，原始数据已保留。",
     cleanupFailed: "迁移已完成，但备份删除失败。",

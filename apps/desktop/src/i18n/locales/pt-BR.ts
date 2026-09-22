@@ -10252,7 +10252,7 @@ export default withEnglishFallback({
     keyFileStatus: "Arquivo de chave configurado: {configured}; legível: {readable}",
     persistentKeyStatus: "Provedor de chave persistente: {available}",
     keyUnavailable: "A chave do dispositivo não está disponível. Permita o acesso ao chaveiro ou configure uma chave persistente.",
-    dockerKeyHint: "Docker/CLI exige DBX_SECRET_KEY_FILE e um volume de dados persistente.",
+    keyRecoveryHint: "Restaure a chave original usada por este diretório de dados ou configure a mesma chave externa que criptografou os dados existentes. Não a substitua por uma chave nova.",
     progress: "Criando backup, migrando e verificando…",
     failed: "A migração não foi concluída. Os dados originais foram preservados.",
     cleanupFailed: "A migração terminou, mas o backup não pôde ser excluído.",

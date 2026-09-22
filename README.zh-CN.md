@@ -353,12 +353,10 @@ flatpak install flatpark com.dbxio.dbx
 DBX 提供 Web 版本，可通过 Docker 部署。示例使用 `latest` 标签以拉取当前发布版本。
 
 ```bash
-# 密钥只生成一次，已有部署请勿替换。
-(umask 077; test -e dbx_secret_key || openssl rand -hex 32 > dbx_secret_key)
+# 默认将密钥保存在持久化的 /app/data 数据卷中。
 docker run -d --pull=always --name dbx -p 4224:4224 \
   -v dbx-data:/app/data \
-  --mount type=bind,src="$(pwd)/dbx_secret_key",dst=/run/secrets/dbx_secret_key,readonly \
-  -e DBX_SECRET_KEY_FILE=/run/secrets/dbx_secret_key t8y2/dbx:latest
+  t8y2/dbx:latest
 ```
 
 这里使用跨平台的 `dbx-data` 命名卷。中国大陆用户可选用 CNB 镜像
@@ -382,23 +380,16 @@ services:
       - "4224:4224"
     volumes:
       - dbx-data:/app/data
-    environment:
-      # 新安装和升级均须配置持久化密钥，建议挂载 Docker secret；
-      # 容器重启或迁移前后不要更换该文件。
-      - DBX_SECRET_KEY_FILE=/run/secrets/dbx_secret_key
-    secrets:
-      - dbx_secret_key
     restart: unless-stopped
 
 volumes:
   dbx-data:
 
-secrets:
-  dbx_secret_key:
-    file: ./dbx_secret_key
 ```
 
-连接、插件、AI 和 Tunnel 凭据写入 `dbx.db` 前会加密。桌面端使用本机凭据存储（macOS Keychain、Windows Credential Manager 或 Linux Secret Service）。Web/Docker 的新安装和升级都必须显式配置持久化密钥：将 `DBX_SECRET_KEY_FILE` 指向挂载的密钥文件，或由密钥管理服务提供 `DBX_SECRET_KEY`。启动 Docker Compose 前只生成一次密钥，容器重启时保留同一个文件，并与数据库分开备份。密钥不可用时，业务 API 保持阻塞，浏览器显示数据安全升级页面。
+连接、插件、AI 和 Tunnel 凭据写入 `dbx.db` 前会加密。桌面端使用本机凭据存储（macOS Keychain、Windows Credential Manager 或 Linux Secret Service）。Web/Docker 与直接运行 `dbx-web` 默认使用同一套数据目录托管密钥：`${DBX_DATA_DIR}/.dbx/secret.key`。只有在开始迁移或第一次写入敏感字段时才创建密钥；普通 Docker 部署只需持久化 `/app/data`，并且必须将 `.dbx/secret.key` 与 `dbx.db` 一起备份。该密钥不能防护整个数据卷被复制或泄露。
+
+生产环境可以使用 Docker/Kubernetes Secret 覆盖托管策略：设置 `DBX_SECRET_KEY_FILE`，或由密钥管理系统提供 `DBX_SECRET_KEY`。显式密钥优先，已有密文使用期间不能轮换。密钥不可用时，业务 API 保持阻塞，浏览器显示数据安全升级页面。直接运行二进制时设置 `DBX_DATA_DIR=/var/lib/dbx`，即可使用 `/var/lib/dbx/.dbx/secret.key`。
 
 升级包含历史明文凭据的版本时，桌面端和 Web 会在进入主界面前显示 **数据安全升级向导**。点击 **开始迁移** 后，软件会创建权限受限的备份，迁移旧数据库和 JSON 凭据，并验证密文可读取。失败时保留原始数据和备份，根据向导提示修复后点击 **重试**。成功页面会显示备份路径。确认连接可用后，可点击 **删除迁移备份**，二次确认后删除迁移备份目录和本次迁移生成的旧 JSON `.bak` 文件；其他备份不会删除。没有历史数据的新用户检查后直接进入主界面。
 

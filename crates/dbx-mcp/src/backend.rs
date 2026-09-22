@@ -694,7 +694,7 @@ impl LocalBackend {
         // A local CLI/MCP process may share an already provisioned desktop
         // Keychain/credential-store key. Preflight only reads that provider;
         // it never provisions a key or migrates legacy credentials.
-        let storage = Storage::open_unmigrated(path).await?;
+        let storage = Storage::open_unmigrated(path).await?.with_secret_key_creation(false);
         let migration = storage.inspect_data_migration().await?;
         if !migration.is_ready() {
             return Err("DATA_MIGRATION_REQUIRED: open DBX Desktop or Web to complete the data security upgrade".into());

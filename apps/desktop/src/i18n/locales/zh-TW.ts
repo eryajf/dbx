@@ -10248,7 +10248,7 @@ export default withEnglishFallback({
     keyFileStatus: "金鑰檔案已設定：{configured}；可讀取：{readable}",
     persistentKeyStatus: "持久化金鑰提供者：{available}",
     keyUnavailable: "目前無法使用裝置金鑰，請允許存取鑰匙圈或設定持久化金鑰。",
-    dockerKeyHint: "Docker/CLI 需要 DBX_SECRET_KEY_FILE 與持久化資料磁碟區。",
+    keyRecoveryHint: "請還原此資料目錄原本使用的金鑰，或設定用於加密現有資料的相同外部金鑰。請勿使用新金鑰取代原金鑰。",
     progress: "正在建立備份、執行遷移並驗證…",
     failed: "遷移未完成，原始資料已保留。",
     cleanupFailed: "遷移已完成，但無法刪除備份。",

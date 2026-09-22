@@ -9709,7 +9709,7 @@ export default withEnglishFallback({
     keyFileStatus: "키 파일 설정: {configured}; 읽기 가능: {readable}",
     persistentKeyStatus: "영구 키 제공자: {available}",
     keyUnavailable: "장치 키를 사용할 수 없습니다. 키체인 접근을 허용하거나 영구 키를 설정하세요.",
-    dockerKeyHint: "Docker/CLI에는 DBX_SECRET_KEY_FILE과 영구 데이터 볼륨이 필요합니다.",
+    keyRecoveryHint: "이 데이터 디렉터리에서 사용한 원래 키를 복원하거나 기존 데이터를 암호화한 동일한 외부 키를 구성하세요. 새 키로 교체하지 마세요.",
     progress: "백업을 만들고 마이그레이션 및 확인을 진행 중입니다…",
     failed: "마이그레이션을 완료하지 못했습니다. 원본 데이터는 보존되었습니다.",
     cleanupFailed: "마이그레이션은 완료되었지만 백업을 삭제하지 못했습니다.",

@@ -20,8 +20,14 @@ const errorMessage = computed(() => props.store.state.errorMessage);
 const errorAdviceKey = computed(() => {
   if (props.store.state.error === "cleanupFailed") return "migration.errors.cleanupAdvice";
   switch (errorCode.value) {
+    case "MISSING_MANAGED_KEY":
+    case "MISSING_EXTERNAL_KEY":
     case "MISSING_PERSISTENT_KEY":
       return "migration.errors.persistentKeyAdvice";
+    case "ENCRYPTED_DATA_KEY_MISSING":
+    case "SECRET_KEY_INVALID":
+    case "SECRET_KEY_MISMATCH":
+    case "KEY_FILE_UNAVAILABLE":
     case "KEY_PROVIDER_UNAVAILABLE":
       return "migration.errors.keyProviderAdvice";
     case "BACKUP_FAILED":
@@ -130,7 +136,7 @@ async function diagnostic() {
             </button>
           </p>
           <p v-if="status?.keyProviderAvailable === false && !status.keyCreationAllowed" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{{ t("migration.keyUnavailable") }}</p>
-          <p v-if="status?.keyFileConfigured === false && status?.persistentKeyConfigured === false" class="text-xs text-muted-foreground">{{ t("migration.dockerKeyHint") }}</p>
+          <p v-if="status?.keyFileConfigured === false && status?.persistentKeyConfigured === false && status?.keyCreationAllowed === false" class="text-xs text-muted-foreground">{{ t("migration.keyRecoveryHint") }}</p>
           <div v-if="props.store.state.error" class="space-y-1 rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
             <p>{{ t(`migration.${props.store.state.error === "statusFailed" ? "statusFailed" : props.store.state.error === "cleanupFailed" ? "cleanupFailed" : "failed"}`) }}</p>
             <p v-if="errorCode">{{ t("migration.errorCode", { code: errorCode }) }}</p>

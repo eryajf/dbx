@@ -14,20 +14,24 @@ DBX uses two independent key systems:
 
 | Purpose | Source | Scope | Cross-device |
 | --- | --- | --- | --- |
-| Local storage key | macOS Keychain, Windows Credential Manager, Linux Secret Service, or `DBX_SECRET_KEY(_FILE)` | Protects Secret Store values in the local `dbx.db` | Never copied |
+| Local storage key | Desktop platform store, Web managed data-dir key, or `DBX_SECRET_KEY(_FILE)` | Protects Secret Store values in the local `dbx.db` | Never copied by sync |
 | Sync passphrase | Entered by the user during export/import | Protects sensitive fields in an encrypted sync package | Used with that package |
 
 Local keys are never written to a sync file. Copying `dbx.db` to another computer is not a supported cross-device migration method; use encrypted export/import instead. Local values use the `dbxenc1` envelope, AES-256-GCM, and authenticated data bound to the namespace and field name. Sync packages use a separate crypto format and passphrase.
 
 ## Supported environments
 
-Desktop builds use the platform credential store on macOS, Windows, and Linux. If a headless environment has no platform store, configure a persistent key:
+Desktop builds use the platform credential store on macOS, Windows, and Linux.
+
+`dbx-web` uses `${DBX_DATA_DIR}/.dbx/secret.key` by default, whether it runs in Docker, under systemd, or directly from the binary. The key is created with restricted permissions only when migration starts or the first sensitive value is written. It is part of the same recovery unit as `dbx.db`; back up and restore both files together. A key stored in the data directory does not protect against disclosure of the entire data volume.
+
+Production deployments can require an externally managed key instead:
 
 ```text
 DBX_SECRET_KEY_FILE=/run/secrets/dbx_secret_key
 ```
 
-`DBX_SECRET_KEY` may also be supplied by a secret manager. Keep the key, data volume, and backups separate, and do not replace the key across restarts or upgrades.
+`DBX_SECRET_KEY` may also be supplied by a secret manager. Explicit configuration takes precedence over the managed data-dir key and never falls back when it is unreadable or invalid. Do not replace the key across restarts or upgrades while encrypted data exists.
 
 Web, Docker, CLI, and MCP business operations remain blocked until migration is complete. CLI and standalone MCP only inspect existing key material; they do not create keys or migrate legacy data. `DATA_MIGRATION_REQUIRED` means the same data directory must first be opened in Desktop or Web and completed through the wizard.
 
@@ -58,7 +62,7 @@ Scan counts have an independent source fingerprint. State transitions invalidate
 
 ### Preflight and backup
 
-Preflight returns counts, statuses, and file names only. It does not return passwords, tokens, private keys, or other secret values. It checks connection, plugin, AI, tunnel, sync, and legacy JSON data plus key availability.
+Preflight returns counts, statuses, non-sensitive key-source names, and file names only. It does not return passwords, tokens, private keys, or key paths. It checks connection, plugin, AI, tunnel, sync, and legacy JSON data plus key availability. If ciphertext already exists, preflight verifies that the selected key can decrypt it; it never creates a replacement key.
 
 Before changing data DBX creates a restricted `dbx-secret-migration-<uuid>/` directory. It contains a consistent SQLite backup and any legacy JSON files that exist. SQLite backup APIs are used so WAL state is not lost. If backup creation fails, migration does not start.
 
@@ -106,7 +110,7 @@ Confirm that the installed build includes the migration-cache fix. Export the re
 
 ### Key unavailable
 
-Allow DBX to access the platform credential store. For Docker, confirm that `DBX_SECRET_KEY_FILE` is readable and that the data volume is persistent. Do not delete or replace the key used to encrypt an existing database.
+Allow DBX Desktop to access the platform credential store. For Web/Docker, confirm that `${DBX_DATA_DIR}/.dbx/secret.key` is present with the data volume, or that an explicitly configured `DBX_SECRET_KEY_FILE` is readable. Do not delete or replace the key used to encrypt an existing database.
 
 ### Migration failed
 

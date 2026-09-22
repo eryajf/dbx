@@ -14,7 +14,7 @@ DBX 使用两套互相独立的密钥体系：
 
 | 用途 | 密钥来源 | 作用 | 是否跨设备 | 
 | --- | --- | --- | --- |
-| 本地存储密钥 | macOS Keychain、Windows Credential Manager、Linux Secret Service，或 `DBX_SECRET_KEY(_FILE)` | 保护当前设备 `dbx.db` 中的 Secret Store 密文 | 不跨设备 | 
+| 本地存储密钥 | 桌面系统凭据库、Web 数据目录托管密钥，或 `DBX_SECRET_KEY(_FILE)` | 保护当前设备 `dbx.db` 中的 Secret Store 密文 | 不通过同步传输 |
 | 同步口令 | 用户在导出/导入时主动输入 | 保护跨平台同步包中的敏感 payload | 随加密同步包使用 | 
 
 本地密钥不会写入同步文件，也不能通过复制 `dbx.db` 迁移到另一台设备。跨平台迁移必须使用加密导出/导入。
@@ -32,13 +32,15 @@ DBX 使用两套互相独立的密钥体系：
 
 ### Web、Docker、CLI 和 MCP
 
-无界面环境必须提供稳定的外部密钥：
+`dbx-web` 无论通过 Docker、systemd 还是直接运行二进制，默认都使用 `${DBX_DATA_DIR}/.dbx/secret.key`。只有在开始迁移或第一次写入敏感字段时才创建该密钥，并使用受限权限。它与 `dbx.db` 属于同一恢复单元，必须一起备份和恢复；数据目录内密钥不能防护整个数据卷被复制或泄露。
+
+生产环境可以改用外部托管密钥：
 
 ```text
 DBX_SECRET_KEY_FILE=/run/secrets/dbx_secret_key
 ```
 
-也可以由密钥管理系统提供 `DBX_SECRET_KEY`。密钥文件、数据卷和备份必须分别管理；容器重启或升级时不能更换密钥。
+也可以由密钥管理系统提供 `DBX_SECRET_KEY`。显式配置优先；显式密钥不可读或格式错误时不会回退到数据目录密钥。已有密文使用期间不能更换密钥。
 
 CLI/MCP 启动检查只读取现有密钥，不自动生成密钥，也不自动迁移历史数据。返回 `DATA_MIGRATION_REQUIRED` 时，应先使用桌面端或 Web 向导完成迁移。
 
@@ -71,7 +73,7 @@ start_data_migration()/retry_data_migration()
 
 ### 5.1 预检查
 
-预检查只返回数量、状态和文件名，不返回密码、Token、私钥或其他敏感值。检查内容包括：
+预检查只返回数量、状态、非敏感的密钥来源名称和文件名，不返回密码、Token、私钥、密钥内容或密钥路径。已有密文时会验证当前密钥能否解密，绝不会生成替代密钥。检查内容包括：
 
 - 连接和 `connection_secrets` 中的待处理项。
 - 插件 secret、AI secret、Tunnel secret 和同步凭据。
@@ -171,7 +173,7 @@ Windows 到 Mac 的流程是：
 ### 密钥不可用
 
 - 桌面端：允许 DBX 访问系统钥匙串/凭据存储。
-- Docker：确认 `DBX_SECRET_KEY_FILE` 可读，并且容器使用持久化数据卷。
+- Web/Docker：确认 `${DBX_DATA_DIR}/.dbx/secret.key` 与数据卷一起保留，或显式配置的 `DBX_SECRET_KEY_FILE` 可读。
 - 不要删除或更换已经用于加密数据库的密钥文件。
 
 ### 迁移失败
@@ -220,7 +222,7 @@ Rust 侧应覆盖密文 AAD、迁移缓存失效、数据库事务回滚、JSON 
 至少验证以下环境：
 
 1. macOS、Windows、Linux 桌面端各完成一次旧数据迁移。
-2. Docker 配置固定 `DBX_SECRET_KEY_FILE`，重启容器后仍可读取密文。
+2. Docker 命名卷与直接运行 `dbx-web` 都能保留数据目录密钥，重启后仍可读取密文。
 3. 迁移成功后关闭并重新打开，直接进入主界面。
 4. 错误密钥、错误同步口令和损坏 JSON 不会破坏原始数据。
 5. Windows 导出、Mac 导入后，连接和插件 secret 可以正常使用。
@@ -228,4 +230,3 @@ Rust 侧应覆盖密文 AAD、迁移缓存失效、数据库事务回滚、JSON 
 ## 12. 维护约定
 
 迁移向导 UI 可以在后续版本弱化，但 `secret-store-v1` 引擎、旧 schema 识别、旧密文读取、旧同步包兼容和失败恢复能力必须长期保留。用户可能从很旧的版本直接升级，不能依赖连续升级路径。
-

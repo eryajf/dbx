@@ -346,12 +346,10 @@ DBX provides a web version that can be deployed via Docker. The examples use
 the `latest` tag to pull the current release.
 
 ```bash
-# Create the key once. Never replace it for an existing deployment.
-(umask 077; test -e dbx_secret_key || openssl rand -hex 32 > dbx_secret_key)
+# The default keeps the key in the persistent /app/data volume.
 docker run -d --pull=always --name dbx -p 4224:4224 \
   -v dbx-data:/app/data \
-  --mount type=bind,src="$(pwd)/dbx_secret_key",dst=/run/secrets/dbx_secret_key,readonly \
-  -e DBX_SECRET_KEY_FILE=/run/secrets/dbx_secret_key t8y2/dbx:latest
+  t8y2/dbx:latest
 ```
 
 This uses the cross-platform `dbx-data` named volume. Users in China can use
@@ -376,21 +374,11 @@ services:
       - "4224:4224"
     volumes:
       - dbx-data:/app/data
-    environment:
-      # Required for new installations and upgrades. Mount this file
-      # from a Docker secret or another persistent host path; do not rotate it
-      # between restarts unless you have exported and re-imported the data.
-      - DBX_SECRET_KEY_FILE=/run/secrets/dbx_secret_key
-    secrets:
-      - dbx_secret_key
     restart: unless-stopped
 
 volumes:
   dbx-data:
 
-secrets:
-  dbx_secret_key:
-    file: ./dbx_secret_key
 ```
 
 Open `http://localhost:4224` in your browser. Multi-arch images (amd64 / arm64) are available.
@@ -398,12 +386,21 @@ Open `http://localhost:4224` in your browser. Multi-arch images (amd64 / arm64) 
 Connection, plugin, AI, and tunnel credentials are encrypted before they are
 written to `dbx.db`. Desktop builds use the local platform credential store
 (macOS Keychain, Windows Credential Manager, or Linux Secret Service).
-Web/Docker requires an explicit persistent key for both new installations and
-upgrades: set `DBX_SECRET_KEY_FILE` to the mounted key file, or provide
-`DBX_SECRET_KEY` through your secret manager. Create the key once before
-starting Docker Compose, keep it across container restarts, and back it up
-separately from the database. Without a usable key, business APIs remain
-blocked and the browser displays the data security upgrade screen.
+Web/Docker and directly running `dbx-web` use the same managed data-directory
+key by default: `${DBX_DATA_DIR}/.dbx/secret.key`. The key is created only when
+migration starts or the first sensitive value is written, and must be backed up
+together with `dbx.db`. Persisting `/app/data` is therefore sufficient for a
+normal Docker deployment. This key protects the database contents, but cannot
+protect the whole data volume if the volume itself is copied or exposed.
+
+For production deployments, replace the managed key with a Docker/Kubernetes
+Secret by setting `DBX_SECRET_KEY_FILE`, or provide `DBX_SECRET_KEY` through a
+secret manager. Explicit keys take precedence and must never be rotated while
+encrypted data is in use. Without a usable key, business APIs remain blocked
+and the browser displays the data security upgrade screen.
+
+When running the binary directly, set `DBX_DATA_DIR=/var/lib/dbx` to use
+`/var/lib/dbx/.dbx/secret.key` with the same lifecycle and backup rules.
 
 When upgrading from a release that stored credentials in plain text, Desktop
 and Web display a **Data Security Upgrade** wizard before opening the main

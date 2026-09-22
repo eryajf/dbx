@@ -33,7 +33,7 @@ use crate::history::{
     HistorySearchRequest, HistorySearchResult, MAX_HISTORY,
 };
 use crate::models::connection::{ConnectionConfig, DatabaseConnectionInfo, DatabaseType, TransportLayerConfig};
-use crate::persistence::secret_codec::SecretCodec;
+use crate::persistence::secret_codec::{SecretCodec, SecretKeyPolicy, SecretKeyResolution, SecretKeySource};
 use crate::prompt_template::PromptTemplate;
 use crate::saved_sql::{SavedSqlFile, SavedSqlFolder, SavedSqlLibrary};
 
@@ -176,9 +176,12 @@ pub struct Storage {
     /// Path to the SQLite database file (`dbx.db`). Its parent directory is the
     /// application data dir where dbx-managed state (e.g. `known_hosts`) lives.
     path: PathBuf,
-    /// Headless callers must use a configured persistent key and must never
-    /// create a keyring entry as a side effect of a status check.
-    require_persistent_key: bool,
+    /// The owning process chooses the key lifecycle. Desktop keeps the
+    /// platform credential-store default; Web selects the data-dir policy.
+    secret_key_policy: SecretKeyPolicy,
+    /// Standalone CLI/MCP processes may use an existing key but must never
+    /// provision one as a side effect of a write.
+    secret_key_creation_allowed: bool,
 }
 
 pub const SECRET_STORE_MIGRATION_ID: &str = "secret-store-v1";
@@ -227,6 +230,7 @@ pub struct MigrationPreflight {
     pub key_file_configured: bool,
     pub key_file_readable: bool,
     pub persistent_key_configured: bool,
+    pub key_source: String,
 }
 
 impl MigrationPreflight {
@@ -1041,8 +1045,18 @@ fn migration_backup_paths(counts: &serde_json::Value) -> Result<Vec<String>, Str
 }
 
 fn migration_error_code(error: &str) -> &'static str {
-    if error.contains("MISSING_PERSISTENT_KEY") {
-        "MISSING_PERSISTENT_KEY"
+    if error.contains("MISSING_MANAGED_KEY") {
+        "MISSING_MANAGED_KEY"
+    } else if error.contains("ENCRYPTED_DATA_KEY_MISSING") {
+        "ENCRYPTED_DATA_KEY_MISSING"
+    } else if error.contains("SECRET_KEY_MISMATCH") {
+        "SECRET_KEY_MISMATCH"
+    } else if error.contains("SECRET_KEY_INVALID") {
+        "SECRET_KEY_INVALID"
+    } else if error.contains("KEY_FILE_UNAVAILABLE") {
+        "KEY_FILE_UNAVAILABLE"
+    } else if error.contains("MISSING_EXTERNAL_KEY") || error.contains("MISSING_PERSISTENT_KEY") {
+        "MISSING_EXTERNAL_KEY"
     } else if error.contains("KEY_PROVIDER_UNAVAILABLE") {
         "KEY_PROVIDER_UNAVAILABLE"
     } else if error.contains("JSON") || error.contains("json") {
@@ -1058,7 +1072,12 @@ fn migration_error_code(error: &str) -> &'static str {
 
 fn migration_safe_message(code: &str, _error: &str) -> String {
     match code {
-        "MISSING_PERSISTENT_KEY" => "A persistent secret key is required".to_string(),
+        "MISSING_MANAGED_KEY" => "A managed data-directory secret key is required".to_string(),
+        "ENCRYPTED_DATA_KEY_MISSING" => "The key for existing encrypted data is missing".to_string(),
+        "SECRET_KEY_MISMATCH" => "The configured secret key cannot decrypt existing data".to_string(),
+        "SECRET_KEY_INVALID" => "The configured secret key is invalid".to_string(),
+        "KEY_FILE_UNAVAILABLE" => "The configured secret key file is unavailable".to_string(),
+        "MISSING_EXTERNAL_KEY" => "An external secret key is required".to_string(),
         "BACKUP_FAILED" => "Could not create a migration backup".to_string(),
         "LEGACY_JSON_INVALID" => "A legacy configuration file could not be read".to_string(),
         "VERIFICATION_FAILED" => "Encrypted data verification failed".to_string(),
@@ -1085,7 +1104,14 @@ fn file_digest(path: &Path) -> Result<String, String> {
 impl Storage {
     pub async fn open(db_path: &Path) -> Result<Self, String> {
         let storage = Self::open_unmigrated(db_path).await?;
-        storage.run_database_legacy_migrations().await?;
+        let preflight = storage.inspect_data_migration().await?;
+        if preflight.needs_migration && !preflight.key_provider_available && !preflight.key_creation_allowed {
+            return Err(preflight.error_code.unwrap_or_else(|| "KEY_PROVIDER_UNAVAILABLE".to_string()));
+        }
+        if preflight.database_plaintext_count > 0 || preflight.sync_credential_count > 0 {
+            let codec = storage.secret_codec(preflight.key_creation_allowed)?;
+            storage.run_database_legacy_migrations(&codec).await?;
+        }
         Ok(storage)
     }
 
@@ -1096,7 +1122,8 @@ impl Storage {
         let path = db_path.to_path_buf();
         let db_path = db_path.to_string_lossy().to_string();
         let db = connect_path_create_if_missing(&db_path).await?;
-        let storage = Self { db, path, require_persistent_key: false };
+        let storage =
+            Self { db, path, secret_key_policy: SecretKeyPolicy::PlatformDefault, secret_key_creation_allowed: true };
         // Best-effort: switching journal mode is itself a lock-sensitive
         // operation, so a transient failure here (e.g. another process
         // racing to open the same brand-new database file) must never stop
@@ -1113,16 +1140,49 @@ impl Storage {
         Ok(storage)
     }
 
-    /// Require `DBX_SECRET_KEY(_FILE)` for migration and secret access. This
-    /// is used by Web/Docker/CLI/MCP where a platform keyring is not a stable
-    /// persistence boundary.
-    pub fn require_persistent_key(mut self) -> Self {
-        self.require_persistent_key = true;
+    pub fn with_secret_key_policy(mut self, policy: SecretKeyPolicy) -> Self {
+        self.secret_key_policy = policy;
         self
+    }
+
+    pub fn with_secret_key_creation(mut self, allowed: bool) -> Self {
+        self.secret_key_creation_allowed = allowed;
+        self
+    }
+
+    /// Compatibility builder for callers that require an externally managed key.
+    pub fn require_persistent_key(self) -> Self {
+        self.with_secret_key_policy(SecretKeyPolicy::ExternalOnly)
     }
 
     pub fn require_persistent_secret_key(self) -> Self {
         self.require_persistent_key()
+    }
+
+    fn resolve_secret_key(&self, allow_create: bool) -> Result<SecretKeyResolution, String> {
+        SecretCodec::resolve(self.secret_key_policy, self.data_dir(), allow_create)
+    }
+
+    fn secret_codec(&self, allow_create: bool) -> Result<SecretCodec, String> {
+        self.resolve_secret_key(allow_create).map(|resolved| resolved.codec)
+    }
+
+    fn secret_codec_for_write(&self, needs_key: bool) -> Result<SecretCodec, String> {
+        if needs_key {
+            return self.secret_codec(self.secret_key_creation_allowed);
+        }
+        match self.secret_codec(false) {
+            Ok(codec) => Ok(codec),
+            Err(error)
+                if matches!(
+                    error.as_str(),
+                    "MISSING_MANAGED_KEY" | "MISSING_EXTERNAL_KEY" | "KEY_PROVIDER_UNAVAILABLE"
+                ) =>
+            {
+                Ok(SecretCodec::new([0u8; 32]))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Multiple `dbx` processes can end up pointed at the same data directory
@@ -1298,28 +1358,53 @@ impl Storage {
             }
         };
         // This probe is deliberately read-only. It must not create a keyring
-        // entry or key file while merely displaying the startup status.
-        let key_probe = SecretCodec::from_existing_provider(self.require_persistent_key);
-        let key_provider_available = key_probe.is_ok();
+        // entry, key file, or change permissions while displaying status.
+        let key_probe = self.resolve_secret_key(false);
+        let mut key_provider_available = key_probe.is_ok();
         let database_plaintext_count = (plaintext + ai + tunnels).max(0) as usize;
         let has_legacy_data =
             database_plaintext_count > 0 || sync_credentials > 0 || files.iter().any(|file| file.exists);
         let key_creation_allowed = key_probe
             .as_ref()
             .err()
-            .is_some_and(|error| matches!(error.as_str(), "SECRET_KEY_NOT_FOUND" | "KEY_PROVIDER_UNAVAILABLE"))
-            && !self.require_persistent_key
+            .is_some_and(|error| matches!(error.as_str(), "MISSING_MANAGED_KEY" | "KEY_PROVIDER_UNAVAILABLE"))
+            && matches!(self.secret_key_policy, SecretKeyPolicy::PlatformDefault | SecretKeyPolicy::ManagedDataDir)
             && encrypted == 0
             && (database_plaintext_count > 0 || sync_credentials > 0 || files.iter().any(|file| file.exists));
-        // A headless deployment always requires an explicitly configured
-        // persistent key. Desktop deployments may provision a key for a
-        // plaintext-only upgrade, but must stop if encrypted data already
-        // exists and its provider has disappeared; generating a replacement
-        // key would make the existing ciphertext permanently unreadable.
-        let missing_required_key = self.require_persistent_key && !key_provider_available;
+        let mut key_error_code = key_probe.as_ref().err().cloned();
+        if let Ok(resolved) = key_probe.as_ref() {
+            if encrypted > 0 {
+                if self.validate_existing_encrypted_data(resolved.codec).await.is_err() {
+                    key_provider_available = false;
+                    key_error_code = Some("SECRET_KEY_MISMATCH".to_string());
+                }
+            }
+        } else if encrypted > 0
+            && matches!(
+                key_error_code.as_deref(),
+                Some("MISSING_MANAGED_KEY") | Some("MISSING_EXTERNAL_KEY") | Some("KEY_PROVIDER_UNAVAILABLE")
+            )
+        {
+            key_error_code = Some("ENCRYPTED_DATA_KEY_MISSING".to_string());
+        }
+        // External-only profiles require explicit configuration. Managed
+        // profiles may create their key later, but never when ciphertext
+        // already exists without its original key.
+        let missing_required_key =
+            !key_provider_available && matches!(self.secret_key_policy, SecretKeyPolicy::ExternalOnly);
         let missing_existing_key = encrypted > 0 && !key_provider_available;
+        let fatal_key_error = key_error_code.as_deref().is_some_and(|code| {
+            matches!(
+                code,
+                "SECRET_KEY_INVALID"
+                    | "SECRET_KEY_MISMATCH"
+                    | "KEY_FILE_UNAVAILABLE"
+                    | "MISSING_EXTERNAL_KEY"
+                    | "ENCRYPTED_DATA_KEY_MISSING"
+            )
+        });
         let source_changed = stored.source_fingerprint.as_deref().is_some_and(|value| value != current_fingerprint);
-        let state = if missing_required_key || missing_existing_key {
+        let state = if fatal_key_error || missing_required_key || missing_existing_key {
             MigrationState::Pending
         } else if has_legacy_data
             && (source_changed || matches!(stored.state, MigrationState::Succeeded | MigrationState::NotRequired))
@@ -1330,17 +1415,39 @@ impl Storage {
         } else {
             stored.state.clone()
         };
-        let needs_migration = missing_required_key
+        let needs_migration = fatal_key_error
+            || missing_required_key
             || missing_existing_key
             || matches!(state, MigrationState::Failed | MigrationState::Running)
             || (has_legacy_data && !matches!(state, MigrationState::Succeeded | MigrationState::NotRequired));
-        let (error_code, error_message) = if missing_required_key {
-            (Some("MISSING_PERSISTENT_KEY".to_string()), Some("A persistent DBX secret key is required".to_string()))
+        let (error_code, error_message) = if let Some(code) = key_error_code.clone() {
+            let message = match code.as_str() {
+                "MISSING_MANAGED_KEY" => {
+                    "A managed data-directory secret key will be created when migration or first secret write starts"
+                }
+                "ENCRYPTED_DATA_KEY_MISSING" => "The key for existing encrypted data is missing",
+                "SECRET_KEY_INVALID" => "The configured secret key is invalid",
+                "SECRET_KEY_MISMATCH" => "The configured secret key cannot decrypt existing data",
+                "KEY_FILE_UNAVAILABLE" => "The configured secret key file is unavailable",
+                "MISSING_EXTERNAL_KEY" => "An external secret key is required",
+                _ => "The local secret provider is unavailable",
+            };
+            (Some(code), Some(message.to_string()))
+        } else if missing_required_key {
+            (Some("MISSING_EXTERNAL_KEY".to_string()), Some("An external secret key is required".to_string()))
         } else if missing_existing_key {
-            (Some("KEY_PROVIDER_UNAVAILABLE".to_string()), Some("The local secret provider is unavailable".to_string()))
+            (
+                Some("ENCRYPTED_DATA_KEY_MISSING".to_string()),
+                Some("The key for existing encrypted data is missing".to_string()),
+            )
         } else {
             (stored.error_code, stored.error_message)
         };
+        let key_source = key_probe
+            .as_ref()
+            .map(|resolved| resolved.source.as_str())
+            .unwrap_or(SecretKeySource::Unavailable.as_str())
+            .to_string();
         let preflight = MigrationPreflight {
             migration_id: SECRET_STORE_MIGRATION_ID.to_string(),
             state,
@@ -1365,49 +1472,29 @@ impl Storage {
                 .ok()
                 .is_some_and(|path| std::fs::read_to_string(path).is_ok()),
             persistent_key_configured: key_provider_available,
+            key_source,
         };
-        if stored.source_fingerprint.is_none()
-            || (matches!(preflight.state, MigrationState::NotRequired)
-                && !matches!(stored.state, MigrationState::NotRequired))
-        {
-            self.set_migration_state(
-                MigrationState::NotRequired,
-                preflight.backup_path.as_deref(),
-                None,
-                None,
-                Some(&migration_counts_json(&preflight)),
-            )
-            .await?;
-        }
-        let scan = serde_json::json!([plaintext, encrypted, connections, plugins, ai, tunnels, sync_credentials]);
+        Ok(preflight)
+    }
+
+    async fn validate_existing_encrypted_data(&self, codec: SecretCodec) -> Result<(), String> {
         self.with_conn(move |conn| {
-            let counts: Option<String> = conn
-                .query_row(
-                    "SELECT counts_json FROM data_migrations WHERE migration_id=?1",
-                    [SECRET_STORE_MIGRATION_ID],
-                    |row| row.get(0),
+            let mut statement = conn
+                .prepare(
+                    "SELECT connection_id, key, secret_enc FROM connection_secrets
+                     WHERE secret_enc IS NOT NULL AND secret_enc <> ''",
                 )
-                .optional()
-                .map_err(|_| "Cannot cache migration scan")?;
-            if let Some(counts) = counts {
-                let mut value: serde_json::Value =
-                    serde_json::from_str(&counts).unwrap_or_else(|_| serde_json::json!({}));
-                if value.get("cachedScan") != Some(&scan)
-                    || value["cachedScanFingerprint"].as_str() != Some(current_fingerprint.as_str())
-                {
-                    value["cachedScan"] = scan;
-                    value["cachedScanFingerprint"] = serde_json::json!(current_fingerprint);
-                    conn.execute(
-                        "UPDATE data_migrations SET counts_json=?1, source_fingerprint=?2 WHERE migration_id=?3",
-                        params![value.to_string(), current_fingerprint, SECRET_STORE_MIGRATION_ID],
-                    )
-                    .map_err(|_| "Cannot cache migration scan")?;
-                }
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
+                .map_err(|error| error.to_string())?;
+            for row in rows {
+                let (connection_id, key, envelope) = row.map_err(|error| error.to_string())?;
+                codec.decrypt(&connection_id, &key, &envelope).map_err(|_| "SECRET_KEY_MISMATCH".to_string())?;
             }
             Ok(())
         })
-        .await?;
-        Ok(preflight)
+        .await
     }
 
     pub async fn start_data_migration(&self) -> Result<MigrationReport, String> {
@@ -1444,10 +1531,8 @@ impl Storage {
         };
         self.set_migration_state(MigrationState::Running, Some(&backup_path), None, None, None).await?;
         let result = async {
-            if preflight.key_creation_allowed {
-                SecretCodec::provision_for_migration()?;
-            }
-            self.run_database_legacy_migrations().await?;
+            let codec = self.secret_codec(preflight.key_creation_allowed)?;
+            self.run_database_legacy_migrations(&codec).await?;
             self.migrate_from_json_staged(self.data_dir()).await?;
             let verified = self.verify_migration().await?;
             let renamed = self.finalize_legacy_json_files().await?;
@@ -1732,7 +1817,7 @@ impl Storage {
     }
 
     async fn verify_migration(&self) -> Result<usize, String> {
-        let codec = SecretCodec::from_env_or_default()?;
+        let codec = self.secret_codec(false)?;
         self.with_conn(move |conn| {
             let mut statement = conn
                 .prepare("SELECT connection_id,key,secret,secret_enc FROM connection_secrets")
@@ -1835,23 +1920,26 @@ impl Storage {
     }
 
     async fn init_schema(&self, migrate_legacy: bool) -> Result<(), String> {
-        self.db.with_connection(|conn| {
+        let migration_codec = migrate_legacy.then(|| self.secret_codec(true)).transpose()?;
+        self.db.with_connection(move |conn| {
             for statement in SCHEMA_STATEMENTS {
                 conn.execute(statement, []).map_err(|e| e.to_string())?;
             }
             ensure_history_columns_sync(conn)?;
             ensure_connection_secret_columns_sync(conn)?;
             if migrate_legacy {
-                migrate_legacy_connection_secrets_sync(conn)?;
-                migrate_legacy_connection_config_json_sync(conn)?;
+                let codec = migration_codec.as_ref().ok_or_else(|| "KEY_PROVIDER_UNAVAILABLE".to_string())?;
+                migrate_legacy_connection_secrets_sync(conn, &codec)?;
+                migrate_legacy_connection_config_json_sync(conn, &codec)?;
             }
             ensure_saved_sql_columns_sync(conn)?;
             ensure_tab_runtime_cache_columns_sync(conn)?;
             ensure_schema_cache_columns_sync(conn)?;
             ensure_ai_configs_columns_sync(conn)?;
             if migrate_legacy {
-                migrate_legacy_config_secrets_sync(conn)?;
-                migrate_legacy_app_settings_secrets_sync(conn)?;
+                let codec = migration_codec.as_ref().ok_or_else(|| "KEY_PROVIDER_UNAVAILABLE".to_string())?;
+                migrate_legacy_config_secrets_sync(conn, &codec)?;
+                migrate_legacy_app_settings_secrets_sync(conn, &codec)?;
             }
             ensure_state_store_columns_sync(conn)?;
             ensure_ai_conversations_columns_sync(conn)?;
@@ -1860,12 +1948,13 @@ impl Storage {
         })
     }
 
-    async fn run_database_legacy_migrations(&self) -> Result<(), String> {
-        self.with_conn(|conn| {
-            migrate_legacy_connection_secrets_sync(conn)?;
-            migrate_legacy_connection_config_json_sync(conn)?;
-            migrate_legacy_config_secrets_sync(conn)?;
-            migrate_legacy_app_settings_secrets_sync(conn)
+    async fn run_database_legacy_migrations(&self, codec: &SecretCodec) -> Result<(), String> {
+        let codec = *codec;
+        self.with_conn(move |conn| {
+            migrate_legacy_connection_secrets_sync(conn, &codec)?;
+            migrate_legacy_connection_config_json_sync(conn, &codec)?;
+            migrate_legacy_config_secrets_sync(conn, &codec)?;
+            migrate_legacy_app_settings_secrets_sync(conn, &codec)
         })
         .await
     }
@@ -1961,7 +2050,7 @@ fn ensure_connection_secret_columns_sync(conn: &Connection) -> Result<(), String
 /// old lazy-on-read migration left untouched rows readable in `dbx.db`; doing
 /// this as part of schema startup gives upgrades a deterministic at-rest
 /// guarantee while keeping the migration in one SQLite transaction.
-fn migrate_legacy_connection_secrets_sync(conn: &mut Connection) -> Result<(), String> {
+fn migrate_legacy_connection_secrets_sync(conn: &mut Connection, codec: &SecretCodec) -> Result<(), String> {
     let rows = {
         let mut statement = conn
             .prepare("SELECT connection_id, key, secret FROM connection_secrets WHERE secret <> '' AND (secret_enc IS NULL OR secret_enc = '')")
@@ -1974,7 +2063,6 @@ fn migrate_legacy_connection_secrets_sync(conn: &mut Connection) -> Result<(), S
     if rows.is_empty() {
         return Ok(());
     }
-    let codec = SecretCodec::from_env_or_default()?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
     for (connection_id, key, secret) in rows {
         let encrypted = codec.encrypt(&connection_id, &key, &secret)?;
@@ -2002,7 +2090,7 @@ fn migrate_legacy_connection_secrets_sync(conn: &mut Connection) -> Result<(), S
 /// every legacy plaintext value before this runs, so the restored rows keep the
 /// at-rest guarantee. `save_password == false` is the one case where losing the
 /// password is intended, so that row is not restored.
-fn migrate_legacy_connection_config_json_sync(conn: &mut Connection) -> Result<(), String> {
+fn migrate_legacy_connection_config_json_sync(conn: &mut Connection, codec: &SecretCodec) -> Result<(), String> {
     let rows = {
         let mut statement =
             conn.prepare("SELECT id, config_json FROM connections").map_err(|error| error.to_string())?;
@@ -2036,7 +2124,7 @@ fn migrate_legacy_connection_config_json_sync(conn: &mut Connection) -> Result<(
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
     for config in legacy {
         tx.execute("DELETE FROM connections WHERE id = ?1", [&config.id]).map_err(|error| error.to_string())?;
-        persist_connection_in_tx(&tx, &config)?;
+        persist_connection_in_tx(&tx, codec, &config)?;
     }
     for (connection_id, key, secret, secret_enc) in stored_secrets {
         if key == "password" && !keep_password.contains(&connection_id) {
@@ -2153,7 +2241,7 @@ fn nonempty_json_value(value: &serde_json::Value) -> bool {
 /// the same encrypted secret store used by connections. This runs during
 /// startup so a successful upgrade never leaves a known credential in
 /// `config_json`. Existing encrypted blobs win over stale inline values.
-fn migrate_legacy_config_secrets_sync(conn: &mut Connection) -> Result<(), String> {
+fn migrate_legacy_config_secrets_sync(conn: &mut Connection, codec: &SecretCodec) -> Result<(), String> {
     let legacy_ai = {
         let mut statement =
             conn.prepare("SELECT id, config_json FROM ai_configs").map_err(|error| error.to_string())?;
@@ -2194,7 +2282,6 @@ fn migrate_legacy_config_secrets_sync(conn: &mut Connection) -> Result<(), Strin
         return Ok(());
     }
 
-    let codec = SecretCodec::from_env_or_default()?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
 
     for (id, json) in legacy_ai {
@@ -2283,7 +2370,7 @@ fn migrate_config_blob_in_tx(
 /// is deliberately eager rather than lazy: after a successful upgrade, a
 /// plain-text settings row must not remain merely because the user has not
 /// opened the sync settings screen yet.
-fn migrate_legacy_app_settings_secrets_sync(conn: &mut Connection) -> Result<(), String> {
+fn migrate_legacy_app_settings_secrets_sync(conn: &mut Connection, codec: &SecretCodec) -> Result<(), String> {
     let Some(json) = conn
         .query_row("SELECT settings_json FROM app_settings WHERE id = 1", [], |row| row.get::<_, String>(0))
         .optional()
@@ -2303,7 +2390,6 @@ fn migrate_legacy_app_settings_secrets_sync(conn: &mut Connection) -> Result<(),
         return Ok(());
     }
 
-    let codec = SecretCodec::from_env_or_default()?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
     let store_value = |namespace: &str, key: &str, value: &serde_json::Value| -> Result<(), String> {
         let plaintext = match value {
@@ -3084,13 +3170,14 @@ impl Storage {
         let (sanitized, secrets) = split_ai_config_secrets(config)?;
         let json = serde_json::to_string(&sanitized).map_err(|e| e.to_string())?;
         let secrets_json = serde_json::to_string(&secrets).map_err(|e| e.to_string())?;
+        let codec = self.secret_codec_for_write(secrets.as_object().is_some_and(|object| !object.is_empty()))?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             tx.execute("INSERT OR REPLACE INTO ai_config (id, config_json) VALUES (1, ?1)", [json])
                 .map_err(|e| e.to_string())?;
             let namespace = format!("{AI_SECRET_NAMESPACE_PREFIX}legacy");
             if secrets.as_object().is_some_and(|object| !object.is_empty()) {
-                persist_secret_in_tx(&tx, &namespace, CONFIG_SECRET_BLOB_KEY, &secrets_json)?;
+                persist_secret_in_tx(&tx, &codec, &namespace, CONFIG_SECRET_BLOB_KEY, &secrets_json)?;
             } else {
                 tx.execute(
                     "DELETE FROM connection_secrets WHERE connection_id = ?1 AND key = ?2",
@@ -3147,6 +3234,7 @@ impl Storage {
         let secret_provider = provider.clone();
         let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
         let secrets_json = serde_json::to_string(&secrets).map_err(|e| e.to_string())?;
+        let codec = self.secret_codec_for_write(secrets.as_object().is_some_and(|object| !object.is_empty()))?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             tx.execute(
@@ -3156,7 +3244,7 @@ impl Storage {
             .map_err(|e| e.to_string())?;
             let namespace = format!("{AI_SECRET_NAMESPACE_PREFIX}provider.{secret_provider}");
             if secrets.as_object().is_some_and(|object| !object.is_empty()) {
-                persist_secret_in_tx(&tx, &namespace, CONFIG_SECRET_BLOB_KEY, &secrets_json)?;
+                persist_secret_in_tx(&tx, &codec, &namespace, CONFIG_SECRET_BLOB_KEY, &secrets_json)?;
             } else {
                 tx.execute(
                     "DELETE FROM connection_secrets WHERE connection_id = ?1 AND key = ?2",
@@ -3229,6 +3317,9 @@ impl Storage {
             sanitized_configs.push(AiConfigItem { config, ..item.clone() });
             secret_blobs.push((item.id.clone(), secrets));
         }
+        let needs_key =
+            secret_blobs.iter().any(|(_, secrets)| secrets.as_object().is_some_and(|object| !object.is_empty()));
+        let codec = self.secret_codec_for_write(needs_key)?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             tx.execute("DELETE FROM ai_configs", []).map_err(|e| e.to_string())?;
@@ -3249,7 +3340,7 @@ impl Storage {
             for (id, secrets) in &secret_blobs {
                 if secrets.as_object().is_some_and(|object| !object.is_empty()) {
                     let blob = serde_json::to_string(secrets).map_err(|e| e.to_string())?;
-                    persist_secret_in_tx(&tx, &format!("{AI_SECRET_NAMESPACE_PREFIX}{id}"), CONFIG_SECRET_BLOB_KEY, &blob)?;
+                    persist_secret_in_tx(&tx, &codec, &format!("{AI_SECRET_NAMESPACE_PREFIX}{id}"), CONFIG_SECRET_BLOB_KEY, &blob)?;
                 }
             }
             tx.commit().map_err(|e| e.to_string())?;
@@ -3343,6 +3434,7 @@ impl Storage {
         let (sanitized_config, secrets) = split_ai_config_secrets(&config.config)?;
         let config = AiConfigItem { config: sanitized_config, ..config.clone() };
         let secret_id = config.id.clone();
+        let codec = self.secret_codec_for_write(secrets.as_object().is_some_and(|object| !object.is_empty()))?;
         self.with_conn(move |conn| {
             let json = serde_json::to_string(&config.config).map_err(|e| e.to_string())?;
             let models_json = serde_json::to_string(&config.config.models).map_err(|e| e.to_string())?;
@@ -3377,7 +3469,7 @@ impl Storage {
 
             let namespace = format!("{AI_SECRET_NAMESPACE_PREFIX}{secret_id}");
             if secrets.as_object().is_some_and(|object| !object.is_empty()) {
-                persist_secret_in_tx(&tx, &namespace, CONFIG_SECRET_BLOB_KEY, &secrets_json)?;
+                persist_secret_in_tx(&tx, &codec, &namespace, CONFIG_SECRET_BLOB_KEY, &secrets_json)?;
             } else {
                 tx.execute(
                     "DELETE FROM connection_secrets WHERE connection_id = ?1 AND key = ?2",
@@ -3471,6 +3563,9 @@ impl Storage {
             sanitized_profiles.push(sanitized);
             secret_blobs.push((profile.id().to_string(), profile.clone()));
         }
+        let needs_key =
+            sanitized_profiles.iter().zip(&secret_blobs).any(|(sanitized, (_, profile))| sanitized != profile);
+        let codec = self.secret_codec_for_write(needs_key)?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             tx.execute("DELETE FROM tunnel_profiles", []).map_err(|e| e.to_string())?;
@@ -3491,6 +3586,7 @@ impl Storage {
                     let blob = serde_json::to_string(profile).map_err(|e| e.to_string())?;
                     persist_secret_in_tx(
                         &tx,
+                        &codec,
                         &format!("{TUNNEL_SECRET_NAMESPACE_PREFIX}{id}"),
                         CONFIG_SECRET_BLOB_KEY,
                         &blob,
@@ -4898,7 +4994,11 @@ fn sanitized_connection_config(config: &ConnectionConfig) -> ConnectionConfig {
     sanitized
 }
 
-fn persist_connection_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionConfig) -> Result<(), String> {
+fn persist_connection_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    codec: &SecretCodec,
+    config: &ConnectionConfig,
+) -> Result<(), String> {
     let config = config.clone().canonicalized();
     let config_id = config.id.clone();
     let sanitized = sanitized_connection_config(&config);
@@ -4908,20 +5008,27 @@ fn persist_connection_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionC
         .map_err(|e| e.to_string())?;
 
     if config.save_password {
-        persist_secret_in_tx(tx, &config.id, "password", &config.password)?;
+        persist_secret_in_tx(tx, codec, &config.id, "password", &config.password)?;
     } else {
         // "Don't save password": write an empty value, which persist_secret_in_tx
         // turns into a DELETE — the password secret is never persisted (and any
         // previously stored secret is removed on this save).
-        persist_secret_in_tx(tx, &config.id, "password", "")?;
+        persist_secret_in_tx(tx, codec, &config.id, "password", "")?;
     }
     delete_secret_prefix_in_tx(tx, &config.id, TRANSPORT_LAYER_SECRET_PREFIX)?;
     for (index, layer) in config.transport_layers.iter().enumerate() {
         match layer {
             TransportLayerConfig::Ssh(ssh) => {
-                persist_secret_in_tx(tx, &config.id, &transport_layer_ssh_password_key(index, layer), &ssh.password)?;
                 persist_secret_in_tx(
                     tx,
+                    codec,
+                    &config.id,
+                    &transport_layer_ssh_password_key(index, layer),
+                    &ssh.password,
+                )?;
+                persist_secret_in_tx(
+                    tx,
+                    codec,
                     &config.id,
                     &transport_layer_ssh_key_passphrase_key(index, layer),
                     &ssh.key_passphrase,
@@ -4930,6 +5037,7 @@ fn persist_connection_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionC
             TransportLayerConfig::Proxy(proxy) => {
                 persist_secret_in_tx(
                     tx,
+                    codec,
                     &config.id,
                     &transport_layer_proxy_password_key(index, layer),
                     &proxy.password,
@@ -4938,6 +5046,7 @@ fn persist_connection_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionC
             TransportLayerConfig::HttpTunnel(http) => {
                 persist_secret_in_tx(
                     tx,
+                    codec,
                     &config.id,
                     &transport_layer_http_tunnel_token_key(index, layer),
                     &http.token,
@@ -4945,18 +5054,18 @@ fn persist_connection_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionC
             }
         }
     }
-    persist_secret_in_tx(tx, &config.id, "redis_sentinel_password", &config.redis_sentinel_password)?;
+    persist_secret_in_tx(tx, codec, &config.id, "redis_sentinel_password", &config.redis_sentinel_password)?;
     if let Some(url_params) = &config.url_params {
-        persist_secret_in_tx(tx, &config.id, URL_PARAMS_SECRET_KEY, url_params)?;
+        persist_secret_in_tx(tx, codec, &config.id, URL_PARAMS_SECRET_KEY, url_params)?;
     } else {
-        persist_secret_in_tx(tx, &config.id, URL_PARAMS_SECRET_KEY, "")?;
+        persist_secret_in_tx(tx, codec, &config.id, URL_PARAMS_SECRET_KEY, "")?;
     }
-    persist_secret_in_tx(tx, &config.id, "ssh_password", "")?;
-    persist_secret_in_tx(tx, &config.id, "ssh_key_passphrase", "")?;
-    persist_secret_in_tx(tx, &config.id, "proxy_password", "")?;
+    persist_secret_in_tx(tx, codec, &config.id, "ssh_password", "")?;
+    persist_secret_in_tx(tx, codec, &config.id, "ssh_key_passphrase", "")?;
+    persist_secret_in_tx(tx, codec, &config.id, "proxy_password", "")?;
     delete_secret_prefix_in_tx(tx, &config.id, SSH_TUNNEL_SECRET_PREFIX)?;
     if let Some(cs) = &config.connection_string {
-        persist_secret_in_tx(tx, &config.id, "connection_string", cs)?;
+        persist_secret_in_tx(tx, codec, &config.id, "connection_string", cs)?;
     } else {
         tx.execute(
             "DELETE FROM connection_secrets WHERE connection_id = ?1 AND key = ?2",
@@ -4965,7 +5074,7 @@ fn persist_connection_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionC
         .map_err(|e| e.to_string())?;
     }
     if let Some(script) = &config.init_script {
-        persist_secret_in_tx(tx, &config.id, "init_script", script)?;
+        persist_secret_in_tx(tx, codec, &config.id, "init_script", script)?;
     } else {
         tx.execute(
             "DELETE FROM connection_secrets WHERE connection_id = ?1 AND key = ?2",
@@ -4973,15 +5082,15 @@ fn persist_connection_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionC
         )
         .map_err(|e| e.to_string())?;
     }
-    persist_mq_auth_secrets_in_tx(tx, &config)?;
-    persist_mqtt_auth_secrets_in_tx(tx, &config)?;
-    persist_mq_token_signing_secret_in_tx(tx, &config)?;
-    persist_nacos_auth_secrets_in_tx(tx, &config)?;
-    persist_cassandra_tls_secrets_in_tx(tx, &config)?;
+    persist_mq_auth_secrets_in_tx(tx, codec, &config)?;
+    persist_mqtt_auth_secrets_in_tx(tx, codec, &config)?;
+    persist_mq_token_signing_secret_in_tx(tx, codec, &config)?;
+    persist_nacos_auth_secrets_in_tx(tx, codec, &config)?;
+    persist_cassandra_tls_secrets_in_tx(tx, codec, &config)?;
     delete_secret_prefix_in_tx(tx, &config.id, PLUGIN_CONNECTION_SECRET_PREFIX)?;
     for (key, secret) in &config.connection_secrets {
         if !key.is_empty() {
-            persist_secret_in_tx(tx, &config.id, &format!("{PLUGIN_CONNECTION_SECRET_PREFIX}{key}"), secret)?;
+            persist_secret_in_tx(tx, codec, &config.id, &format!("{PLUGIN_CONNECTION_SECRET_PREFIX}{key}"), secret)?;
         }
     }
     Ok(())
@@ -4992,6 +5101,7 @@ async fn load_plugin_connection_secrets(
     connection_id: &str,
 ) -> Result<HashMap<String, String>, String> {
     let connection_id = connection_id.to_string();
+    let codec = storage.secret_codec(false)?;
     storage
         .with_conn(move |conn| {
             let like = format!("{PLUGIN_CONNECTION_SECRET_PREFIX}%");
@@ -5010,7 +5120,7 @@ async fn load_plugin_connection_secrets(
                 let (key, secret, encrypted) = row.map_err(|error| error.to_string())?;
                 let secret = encrypted
                     .filter(|value| !value.is_empty())
-                    .map(|value| SecretCodec::from_env_or_default()?.decrypt(&connection_id, &key, &value))
+                    .map(|value| codec.decrypt(&connection_id, &key, &value))
                     .transpose()?
                     .unwrap_or(secret);
                 if let Some(key) = key.strip_prefix(PLUGIN_CONNECTION_SECRET_PREFIX) {
@@ -5139,12 +5249,20 @@ fn delete_unreferenced_connection_secrets_in_tx(
 
 impl Storage {
     pub(crate) async fn apply_sync_import_transaction(&self, plan: SyncImportPlan) -> Result<(), String> {
+        let needs_key = plan
+            .connection_secrets
+            .as_ref()
+            .is_some_and(|secrets| secrets.iter().any(|secret| !secret.secret.is_empty()))
+            || plan.sync_credentials.as_ref().is_some_and(|credentials| !credentials.is_empty())
+            || plan.tunnel_secret_profiles.is_some()
+            || plan.ai_configs.is_some();
+        let codec = self.secret_codec_for_write(needs_key)?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
 
-            apply_sync_connections_in_tx(&tx, &plan.connections)?;
+            apply_sync_connections_in_tx(&tx, &codec, &plan.connections)?;
             if let Some(profiles) = &plan.tunnel_profiles {
-                apply_sync_tunnel_profiles_in_tx(&tx, profiles, plan.tunnel_secret_profiles.as_deref())?;
+                apply_sync_tunnel_profiles_in_tx(&tx, &codec, profiles, plan.tunnel_secret_profiles.as_deref())?;
             }
             if let Some(layout) = &plan.sidebar_layout {
                 let json = serde_json::to_string(layout).map_err(|e| e.to_string())?;
@@ -5168,7 +5286,7 @@ impl Storage {
                 .map_err(|e| e.to_string())?;
             }
             if let Some(ai_configs) = &plan.ai_configs {
-                apply_ai_configs_in_tx(&tx, ai_configs)?;
+                apply_ai_configs_in_tx(&tx, &codec, ai_configs)?;
             }
             if let Some(secrets) = &plan.connection_secrets {
                 clear_sync_connection_secrets_in_tx(&tx, &plan.connections, plan.preserve_plugin_secrets)?;
@@ -5176,7 +5294,7 @@ impl Storage {
                     if secret.secret.is_empty() {
                         continue;
                     }
-                    persist_secret_in_tx(&tx, &secret.connection_id, &secret.key, &secret.secret)?;
+                    persist_secret_in_tx(&tx, &codec, &secret.connection_id, &secret.key, &secret.secret)?;
                 }
             }
             if let Some(credentials) = &plan.sync_credentials {
@@ -5192,6 +5310,7 @@ impl Storage {
                     }
                     persist_secret_in_tx(
                         &tx,
+                        &codec,
                         GLOBAL_SECRET_NAMESPACE,
                         &format!("webdav_password.{}", credential.account),
                         &credential.blob,
@@ -5208,6 +5327,7 @@ impl Storage {
         configs: &[ConnectionConfig],
     ) -> Result<(), String> {
         let configs = configs.to_vec();
+        let codec = self.secret_codec_for_write(false)?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             let replacement_ids = configs.iter().map(|config| config.id.clone()).collect::<HashSet<_>>();
@@ -5220,7 +5340,7 @@ impl Storage {
                     // Metadata-only imports/sync preserve existing secrets by default.
                     // This preference is an exception: retaining the old password would
                     // make a no-save connection silently authenticate without prompting.
-                    persist_secret_in_tx(&tx, &config.id, "password", "")?;
+                    persist_secret_in_tx(&tx, &codec, &config.id, "password", "")?;
                     delete_secret_prefix_in_tx(&tx, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
                 }
                 let mut sanitized = config;
@@ -5252,13 +5372,15 @@ impl Storage {
 
     pub async fn save_connections(&self, configs: &[ConnectionConfig]) -> Result<(), String> {
         let configs = configs.to_vec();
+        let needs_key = configs.iter().any(connection_config_has_inline_secrets);
+        let codec = self.secret_codec_for_write(needs_key)?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             let replacement_ids = configs.iter().map(|config| config.id.clone()).collect::<HashSet<_>>();
             let mut retained_ids = preserve_unreadable_connections_for_replacement(&tx, &replacement_ids)?;
 
             for config in &configs {
-                persist_connection_in_tx(&tx, config)?;
+                persist_connection_in_tx(&tx, &codec, config)?;
             }
 
             retained_ids.extend(configs.iter().map(|config| config.id.clone()));
@@ -5271,10 +5393,11 @@ impl Storage {
 
     pub async fn add_connection_for_mcp(&self, config: ConnectionConfig) -> Result<ConnectionConfig, String> {
         let config = config.canonicalized();
+        let codec = self.secret_codec_for_write(connection_config_has_inline_secrets(&config))?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             ensure_mcp_connection_change_allowed_in_tx(&tx, None)?;
-            persist_connection_in_tx(&tx, &config)?;
+            persist_connection_in_tx(&tx, &codec, &config)?;
             tx.commit().map_err(|e| e.to_string())?;
             Ok(config)
         })
@@ -5291,6 +5414,7 @@ impl Storage {
         let copy_id = copy_id.to_string();
         let copied_id = copy_id.clone();
         let copy_name = copy_name.to_string();
+        let codec = self.secret_codec(false)?;
         self.with_conn(move |conn| {
             let tx =
                 conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
@@ -5331,7 +5455,6 @@ impl Storage {
                     .map_err(|error| error.to_string())?;
                 rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?
             };
-            let codec = SecretCodec::from_env_or_default()?;
             for (key, legacy, encrypted) in source_secrets {
                 let plaintext = encrypted
                     .filter(|value| !value.is_empty())
@@ -6174,7 +6297,7 @@ impl Storage {
             return Ok(None);
         };
         if let Some(encrypted) = encrypted.filter(|value| !value.is_empty()) {
-            return SecretCodec::from_env_or_default()?.decrypt(&connection_id, &key, &encrypted).map(Some);
+            return self.secret_codec(false)?.decrypt(&connection_id, &key, &encrypted).map(Some);
         }
         if !legacy.is_empty() {
             // Read old plaintext rows during migration and opportunistically
@@ -6189,6 +6312,7 @@ impl Storage {
         let connection_id = connection_id.to_string();
         let key = key.to_string();
         let secret = secret.to_string();
+        let codec = (!secret.is_empty()).then(|| self.secret_codec(self.secret_key_creation_allowed)).transpose()?;
         self.with_conn(move |conn| {
             if secret.is_empty() {
                 conn.execute(
@@ -6197,7 +6321,10 @@ impl Storage {
                 ).map_err(|e| e.to_string())?;
                 return Ok(());
             }
-            let encrypted = SecretCodec::from_env_or_default()?.encrypt(&connection_id, &key, &secret)?;
+            let encrypted = codec
+                .as_ref()
+                .ok_or_else(|| "KEY_PROVIDER_UNAVAILABLE".to_string())?
+                .encrypt(&connection_id, &key, &secret)?;
             conn.execute(
                 "INSERT OR REPLACE INTO connection_secrets (connection_id, key, secret, secret_enc) VALUES (?, ?, '', ?)",
                 params![connection_id, key, encrypted],
@@ -6895,6 +7022,7 @@ impl Storage {
         // Route legacy hydrated configs through the same sanitized/encrypted
         // persistence path as normal saves.  Inserting the old JSON directly
         // would briefly reintroduce plaintext credentials into dbx.db.
+        let codec = self.secret_codec(true)?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             for config in &configs {
@@ -6902,7 +7030,7 @@ impl Storage {
                     .query_row("SELECT EXISTS(SELECT 1 FROM connections WHERE id = ?1)", [&config.id], |row| row.get(0))
                     .map_err(|e| e.to_string())?;
                 if !exists {
-                    persist_connection_in_tx(&tx, config)?;
+                    persist_connection_in_tx(&tx, &codec, config)?;
                 }
             }
             tx.commit().map_err(|e| e.to_string())
@@ -7051,6 +7179,7 @@ impl Storage {
 
 fn persist_secret_in_tx(
     tx: &rusqlite::Transaction<'_>,
+    codec: &SecretCodec,
     connection_id: &str,
     key: &str,
     secret: &str,
@@ -7059,7 +7188,7 @@ fn persist_secret_in_tx(
         tx.execute("DELETE FROM connection_secrets WHERE connection_id = ?1 AND key = ?2", params![connection_id, key])
             .map_err(|e| e.to_string())?;
     } else {
-        let encrypted = SecretCodec::from_env_or_default()?.encrypt(connection_id, key, secret)?;
+        let encrypted = codec.encrypt(connection_id, key, secret)?;
         tx.execute(
             "INSERT OR REPLACE INTO connection_secrets (connection_id, key, secret, secret_enc) VALUES (?, ?, '', ?)",
             params![connection_id, key, encrypted],
@@ -7069,13 +7198,17 @@ fn persist_secret_in_tx(
     Ok(())
 }
 
-fn apply_sync_connections_in_tx(tx: &Transaction<'_>, configs: &[ConnectionConfig]) -> Result<(), String> {
+fn apply_sync_connections_in_tx(
+    tx: &Transaction<'_>,
+    codec: &SecretCodec,
+    configs: &[ConnectionConfig],
+) -> Result<(), String> {
     let replacement_ids = configs.iter().map(|config| config.id.clone()).collect::<HashSet<_>>();
     let mut retained_ids = preserve_unreadable_connections_for_replacement(tx, &replacement_ids)?;
     for config in configs {
         let config = config.canonicalized();
         if !config.save_password {
-            persist_secret_in_tx(tx, &config.id, "password", "")?;
+            persist_secret_in_tx(tx, codec, &config.id, "password", "")?;
             delete_secret_prefix_in_tx(tx, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
         }
         let sanitized = sanitized_connection_config(&config);
@@ -7111,6 +7244,7 @@ fn clear_sync_connection_secrets_in_tx(
 
 fn apply_sync_tunnel_profiles_in_tx(
     tx: &Transaction<'_>,
+    codec: &SecretCodec,
     profiles: &[TransportLayerConfig],
     secret_profiles: Option<&[TransportLayerConfig]>,
 ) -> Result<(), String> {
@@ -7123,7 +7257,7 @@ fn apply_sync_tunnel_profiles_in_tx(
         let (id, json) = row.map_err(|e| e.to_string())?;
         let mut profile: TransportLayerConfig = serde_json::from_str(&json).map_err(|e| e.to_string())?;
         let namespace = format!("{TUNNEL_SECRET_NAMESPACE_PREFIX}{id}");
-        if let Some(blob) = get_secret_in_tx(tx, &namespace, CONFIG_SECRET_BLOB_KEY)? {
+        if let Some(blob) = get_secret_in_tx(tx, codec, &namespace, CONFIG_SECRET_BLOB_KEY)? {
             let stored: TransportLayerConfig = serde_json::from_str(&blob).map_err(|e| e.to_string())?;
             merge_missing_tunnel_profile_secrets(&mut profile, &stored);
         }
@@ -7163,6 +7297,7 @@ fn apply_sync_tunnel_profiles_in_tx(
         if sanitized != profile {
             persist_secret_in_tx(
                 tx,
+                codec,
                 &format!("{TUNNEL_SECRET_NAMESPACE_PREFIX}{}", profile.id()),
                 CONFIG_SECRET_BLOB_KEY,
                 &serde_json::to_string(&profile).map_err(|e| e.to_string())?,
@@ -7172,7 +7307,7 @@ fn apply_sync_tunnel_profiles_in_tx(
     Ok(())
 }
 
-fn apply_ai_configs_in_tx(tx: &Transaction<'_>, configs: &[AiConfigItem]) -> Result<(), String> {
+fn apply_ai_configs_in_tx(tx: &Transaction<'_>, codec: &SecretCodec, configs: &[AiConfigItem]) -> Result<(), String> {
     tx.execute("DELETE FROM ai_configs", []).map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM ai_config", []).map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM ai_provider_configs", []).map_err(|e| e.to_string())?;
@@ -7190,6 +7325,7 @@ fn apply_ai_configs_in_tx(tx: &Transaction<'_>, configs: &[AiConfigItem]) -> Res
         if secrets.as_object().is_some_and(|object| !object.is_empty()) {
             persist_secret_in_tx(
                 tx,
+                codec,
                 &format!("{AI_SECRET_NAMESPACE_PREFIX}{}", item.id),
                 CONFIG_SECRET_BLOB_KEY,
                 &serde_json::to_string(&secrets).map_err(|e| e.to_string())?,
@@ -7300,7 +7436,11 @@ fn apply_saved_sql_in_tx(tx: &Transaction<'_>, library: &SavedSqlLibrary) -> Res
     Ok(())
 }
 
-fn persist_mq_auth_secrets_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionConfig) -> Result<(), String> {
+fn persist_mq_auth_secrets_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    codec: &SecretCodec,
+    config: &ConnectionConfig,
+) -> Result<(), String> {
     if config.db_type != DatabaseType::MessageQueue {
         delete_secret_prefix_in_tx(tx, &config.id, MQ_AUTH_SECRET_PREFIX)?;
         return Ok(());
@@ -7313,13 +7453,13 @@ fn persist_mq_auth_secrets_in_tx(tx: &rusqlite::Transaction<'_>, config: &Connec
 
     match mq_auth_kind(auth) {
         Some("none") => delete_secret_prefix_in_tx(tx, &config.id, MQ_AUTH_SECRET_PREFIX)?,
-        Some("token") => replace_mq_auth_secret_in_tx(tx, &config.id, MQ_AUTH_TOKEN_KEY, auth, "token")?,
-        Some("basic") => replace_mq_auth_secret_in_tx(tx, &config.id, MQ_AUTH_PASSWORD_KEY, auth, "password")?,
+        Some("token") => replace_mq_auth_secret_in_tx(tx, codec, &config.id, MQ_AUTH_TOKEN_KEY, auth, "token")?,
+        Some("basic") => replace_mq_auth_secret_in_tx(tx, codec, &config.id, MQ_AUTH_PASSWORD_KEY, auth, "password")?,
         Some(kind) if is_api_key_auth_kind(kind) => {
-            replace_mq_auth_secret_in_tx(tx, &config.id, MQ_AUTH_API_KEY_VALUE_KEY, auth, "value")?
+            replace_mq_auth_secret_in_tx(tx, codec, &config.id, MQ_AUTH_API_KEY_VALUE_KEY, auth, "value")?
         }
         Some("oauth2") => {
-            replace_mq_auth_secret_in_tx(tx, &config.id, MQ_AUTH_CLIENT_SECRET_KEY, auth, "clientSecret")?
+            replace_mq_auth_secret_in_tx(tx, codec, &config.id, MQ_AUTH_CLIENT_SECRET_KEY, auth, "clientSecret")?
         }
         _ => delete_secret_prefix_in_tx(tx, &config.id, MQ_AUTH_SECRET_PREFIX)?,
     }
@@ -7327,7 +7467,11 @@ fn persist_mq_auth_secrets_in_tx(tx: &rusqlite::Transaction<'_>, config: &Connec
     Ok(())
 }
 
-fn persist_mqtt_auth_secrets_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionConfig) -> Result<(), String> {
+fn persist_mqtt_auth_secrets_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    codec: &SecretCodec,
+    config: &ConnectionConfig,
+) -> Result<(), String> {
     if config.db_type != DatabaseType::Mqtt {
         delete_secret_prefix_in_tx(tx, &config.id, MQTT_AUTH_SECRET_PREFIX)?;
         return Ok(());
@@ -7345,34 +7489,41 @@ fn persist_mqtt_auth_secrets_in_tx(tx: &rusqlite::Transaction<'_>, config: &Conn
         return Ok(());
     }
     let current = auth.get("password").and_then(serde_json::Value::as_str).filter(|secret| !secret.is_empty());
-    let existing = if current.is_none() { get_secret_in_tx(tx, &config.id, MQTT_AUTH_PASSWORD_KEY)? } else { None };
+    let existing =
+        if current.is_none() { get_secret_in_tx(tx, codec, &config.id, MQTT_AUTH_PASSWORD_KEY)? } else { None };
     delete_secret_prefix_in_tx(tx, &config.id, MQTT_AUTH_SECRET_PREFIX)?;
     if let Some(secret) = current.or(existing.as_deref()) {
-        persist_secret_in_tx(tx, &config.id, MQTT_AUTH_PASSWORD_KEY, secret)?;
+        persist_secret_in_tx(tx, codec, &config.id, MQTT_AUTH_PASSWORD_KEY, secret)?;
     }
     Ok(())
 }
 
 fn replace_mq_auth_secret_in_tx(
     tx: &rusqlite::Transaction<'_>,
+    codec: &SecretCodec,
     connection_id: &str,
     key: &str,
     auth: &serde_json::Map<String, serde_json::Value>,
     field: &str,
 ) -> Result<(), String> {
     let current = auth.get(field).and_then(serde_json::Value::as_str).filter(|secret| !secret.is_empty());
-    let existing = if current.is_none() { get_secret_in_tx(tx, connection_id, key)? } else { None };
+    let existing = if current.is_none() { get_secret_in_tx(tx, codec, connection_id, key)? } else { None };
     delete_secret_prefix_in_tx(tx, connection_id, MQ_AUTH_SECRET_PREFIX)?;
     match current {
-        Some(secret) => persist_secret_in_tx(tx, connection_id, key, secret),
+        Some(secret) => persist_secret_in_tx(tx, codec, connection_id, key, secret),
         None => match existing {
-            Some(secret) => persist_secret_in_tx(tx, connection_id, key, &secret),
+            Some(secret) => persist_secret_in_tx(tx, codec, connection_id, key, &secret),
             None => Ok(()),
         },
     }
 }
 
-fn get_secret_in_tx(tx: &rusqlite::Transaction<'_>, connection_id: &str, key: &str) -> Result<Option<String>, String> {
+fn get_secret_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    codec: &SecretCodec,
+    connection_id: &str,
+    key: &str,
+) -> Result<Option<String>, String> {
     let row = tx
         .query_row(
             "SELECT secret, secret_enc FROM connection_secrets WHERE connection_id = ?1 AND key = ?2",
@@ -7385,13 +7536,14 @@ fn get_secret_in_tx(tx: &rusqlite::Transaction<'_>, connection_id: &str, key: &s
         return Ok(None);
     };
     if let Some(encrypted) = encrypted.filter(|value| !value.is_empty()) {
-        return SecretCodec::from_env_or_default()?.decrypt(connection_id, key, &encrypted).map(Some);
+        return codec.decrypt(connection_id, key, &encrypted).map(Some);
     }
     Ok((!legacy.is_empty()).then_some(legacy))
 }
 
 fn persist_mq_token_signing_secret_in_tx(
     tx: &rusqlite::Transaction<'_>,
+    codec: &SecretCodec,
     config: &ConnectionConfig,
 ) -> Result<(), String> {
     if config.db_type != DatabaseType::MessageQueue {
@@ -7404,10 +7556,14 @@ fn persist_mq_token_signing_secret_in_tx(
         return Ok(());
     };
 
-    persist_json_secret_if_present_in_tx(tx, &config.id, MQ_TOKEN_SIGNING_KEY, signing, "key")
+    persist_json_secret_if_present_in_tx(tx, codec, &config.id, MQ_TOKEN_SIGNING_KEY, signing, "key")
 }
 
-fn persist_nacos_auth_secrets_in_tx(tx: &rusqlite::Transaction<'_>, config: &ConnectionConfig) -> Result<(), String> {
+fn persist_nacos_auth_secrets_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    codec: &SecretCodec,
+    config: &ConnectionConfig,
+) -> Result<(), String> {
     if config.db_type != DatabaseType::Nacos || !config.save_password {
         delete_secret_prefix_in_tx(tx, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
         return Ok(());
@@ -7424,21 +7580,21 @@ fn persist_nacos_auth_secrets_in_tx(tx: &rusqlite::Transaction<'_>, config: &Con
         .and_then(|auth| auth.get("password").and_then(serde_json::Value::as_str))
         .filter(|secret| !secret.is_empty());
     let existing_primary = if primary.is_none() && primary_auth.is_some() {
-        get_secret_in_tx(tx, &config.id, NACOS_AUTH_PASSWORD_KEY)?
+        get_secret_in_tx(tx, codec, &config.id, NACOS_AUTH_PASSWORD_KEY)?
     } else {
         None
     };
     let existing_console = if console.is_none() && console_auth.is_some() {
-        get_secret_in_tx(tx, &config.id, NACOS_RNACOS_CONSOLE_PASSWORD_KEY)?
+        get_secret_in_tx(tx, codec, &config.id, NACOS_RNACOS_CONSOLE_PASSWORD_KEY)?
     } else {
         None
     };
     delete_secret_prefix_in_tx(tx, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
     if let Some(secret) = primary.or(existing_primary.as_deref()) {
-        persist_secret_in_tx(tx, &config.id, NACOS_AUTH_PASSWORD_KEY, secret)?;
+        persist_secret_in_tx(tx, codec, &config.id, NACOS_AUTH_PASSWORD_KEY, secret)?;
     }
     if let Some(secret) = console.or(existing_console.as_deref()) {
-        persist_secret_in_tx(tx, &config.id, NACOS_RNACOS_CONSOLE_PASSWORD_KEY, secret)?;
+        persist_secret_in_tx(tx, codec, &config.id, NACOS_RNACOS_CONSOLE_PASSWORD_KEY, secret)?;
     }
 
     Ok(())
@@ -7446,6 +7602,7 @@ fn persist_nacos_auth_secrets_in_tx(tx: &rusqlite::Transaction<'_>, config: &Con
 
 fn persist_cassandra_tls_secrets_in_tx(
     tx: &rusqlite::Transaction<'_>,
+    codec: &SecretCodec,
     config: &ConnectionConfig,
 ) -> Result<(), String> {
     if config.db_type != DatabaseType::Cassandra {
@@ -7458,12 +7615,14 @@ fn persist_cassandra_tls_secrets_in_tx(
     };
     persist_secret_in_tx(
         tx,
+        codec,
         &config.id,
         CASSANDRA_TRUSTSTORE_PASSWORD_KEY,
         tls.get("truststore_password").and_then(serde_json::Value::as_str).unwrap_or(""),
     )?;
     persist_secret_in_tx(
         tx,
+        codec,
         &config.id,
         CASSANDRA_KEYSTORE_PASSWORD_KEY,
         tls.get("keystore_password").and_then(serde_json::Value::as_str).unwrap_or(""),
@@ -7472,13 +7631,14 @@ fn persist_cassandra_tls_secrets_in_tx(
 
 fn persist_json_secret_if_present_in_tx(
     tx: &rusqlite::Transaction<'_>,
+    codec: &SecretCodec,
     connection_id: &str,
     key: &str,
     auth: &serde_json::Map<String, serde_json::Value>,
     field: &str,
 ) -> Result<(), String> {
     if let Some(secret) = auth.get(field).and_then(serde_json::Value::as_str).filter(|secret| !secret.is_empty()) {
-        persist_secret_in_tx(tx, connection_id, key, secret)?;
+        persist_secret_in_tx(tx, codec, connection_id, key, secret)?;
     }
     Ok(())
 }
@@ -7608,6 +7768,7 @@ mod tests {
     use crate::models::connection::{
         ConnectionConfig, DatabaseConnectionInfo, DatabaseType, HttpTunnelConfig, SshTunnelConfig, TransportLayerConfig,
     };
+    use crate::persistence::secret_codec::{managed_key_path, SecretKeyPolicy};
     use crate::saved_sql::{SavedSqlFile, SavedSqlFolder, SavedSqlLibrary};
     use rusqlite::{Connection, TransactionBehavior};
     use std::collections::BTreeMap;
@@ -7640,14 +7801,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_scan_cache_is_invalidated_by_state_transition() {
+    async fn migration_preflight_is_read_only() {
         let dir = temp_data_dir("migration-cache-transition");
         std::fs::create_dir_all(&dir).unwrap();
         let storage = Storage::open_unmigrated(&dir.join("dbx.db")).await.unwrap();
         storage.inspect_data_migration().await.unwrap();
         let before = storage.load_migration_state().await.unwrap();
+        assert_eq!(before.state, super::MigrationState::Pending);
         let before: serde_json::Value = serde_json::from_str(&before.counts_json).unwrap();
-        assert!(before.get("cachedScanFingerprint").is_some());
+        assert!(before.get("cachedScanFingerprint").is_none());
+        assert!(before.get("cachedScan").is_none());
+        let rows = storage
+            .with_conn(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM data_migrations", [], |row| row.get::<_, i64>(0))
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
         storage.set_migration_state(super::MigrationState::Succeeded, None, None, None, None).await.unwrap();
         let after = storage.load_migration_state().await.unwrap();
         let after: serde_json::Value = serde_json::from_str(&after.counts_json).unwrap();
@@ -7659,6 +7830,92 @@ mod tests {
     fn temp_db_path(name: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         std::env::temp_dir().join(format!("dbx-storage-{name}-{}-{stamp}.db", std::process::id()))
+    }
+
+    #[tokio::test]
+    async fn managed_data_dir_key_is_created_only_when_plaintext_migration_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("dbx.db");
+        let storage = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        storage
+            .with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO connection_secrets (connection_id, key, secret, secret_enc) VALUES ('legacy', 'password', 'old-secret', NULL)",
+                    [],
+                )
+                .map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let key_path = managed_key_path(dir.path());
+        let status = storage.inspect_data_migration().await.unwrap();
+        assert!(status.needs_migration);
+        assert!(status.key_creation_allowed);
+        assert_eq!(status.error_code.as_deref(), Some("MISSING_MANAGED_KEY"));
+        assert!(!key_path.exists());
+
+        storage.start_data_migration().await.unwrap();
+        assert!(key_path.is_file());
+        let row = storage
+            .with_conn(|conn| {
+                conn.query_row(
+                    "SELECT secret, secret_enc FROM connection_secrets WHERE connection_id = 'legacy' AND key = 'password'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .map_err(|error| error.to_string())
+            })
+            .await
+            .unwrap();
+        assert!(row.0.is_empty());
+        assert!(row.1.starts_with("dbxenc1."));
+
+        drop(storage);
+        let reopened = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        assert_eq!(reopened.get_secret("legacy", "password").await.unwrap().as_deref(), Some("old-secret"));
+    }
+
+    #[tokio::test]
+    async fn missing_managed_key_for_existing_ciphertext_never_creates_a_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("dbx.db");
+        let storage = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        storage.set_secret("connection", "password", "secret").await.unwrap();
+        let key_path = managed_key_path(dir.path());
+        std::fs::remove_file(&key_path).unwrap();
+
+        let status = storage.inspect_data_migration().await.unwrap();
+        assert!(status.needs_migration);
+        assert!(!status.key_creation_allowed);
+        assert_eq!(status.error_code.as_deref(), Some("ENCRYPTED_DATA_KEY_MISSING"));
+        assert!(!key_path.exists());
+        assert_eq!(storage.start_data_migration().await.unwrap_err(), "ENCRYPTED_DATA_KEY_MISSING");
+        assert!(!key_path.exists());
+    }
+
+    #[tokio::test]
+    async fn disabled_secret_key_creation_does_not_provision_on_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("dbx.db");
+        let storage = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir)
+            .with_secret_key_creation(false);
+
+        assert_eq!(storage.set_secret("connection", "password", "secret").await.unwrap_err(), "MISSING_MANAGED_KEY");
+        assert!(!managed_key_path(dir.path()).exists());
     }
 
     /// Data directory with an explicit mode. The process temp directory is

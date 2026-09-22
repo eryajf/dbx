@@ -19,6 +19,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post};
 use axum::Router;
 use dbx_core::connection::AppState;
+use dbx_core::persistence::secret_codec::SecretKeyPolicy;
 use dbx_core::sql_dialect::dialect_loader::{register_core_dialects, DialectPluginLoader, DialectRegistry};
 use dbx_core::sql_dialect::hot_reload::DialectHotReload;
 use dbx_core::storage::Storage;
@@ -328,8 +329,10 @@ async fn main() {
 
     let app_state = {
         let db_path = data_dir.join("dbx.db");
-        let storage =
-            Storage::open_unmigrated(&db_path).await.expect("Failed to open storage").require_persistent_secret_key();
+        let storage = Storage::open_unmigrated(&db_path)
+            .await
+            .expect("Failed to open storage")
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
 
         // Initialize core dialect registry and load external plugin dialects
         register_core_dialects();

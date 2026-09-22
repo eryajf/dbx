@@ -10250,7 +10250,7 @@ export default withEnglishFallback({
     keyFileStatus: "Açar faylı: {configured}; oxunaqlıdır: {readable}",
     persistentKeyStatus: "Davamlı açar təminatçısı: {available}",
     keyUnavailable: "Cihaz açarı əlçatan deyil. Açar zəncirinə girişə icazə verin və ya davamlı açar qurun.",
-    dockerKeyHint: "Docker/CLI üçün DBX_SECRET_KEY_FILE və davamlı məlumat həcmi tələb olunur.",
+    keyRecoveryHint: "Bu məlumat qovluğu üçün istifadə olunan orijinal açarı bərpa edin və ya mövcud məlumatları şifrələyən eyni xarici açarı konfiqurasiya edin. Onu yeni açarla əvəz etməyin.",
     progress: "Ehtiyat nüsxə yaradılır, köçürülür və yoxlanılır…",
     failed: "Köçürmə tamamlanmadı. İlkin məlumatlar saxlanıldı.",
     cleanupFailed: "Köçürmə tamamlandı, lakin ehtiyat nüsxə silinmədi.",

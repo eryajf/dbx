@@ -10131,7 +10131,7 @@ export default withEnglishFallback({
     keyFileStatus: "Anahtar dosyası yapılandırıldı: {configured}; okunabilir: {readable}",
     persistentKeyStatus: "Kalıcı anahtar sağlayıcısı: {available}",
     keyUnavailable: "Cihaz anahtarı kullanılamıyor. Anahtarlık erişimine izin verin veya kalıcı bir anahtar yapılandırın.",
-    dockerKeyHint: "Docker/CLI için DBX_SECRET_KEY_FILE ve kalıcı veri birimi gerekir.",
+    keyRecoveryHint: "Bu veri dizini için kullanılan özgün anahtarı geri yükleyin veya mevcut verileri şifreleyen aynı harici anahtarı yapılandırın. Yeni bir anahtarla değiştirmeyin.",
     progress: "Yedek oluşturuluyor, taşınıyor ve doğrulanıyor…",
     failed: "Taşıma tamamlanamadı. Orijinal veriler korundu.",
     cleanupFailed: "Taşıma tamamlandı ancak yedek silinemedi.",
