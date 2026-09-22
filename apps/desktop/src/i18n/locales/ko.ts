@@ -9741,6 +9741,8 @@ export default withEnglishFallback({
       jsonAdvice: "표시된 파일을 수정한 후 다시 시도하세요.",
       verifyAdvice: "확인이 성공할 때까지 백업을 보관하세요.",
     },
+    launching: "DBX를 시작하는 중…",
+    openBackupDir: "백업 위치 열기",
   },
   solrAdmin: {
     title: "Solr 관리",

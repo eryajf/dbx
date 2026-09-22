@@ -10333,6 +10333,8 @@ export default withEnglishFallback({
     checking: "ローカルデータのセキュリティ状態を確認しています…",
     authFailed: "DBXの認証状態を確認できません。",
     retry: "再試行",
+    launching: "DBX を起動しています…",
+    openBackupDir: "バックアップの場所を開く",
   },
   solrAdmin: {
     title: "Solr 管理",

@@ -10281,6 +10281,7 @@ export default withEnglishFallback({
       jsonAdvice: "請修復提示的檔案後重試。",
       verifyAdvice: "驗證成功前請保留備份。",
     },
+    launching: "正在啟動 DBX…",
   },
   solrAdmin: {
     title: "Solr 管理",

@@ -10283,6 +10283,8 @@ export default withEnglishFallback({
       jsonAdvice: "Repara el archivo indicado y vuelve a intentarlo.",
       verifyAdvice: "Conserva la copia hasta que la verificación sea correcta.",
     },
+    launching: "Iniciando DBX…",
+    openBackupDir: "Abrir ubicación de copia de seguridad",
   },
   solrAdmin: {
     title: "Administración de Solr",

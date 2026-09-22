@@ -10284,6 +10284,8 @@ export default withEnglishFallback({
       jsonAdvice: "Corrija o arquivo indicado e tente novamente.",
       verifyAdvice: "Mantenha o backup até a verificação ser concluída.",
     },
+    launching: "Iniciando o DBX…",
+    openBackupDir: "Abrir local do backup",
   },
   solrAdmin: {
     title: "Administração do Solr",
