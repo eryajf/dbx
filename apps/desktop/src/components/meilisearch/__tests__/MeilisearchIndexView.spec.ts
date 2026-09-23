@@ -21,6 +21,7 @@ vi.mock("@lucide/vue", () => ({
   Copy: passthrough("span"),
   FileText: passthrough("span"),
   ListChecks: passthrough("span"),
+  RefreshCcw: passthrough("span"),
   Settings: passthrough("span"),
 }));
 vi.mock("@/lib/backend/api", () => ({ meilisearchGetIndexOverview: mocks.getIndexOverview }));
