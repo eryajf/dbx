@@ -17,6 +17,7 @@ function createResizeState(options: {
   compactColumnHeaderActions?: boolean;
   indexIndicatorColumnIndexes?: number[] | ReturnType<typeof ref<number[]>>;
   headerTextWidth?: number;
+  viewportWidth?: number | ReturnType<typeof ref<number>>;
   displayValue?: (value: string | number | boolean | null, columnIndex: number) => string | number | boolean | null;
 }) {
   const compact = ref(options.compactColumnHeaderActions ?? true);
@@ -25,6 +26,7 @@ function createResizeState(options: {
   const density = ref(options.density ?? "standard");
   const rows = isRef(options.rows) ? options.rows : ref(options.rows);
   const indexIndicatorColumnIndexes = isRef(options.indexIndicatorColumnIndexes) ? options.indexIndicatorColumnIndexes : ref(options.indexIndicatorColumnIndexes ?? []);
+  const viewportWidth = isRef(options.viewportWidth) ? options.viewportWidth : ref(options.viewportWidth ?? 0);
   const state = useDataGridColumnResize({
     columns: computed(() => options.columns),
     sourceRows: computed(() => rows.value),
@@ -36,6 +38,7 @@ function createResizeState(options: {
     columnStructureSignature: computed(() => createDataGridColumnStructureSignature(options.columns, options.columnTypes)),
     measureHeaderText: () => headerTextWidth.value,
     headerMeasurementKey,
+    viewportWidth,
     displayValue: options.displayValue,
   });
   return {
@@ -85,6 +88,24 @@ describe("useDataGridColumnResize", () => {
     expect(after[1]).toBeLessThanOrEqual(DATA_GRID_COL_AUTO_FIT_MAX_WIDTH);
     expect(after[0]).toBeGreaterThanOrEqual(DATA_GRID_COL_MIN_WIDTH);
     expect(after.length).toBe(before.length);
+  });
+
+  it("distributes spare viewport width across non-user-sized columns", () => {
+    const state = createResizeState({
+      columns: ["id", "name"],
+      rows: [[1, "a"]],
+      viewportWidth: 400,
+    });
+    state.initColumnWidths();
+    const intrinsic = state.columnWidths.value.slice();
+    expect(state.renderedColumnWidths.value.reduce((sum, width) => sum + width, 0) + DATA_GRID_ROW_NUM_WIDTH).toBe(400);
+    expect(state.renderedColumnWidths.value[0]).toBeGreaterThan(intrinsic[0]);
+    expect(state.renderedColumnWidths.value[1]).toBeGreaterThan(intrinsic[1]);
+
+    state.onResizeStart(0, new MouseEvent("mousedown", { clientX: 100, cancelable: true }));
+    document.dispatchEvent(new MouseEvent("mouseup", { clientX: 100 }));
+    expect(state.renderedColumnWidths.value[0]).toBeGreaterThan(intrinsic[0]);
+    expect(state.renderedColumnWidths.value[1]).toBeGreaterThan(intrinsic[1]);
   });
 
   it("keeps auto fitted widths when the grid re-initialises for the same columns", () => {

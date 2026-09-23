@@ -52,7 +52,7 @@ export const COLUMN_WIDTH_DENSITY_PRESETS: Record<ColumnWidthDensity, ColumnWidt
     valueTextLimit: 40,
     maxWidth: 360,
     sampleRows: 50,
-    valueWidthPercentile: 100,
+    valueWidthPercentile: 90,
   },
   comfortable: {
     // 宽松：展示更多内容，valueTextLimit=120 几乎不截断，maxWidth=600
@@ -63,7 +63,7 @@ export const COLUMN_WIDTH_DENSITY_PRESETS: Record<ColumnWidthDensity, ColumnWidt
     valueTextLimit: 120,
     maxWidth: 600,
     sampleRows: 50,
-    valueWidthPercentile: 100,
+    valueWidthPercentile: 95,
   },
 };
 

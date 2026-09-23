@@ -42,6 +42,7 @@ export interface UseDataGridColumnResizeOptions {
   measureHeaderText?: (text: string) => number | undefined;
   headerMeasurementKey?: Ref<unknown>;
   rowNumberWidth?: Ref<number> | ComputedRef<number>;
+  viewportWidth?: Ref<number> | ComputedRef<number>;
   displayValue?: (value: CellValue, columnIndex: number) => CellValue;
 }
 
@@ -144,7 +145,7 @@ export function useDataGridColumnResize(options: UseDataGridColumnResizeOptions)
     event.preventDefault();
     isResizing = true;
     const startX = event.clientX;
-    const startWidth = columnWidths.value[colIdx] ?? DATA_GRID_COL_MIN_WIDTH;
+    const startWidth = renderedColumnWidths.value[colIdx] ?? DATA_GRID_COL_MIN_WIDTH;
     let pendingClientX = startX;
     let resizeFrame = 0;
 
@@ -234,7 +235,23 @@ export function useDataGridColumnResize(options: UseDataGridColumnResizeOptions)
 
   const resolvedRowNumberWidth = computed(() => options.rowNumberWidth?.value ?? DATA_GRID_ROW_NUM_WIDTH);
 
-  const renderedColumnWidths = computed(() => columnWidths.value.slice());
+  const renderedColumnWidths = computed(() => {
+    const widths = columnWidths.value.slice();
+    const viewportWidth = options.viewportWidth?.value ?? 0;
+    const surplus = viewportWidth - resolvedRowNumberWidth.value - widths.reduce((sum, width) => sum + width, 0);
+    if (surplus <= 0) return widths;
+    const flexibleIndexes = widths.flatMap((_, visibleIndex) => {
+      const actualIndex = columnIndexes.value[visibleIndex];
+      return actualIndex !== undefined && !userSizedColumnIndexes.has(actualIndex) ? [visibleIndex] : [];
+    });
+    if (flexibleIndexes.length === 0) return widths;
+    const base = Math.floor(surplus / flexibleIndexes.length);
+    let remainder = surplus - base * flexibleIndexes.length;
+    flexibleIndexes.forEach((index) => {
+      widths[index] += base + (remainder-- > 0 ? 1 : 0);
+    });
+    return widths;
+  });
 
   const totalWidth = computed(() => renderedColumnWidths.value.reduce((a, b) => a + b, 0) + resolvedRowNumberWidth.value);
 
