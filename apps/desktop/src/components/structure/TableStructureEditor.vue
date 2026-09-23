@@ -194,7 +194,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:draft": [draft: TableStructureEditorDraft | undefined];
-  saved: [commentChanged: boolean];
+  saved: [commentChanged: boolean, createdTableName?: string];
   close: [];
   openSettings: [initialTab?: string, initialSection?: string];
   /** Jump from the DDL view to the table's data tab (issue #6724). */
@@ -4414,7 +4414,7 @@ async function applyChanges() {
       await invalidateObjectDdl(ddlRequest());
       loadedMetadataFacets.clear();
     }
-    toast(t("structureEditor.saved"), 2500);
+    toast(t(isCreateMode.value ? "structureEditor.created" : "structureEditor.saved"), 2500);
     sqlPreviewPending.value = false;
     sqlPreviewLoading.value = false;
     pendingStatements.value = [];
@@ -4428,8 +4428,7 @@ async function applyChanges() {
     ddlDraft.value = null;
     if (isCreateMode.value) {
       clearDraft();
-      emit("saved", tableComment.value !== originalTableComment.value);
-      emit("close");
+      emit("saved", tableComment.value !== originalTableComment.value, newTableName.value.trim());
     } else {
       // Refresh persisted keys after successful renames/additions before metadata reloads.
       persistLocalColumnOrder(false);
