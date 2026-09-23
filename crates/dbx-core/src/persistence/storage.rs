@@ -1167,10 +1167,7 @@ impl Storage {
         self.resolve_secret_key(allow_create).map(|resolved| resolved.codec)
     }
 
-    fn secret_codec_for_write(&self, needs_key: bool) -> Result<SecretCodec, String> {
-        if needs_key {
-            return self.secret_codec(self.secret_key_creation_allowed);
-        }
+    async fn secret_codec_for_write(&self, needs_key: bool) -> Result<SecretCodec, String> {
         match self.secret_codec(false) {
             Ok(codec) => Ok(codec),
             Err(error)
@@ -1179,7 +1176,26 @@ impl Storage {
                     "MISSING_MANAGED_KEY" | "MISSING_EXTERNAL_KEY" | "KEY_PROVIDER_UNAVAILABLE"
                 ) =>
             {
-                Ok(SecretCodec::new([0u8; 32]))
+                if !needs_key {
+                    return Ok(SecretCodec::new([0u8; 32]));
+                }
+                if !self.secret_key_creation_allowed {
+                    return Err(error);
+                }
+                let has_ciphertext = self
+                    .with_conn(|conn| {
+                        conn.query_row(
+                            "SELECT EXISTS(SELECT 1 FROM connection_secrets WHERE secret_enc IS NOT NULL AND secret_enc <> '')",
+                            [],
+                            |row| row.get::<_, bool>(0),
+                        )
+                        .map_err(|error| error.to_string())
+                    })
+                    .await?;
+                if has_ciphertext {
+                    return Err("ENCRYPTED_DATA_KEY_MISSING".to_string());
+                }
+                self.secret_codec(true)
             }
             Err(error) => Err(error),
         }
@@ -3172,7 +3188,7 @@ impl Storage {
         let (sanitized, secrets) = split_ai_config_secrets(config)?;
         let json = serde_json::to_string(&sanitized).map_err(|e| e.to_string())?;
         let secrets_json = serde_json::to_string(&secrets).map_err(|e| e.to_string())?;
-        let codec = self.secret_codec_for_write(secrets.as_object().is_some_and(|object| !object.is_empty()))?;
+        let codec = self.secret_codec_for_write(secrets.as_object().is_some_and(|object| !object.is_empty())).await?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             tx.execute("INSERT OR REPLACE INTO ai_config (id, config_json) VALUES (1, ?1)", [json])
@@ -3236,7 +3252,7 @@ impl Storage {
         let secret_provider = provider.clone();
         let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
         let secrets_json = serde_json::to_string(&secrets).map_err(|e| e.to_string())?;
-        let codec = self.secret_codec_for_write(secrets.as_object().is_some_and(|object| !object.is_empty()))?;
+        let codec = self.secret_codec_for_write(secrets.as_object().is_some_and(|object| !object.is_empty())).await?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             tx.execute(
@@ -3321,7 +3337,7 @@ impl Storage {
         }
         let needs_key =
             secret_blobs.iter().any(|(_, secrets)| secrets.as_object().is_some_and(|object| !object.is_empty()));
-        let codec = self.secret_codec_for_write(needs_key)?;
+        let codec = self.secret_codec_for_write(needs_key).await?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             tx.execute("DELETE FROM ai_configs", []).map_err(|e| e.to_string())?;
@@ -3436,7 +3452,7 @@ impl Storage {
         let (sanitized_config, secrets) = split_ai_config_secrets(&config.config)?;
         let config = AiConfigItem { config: sanitized_config, ..config.clone() };
         let secret_id = config.id.clone();
-        let codec = self.secret_codec_for_write(secrets.as_object().is_some_and(|object| !object.is_empty()))?;
+        let codec = self.secret_codec_for_write(secrets.as_object().is_some_and(|object| !object.is_empty())).await?;
         self.with_conn(move |conn| {
             let json = serde_json::to_string(&config.config).map_err(|e| e.to_string())?;
             let models_json = serde_json::to_string(&config.config.models).map_err(|e| e.to_string())?;
@@ -3567,7 +3583,7 @@ impl Storage {
         }
         let needs_key =
             sanitized_profiles.iter().zip(&secret_blobs).any(|(sanitized, (_, profile))| sanitized != profile);
-        let codec = self.secret_codec_for_write(needs_key)?;
+        let codec = self.secret_codec_for_write(needs_key).await?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             tx.execute("DELETE FROM tunnel_profiles", []).map_err(|e| e.to_string())?;
@@ -5260,7 +5276,7 @@ impl Storage {
                 || plan.sync_credentials.as_ref().is_some_and(|credentials| !credentials.is_empty())
                 || plan.tunnel_secret_profiles.is_some()
                 || plan.ai_configs.is_some();
-        let codec = self.secret_codec_for_write(needs_key)?;
+        let codec = self.secret_codec_for_write(needs_key).await?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
 
@@ -5331,7 +5347,7 @@ impl Storage {
         configs: &[ConnectionConfig],
     ) -> Result<(), String> {
         let configs = configs.to_vec();
-        let codec = self.secret_codec_for_write(false)?;
+        let codec = self.secret_codec_for_write(false).await?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             let replacement_ids = configs.iter().map(|config| config.id.clone()).collect::<HashSet<_>>();
@@ -5377,7 +5393,7 @@ impl Storage {
     pub async fn save_connections(&self, configs: &[ConnectionConfig]) -> Result<(), String> {
         let configs = configs.to_vec();
         let needs_key = configs.iter().any(connection_config_has_inline_secrets);
-        let codec = self.secret_codec_for_write(needs_key)?;
+        let codec = self.secret_codec_for_write(needs_key).await?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             let replacement_ids = configs.iter().map(|config| config.id.clone()).collect::<HashSet<_>>();
@@ -5397,7 +5413,7 @@ impl Storage {
 
     pub async fn add_connection_for_mcp(&self, config: ConnectionConfig) -> Result<ConnectionConfig, String> {
         let config = config.canonicalized();
-        let codec = self.secret_codec_for_write(connection_config_has_inline_secrets(&config))?;
+        let codec = self.secret_codec_for_write(connection_config_has_inline_secrets(&config)).await?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             ensure_mcp_connection_change_allowed_in_tx(&tx, None)?;
@@ -6316,7 +6332,7 @@ impl Storage {
         let connection_id = connection_id.to_string();
         let key = key.to_string();
         let secret = secret.to_string();
-        let codec = (!secret.is_empty()).then(|| self.secret_codec(self.secret_key_creation_allowed)).transpose()?;
+        let codec = if secret.is_empty() { None } else { Some(self.secret_codec_for_write(true).await?) };
         self.with_conn(move |conn| {
             if secret.is_empty() {
                 conn.execute(
@@ -7026,7 +7042,7 @@ impl Storage {
         // Route legacy hydrated configs through the same sanitized/encrypted
         // persistence path as normal saves.  Inserting the old JSON directly
         // would briefly reintroduce plaintext credentials into dbx.db.
-        let codec = self.secret_codec(true)?;
+        let codec = self.secret_codec_for_write(true).await?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             for config in &configs {
@@ -8049,6 +8065,55 @@ mod tests {
         assert!(!key_path.exists());
         assert_eq!(storage.start_data_migration().await.unwrap_err(), "ENCRYPTED_DATA_KEY_MISSING");
         assert!(!key_path.exists());
+    }
+
+    #[tokio::test]
+    async fn secret_write_after_managed_key_loss_never_creates_a_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open_unmigrated(&directory.path().join("dbx.db"))
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        storage.set_secret("existing", "password", "original-secret").await.unwrap();
+        let key_path = managed_key_path(directory.path());
+        let original_key = std::fs::read(&key_path).unwrap();
+        std::fs::remove_file(&key_path).unwrap();
+
+        assert_eq!(
+            storage.set_secret("new", "password", "new-secret").await.unwrap_err(),
+            "ENCRYPTED_DATA_KEY_MISSING"
+        );
+        assert!(!key_path.exists());
+        assert_eq!(storage.get_secret("new", "password").await.unwrap(), None);
+
+        std::fs::write(&key_path, original_key).unwrap();
+        assert_eq!(storage.get_secret("existing", "password").await.unwrap().as_deref(), Some("original-secret"));
+        storage.set_secret("new", "password", "new-secret").await.unwrap();
+        assert_eq!(storage.get_secret("new", "password").await.unwrap().as_deref(), Some("new-secret"));
+    }
+
+    #[tokio::test]
+    async fn connection_write_after_managed_key_loss_preserves_existing_ciphertext() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open_unmigrated(&directory.path().join("dbx.db"))
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        let original = plain_connection("existing", "original-secret");
+        storage.save_connections(std::slice::from_ref(&original)).await.unwrap();
+        let key_path = managed_key_path(directory.path());
+        let original_key = std::fs::read(&key_path).unwrap();
+        std::fs::remove_file(&key_path).unwrap();
+
+        let replacement = plain_connection("replacement", "new-secret");
+        assert_eq!(storage.save_connections(&[replacement]).await.unwrap_err(), "ENCRYPTED_DATA_KEY_MISSING");
+        assert!(!key_path.exists());
+
+        std::fs::write(&key_path, original_key).unwrap();
+        let loaded = storage.load_connections().await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, original.id);
+        assert_eq!(loaded[0].password, "original-secret");
     }
 
     #[tokio::test]

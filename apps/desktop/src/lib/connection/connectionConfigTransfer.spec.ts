@@ -111,11 +111,7 @@ describe("connectionConfigTransfer", () => {
       external_config: {
         auth: { kind: "apiKey", header: "X-Api-Key", value: "api-key-secret" },
         value: "public-root",
-        nested: [
-          { auth: { kind: "apiKey", header: "Authorization", value: "nested-api-key" } },
-          { auth: { kind: "basic", username: "user", password: "basic-password", value: "public-auth" } },
-          { kind: "apiKey", value: "public-non-auth" },
-        ],
+        nested: [{ auth: { kind: "apiKey", header: "Authorization", value: "nested-api-key" } }, { auth: { kind: "basic", username: "user", password: "basic-password", value: "public-auth" } }, { kind: "apiKey", value: "public-non-auth" }],
       },
     });
 
@@ -124,11 +120,7 @@ describe("connectionConfigTransfer", () => {
     expect(exported.external_config).toEqual({
       auth: { kind: "apiKey", header: "X-Api-Key", value: "" },
       value: "public-root",
-      nested: [
-        { auth: { kind: "apiKey", header: "Authorization", value: "" } },
-        { auth: { kind: "basic", username: "user", password: "", value: "public-auth" } },
-        { kind: "apiKey", value: "public-non-auth" },
-      ],
+      nested: [{ auth: { kind: "apiKey", header: "Authorization", value: "" } }, { auth: { kind: "basic", username: "user", password: "", value: "public-auth" } }, { kind: "apiKey", value: "public-non-auth" }],
     });
     expect(source.external_config).toMatchObject({ auth: { value: "api-key-secret" } });
     expect(JSON.stringify(exported)).not.toContain("api-key-secret");
