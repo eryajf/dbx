@@ -232,9 +232,9 @@ export function useDataGridColumnResize(options: UseDataGridColumnResizeOptions)
     persistColumnWidths();
   }
 
-  const renderedColumnWidths = computed(() => columnWidths.value.slice());
-
   const resolvedRowNumberWidth = computed(() => options.rowNumberWidth?.value ?? DATA_GRID_ROW_NUM_WIDTH);
+
+  const renderedColumnWidths = computed(() => columnWidths.value.slice());
 
   const totalWidth = computed(() => renderedColumnWidths.value.reduce((a, b) => a + b, 0) + resolvedRowNumberWidth.value);
 
