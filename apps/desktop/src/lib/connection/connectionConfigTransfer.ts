@@ -105,6 +105,8 @@ function scrubExternalConfig(value: unknown): unknown {
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     if (/password|passphrase|secret|token|api[_-]?key|clientsecret|accesstoken|privatekey/i.test(key)) {
       output[key] = typeof child === "string" ? "" : null;
+    } else if (key === "auth" && child && typeof child === "object" && !Array.isArray(child) && (child as Record<string, unknown>).kind === "apiKey") {
+      output[key] = { ...(scrubExternalConfig(child) as Record<string, unknown>), value: "" };
     } else {
       output[key] = scrubExternalConfig(child);
     }

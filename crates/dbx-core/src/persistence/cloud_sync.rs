@@ -211,8 +211,8 @@ pub struct SensitiveSyncPayload {
     /// WebDAV and GitHub/Gitee credentials are included only inside the
     /// passphrase-protected payload. They are re-wrapped with the destination
     /// device key on import and never appear in the public snapshot.
-    #[serde(default)]
-    pub sync_credentials: Vec<SyncCredentialSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_credentials: Option<Vec<SyncCredentialSnapshot>>,
     // None = legacy snapshot (fall through to ai_config migration),
     // Some(vec) = explicit state (empty vec means all configs were deleted)
     pub ai_configs: Option<Vec<AiConfigItem>>,
@@ -520,7 +520,7 @@ pub async fn apply_sync_snapshot(
                 !payload.plugin_secrets_included,
                 ai_configs,
                 payload.tunnel_profiles.clone(),
-                Some(payload.sync_credentials.clone()),
+                payload.sync_credentials.clone(),
             )
         } else {
             (None, false, None, None, None)
@@ -1477,7 +1477,7 @@ async fn build_sensitive_payload_with_options(
     // empty list would produce a valid-looking snapshot that clears AI
     // configurations on the destination during restore.
     let ai_configs = if options.include_ai_secrets { Some(storage.load_ai_configs().await?) } else { None };
-    let sync_credentials = if options.include_secrets { load_sync_credentials(storage).await? } else { Vec::new() };
+    let sync_credentials = if options.include_secrets { Some(load_sync_credentials(storage).await?) } else { None };
     Ok(SensitiveSyncPayload {
         connection_secrets,
         plugin_secrets_included: options.include_plugin_secrets,
@@ -1773,7 +1773,7 @@ fn validate_sensitive_payload(payload: &SensitiveSyncPayload) -> Result<(), Stri
         }
     }
     let mut seen_accounts = HashSet::new();
-    for credential in &payload.sync_credentials {
+    for credential in payload.sync_credentials.iter().flatten() {
         let account = credential.account.trim();
         if account.is_empty() || account.len() > 512 || account.contains('\0') {
             return Err("Synced credentials contain an invalid account name.".to_string());
@@ -2263,6 +2263,7 @@ mod tests {
     use crate::models::connection::{
         default_redis_key_separator, ConnectionConfig, DatabaseType, SshTunnelConfig, TransportLayerConfig,
     };
+    use crate::persistence::secret_codec::{managed_key_path, SecretKeyPolicy};
     use crate::storage::Storage;
 
     fn make_test_config(name: &str, is_default: bool) -> AiConfigItem {
@@ -2946,7 +2947,7 @@ mod tests {
                     secret: "hop-secret".to_string(),
                 },
             ],
-            sync_credentials: vec![],
+            sync_credentials: Some(vec![]),
             ai_configs: None,
             ai_config: None,
         };
@@ -2967,7 +2968,7 @@ mod tests {
                 key: "password".to_string(),
                 secret: "secret".to_string(),
             }],
-            sync_credentials: vec![],
+            sync_credentials: Some(vec![]),
             ai_configs: None,
             ai_config: None,
         };
@@ -2985,7 +2986,7 @@ mod tests {
                 key: "password".to_string(),
                 secret: "legacy-secret".to_string(),
             }],
-            sync_credentials: vec![],
+            sync_credentials: Some(vec![]),
             ai_configs: None,
             ai_config: None,
         };
@@ -3647,6 +3648,188 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_sync_payload_preserves_credentials_but_explicit_empty_clears_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("dbx.db");
+        let target = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        let webdav = WebDavConfig {
+            endpoint: "https://dav.example.test".to_string(),
+            username: Some("alice".to_string()),
+            password: None,
+            remote_path: None,
+        };
+        let snippet = SnippetSyncConfig {
+            provider: SnippetProvider::GitHub,
+            instance_url: None,
+            token: None,
+            snippet_id: None,
+            replace_legacy_snippet: false,
+        };
+        save_webdav_password(&target, &webdav, "local-password").await.unwrap();
+        save_snippet_token(&target, &snippet, "local-token").await.unwrap();
+        let mut snapshot = build_sync_snapshot(&target, "test", None, None).await.unwrap();
+        snapshot.schema_version = LEGACY_SNAPSHOT_SCHEMA_VERSION;
+        let legacy_json = r#"{"connectionSecrets":[]}"#;
+        let mut payload: SensitiveSyncPayload = serde_json::from_str(legacy_json).unwrap();
+        assert!(payload.sync_credentials.is_none());
+        assert!(serde_json::to_value(&payload).unwrap().get("syncCredentials").is_none());
+        snapshot.encrypted_secrets = Some(super::encrypt_text_with_secret(legacy_json, "transport-pass").unwrap());
+        apply_sync_snapshot(
+            &target,
+            &snapshot,
+            ApplySnapshotOptions { secrets_passphrase: Some("transport-pass"), restore_secrets: true },
+        )
+        .await
+        .unwrap();
+        drop(target);
+        let target = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+
+        payload.sync_credentials = Some(vec![]);
+        assert_eq!(serde_json::to_value(&payload).unwrap()["syncCredentials"], serde_json::json!([]));
+        snapshot.encrypted_secrets = Some(encrypt_sensitive_payload(&payload, "transport-pass").unwrap());
+        for restore_secrets in [false, true] {
+            apply_sync_snapshot(
+                &target,
+                &snapshot,
+                ApplySnapshotOptions { secrets_passphrase: Some("transport-pass"), restore_secrets },
+            )
+            .await
+            .unwrap();
+            let mut restored_webdav = webdav.clone();
+            resolve_webdav_password(&target, &mut restored_webdav).await.unwrap();
+            assert_eq!(restored_webdav.password.as_deref(), (!restore_secrets).then_some("local-password"));
+            let mut restored_snippet = snippet.clone();
+            resolve_snippet_token(&target, &mut restored_snippet).await.unwrap();
+            assert_eq!(restored_snippet.token.as_deref(), (!restore_secrets).then_some("local-token"));
+        }
+        drop(target);
+        let target = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        let mut restored_webdav = webdav;
+        resolve_webdav_password(&target, &mut restored_webdav).await.unwrap();
+        assert_eq!(restored_webdav.password, None);
+        let mut restored_snippet = snippet;
+        resolve_snippet_token(&target, &mut restored_snippet).await.unwrap();
+        assert_eq!(restored_snippet.token, None);
+    }
+
+    #[tokio::test]
+    async fn metadata_only_sync_roundtrip_preserves_public_url_params_and_target_secrets() {
+        let source_directory = tempfile::tempdir().unwrap();
+        let target_directory = tempfile::tempdir().unwrap();
+        let source = Storage::open_unmigrated(&source_directory.path().join("dbx.db"))
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        let target_path = target_directory.path().join("dbx.db");
+        let target = Storage::open_unmigrated(&target_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        let mut fresh = postgres_connection("fresh", "source-password");
+        fresh.url_params = Some("applicationName=dbx&PASSWORD=source-secret&sslmode=require".to_string());
+        let mut existing = fresh.clone();
+        existing.id = "existing".to_string();
+        source.save_connections(&[fresh, existing.clone()]).await.unwrap();
+        existing.password = "target-password".to_string();
+        existing.url_params = Some("applicationName=local&PASSWORD=target-secret".to_string());
+        target.save_connections(std::slice::from_ref(&existing)).await.unwrap();
+        target.set_secret("existing", "init_script", "target-script").await.unwrap();
+
+        let snapshot = build_sync_snapshot(&source, "test", None, None).await.unwrap();
+        assert!(snapshot.encrypted_secrets.is_none());
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        assert!(!serialized.contains("source-secret"));
+        assert!(!serialized.contains("source-password"));
+        let snapshot = serde_json::from_str(&serialized).unwrap();
+        apply_sync_snapshot(
+            &target,
+            &snapshot,
+            ApplySnapshotOptions { secrets_passphrase: None, restore_secrets: false },
+        )
+        .await
+        .unwrap();
+        drop(target);
+        let target = Storage::open_unmigrated(&target_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        let loaded = target.load_connections().await.unwrap();
+        let fresh = loaded.iter().find(|config| config.id == "fresh").unwrap();
+        assert_eq!(fresh.url_params.as_deref(), Some("applicationName=dbx&PASSWORD=&sslmode=require"));
+        assert!(fresh.password.is_empty());
+        let restored = loaded.iter().find(|config| config.id == "existing").unwrap();
+        assert_eq!(restored.password, "target-password");
+        assert_eq!(restored.url_params, existing.url_params);
+        assert_eq!(restored.init_script.as_deref(), Some("target-script"));
+        let database = rusqlite::Connection::open(&target_path).unwrap();
+        let (plaintext, encrypted): (String, String) = database
+            .query_row(
+                "SELECT secret, secret_enc FROM connection_secrets WHERE connection_id = 'fresh' AND key = 'url_params'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(plaintext.is_empty());
+        assert!(encrypted.starts_with("dbxenc1."));
+
+        let locked_directory = tempfile::tempdir().unwrap();
+        let locked_target = Storage::open_unmigrated(&locked_directory.path().join("dbx.db"))
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir)
+            .with_secret_key_creation(false);
+        assert_eq!(
+            apply_sync_snapshot(
+                &locked_target,
+                &snapshot,
+                ApplySnapshotOptions { secrets_passphrase: None, restore_secrets: false },
+            )
+            .await
+            .unwrap_err(),
+            "MISSING_MANAGED_KEY"
+        );
+        assert!(locked_target.load_connections().await.unwrap().is_empty());
+        assert!(!managed_key_path(locked_directory.path()).exists());
+
+        let mut without_url_params = snapshot.clone();
+        for config in &mut without_url_params.connections {
+            config.url_params = None;
+        }
+        apply_sync_snapshot(
+            &locked_target,
+            &without_url_params,
+            ApplySnapshotOptions { secrets_passphrase: None, restore_secrets: false },
+        )
+        .await
+        .unwrap();
+        assert_eq!(locked_target.load_connections().await.unwrap().len(), 2);
+        assert!(!managed_key_path(locked_directory.path()).exists());
+
+        let unlocked_target = locked_target.with_secret_key_creation(true);
+        apply_sync_snapshot(
+            &unlocked_target,
+            &snapshot,
+            ApplySnapshotOptions { secrets_passphrase: None, restore_secrets: false },
+        )
+        .await
+        .unwrap();
+        assert!(managed_key_path(locked_directory.path()).exists());
+        assert!(unlocked_target.load_connections().await.unwrap().iter().all(|config| {
+            config.url_params.as_deref() == Some("applicationName=dbx&PASSWORD=&sslmode=require")
+                && config.password.is_empty()
+        }));
+    }
+
+    #[tokio::test]
     async fn sync_credentials_are_rewrapped_for_the_destination_device() {
         let source = Storage::open(&temp_db_path("sync-global-credentials-source")).await.unwrap();
         let webdav = WebDavConfig {
@@ -3671,9 +3854,10 @@ mod tests {
         assert!(!public_json.contains("github-token"));
         let payload =
             decrypt_sensitive_payload(snapshot.encrypted_secrets.as_ref().unwrap(), "transport-pass").unwrap();
-        assert_eq!(payload.sync_credentials.len(), 2);
-        assert!(payload.sync_credentials.iter().any(|credential| credential.secret == "webdav-secret"));
-        assert!(payload.sync_credentials.iter().any(|credential| credential.secret == "github-token"));
+        let credentials = payload.sync_credentials.as_ref().unwrap();
+        assert_eq!(credentials.len(), 2);
+        assert!(credentials.iter().any(|credential| credential.secret == "webdav-secret"));
+        assert!(credentials.iter().any(|credential| credential.secret == "github-token"));
 
         let target_path = temp_db_path("sync-global-credentials-target");
         let target = Storage::open(&target_path).await.unwrap();
@@ -3707,7 +3891,7 @@ mod tests {
         // depend on a second live provider.
         let mut empty_snapshot = snapshot.clone();
         let mut empty_payload = payload.clone();
-        empty_payload.sync_credentials.clear();
+        empty_payload.sync_credentials = Some(vec![]);
         empty_snapshot.encrypted_secrets = Some(encrypt_sensitive_payload(&empty_payload, "transport-pass").unwrap());
         apply_sync_snapshot(
             &target,
@@ -3954,7 +4138,7 @@ mod tests {
                     secret: "legacy-console-secret".to_string(),
                 },
             ],
-            sync_credentials: vec![],
+            sync_credentials: Some(vec![]),
             ai_configs: None,
             ai_config: None,
             tunnel_profiles: None,
@@ -4016,7 +4200,7 @@ mod tests {
         let payload = SensitiveSyncPayload {
             plugin_secrets_included: true,
             connection_secrets: vec![],
-            sync_credentials: vec![],
+            sync_credentials: Some(vec![]),
             ai_configs: None,
             ai_config: None,
             tunnel_profiles: None,
@@ -4038,7 +4222,7 @@ mod tests {
         let payload = SensitiveSyncPayload {
             plugin_secrets_included: true,
             connection_secrets: vec![],
-            sync_credentials: vec![],
+            sync_credentials: Some(vec![]),
             ai_configs: Some(vec![]),
             ai_config: None,
             tunnel_profiles: None,
@@ -4065,7 +4249,7 @@ mod tests {
         let payload = SensitiveSyncPayload {
             plugin_secrets_included: true,
             connection_secrets: vec![],
-            sync_credentials: vec![],
+            sync_credentials: Some(vec![]),
             ai_configs: Some(vec![cfg, cursor_cfg]),
             ai_config: None,
             tunnel_profiles: None,
@@ -4099,7 +4283,7 @@ mod tests {
         let payload = SensitiveSyncPayload {
             plugin_secrets_included: true,
             connection_secrets: vec![],
-            sync_credentials: vec![],
+            sync_credentials: Some(vec![]),
             ai_configs: None,
             ai_config: Some(legacy_config),
             tunnel_profiles: None,

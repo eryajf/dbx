@@ -509,6 +509,50 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_platform_probe_does_not_create_a_fallback_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("secret.key");
+        let result = SecretCodec::resolve_platform_default(Some(path.clone()), false, |allow_create| {
+            assert!(!allow_create);
+            None
+        });
+        assert!(matches!(result, Err(error) if error == "KEY_PROVIDER_UNAVAILABLE"));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn unavailable_platform_creation_uses_a_stable_fallback_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("secret.key");
+        let created = SecretCodec::resolve_platform_default(Some(path.clone()), true, |allow_create| {
+            assert!(allow_create);
+            None
+        })
+        .unwrap();
+        let envelope = created.codec.encrypt("connection", "password", "secret").unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let reopened = SecretCodec::resolve_platform_default(Some(path.clone()), true, |_| {
+            panic!("an existing compatibility key must take precedence over the platform provider")
+        })
+        .unwrap();
+        assert_eq!(reopened.source, SecretKeySource::ManagedDataDir);
+        assert_eq!(reopened.codec.decrypt("connection", "password", &envelope).unwrap(), "secret");
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn unavailable_platform_provider_does_not_replace_a_corrupt_fallback_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("secret.key");
+        std::fs::write(&path, "\n").unwrap();
+        for allow_create in [false, true] {
+            let result = SecretCodec::resolve_platform_default(Some(path.clone()), allow_create, |_| None);
+            assert!(matches!(result, Err(error) if error == "SECRET_KEY_INVALID"));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "\n");
+        }
+    }
+
+    #[test]
     fn platform_default_falls_back_after_corrupt_compatibility_file() {
         let dir = tempfile::tempdir().unwrap();
         let compatibility_path = dir.path().join("secret.key");

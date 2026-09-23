@@ -106,6 +106,36 @@ describe("connectionConfigTransfer", () => {
     expect(scrubTunnelProfileForPlaintextExport({ type: "http_tunnel", id: "t", url: "https://example", token: "token" })).toMatchObject({ id: "t", token: "" });
   });
 
+  it("redacts structured API key auth without removing unrelated values or mutating the source", () => {
+    const source = conn("mq", "MQ", {
+      external_config: {
+        auth: { kind: "apiKey", header: "X-Api-Key", value: "api-key-secret" },
+        value: "public-root",
+        nested: [
+          { auth: { kind: "apiKey", header: "Authorization", value: "nested-api-key" } },
+          { auth: { kind: "basic", username: "user", password: "basic-password", value: "public-auth" } },
+          { kind: "apiKey", value: "public-non-auth" },
+        ],
+      },
+    });
+
+    const exported = scrubConnectionForPlaintextExport(source);
+
+    expect(exported.external_config).toEqual({
+      auth: { kind: "apiKey", header: "X-Api-Key", value: "" },
+      value: "public-root",
+      nested: [
+        { auth: { kind: "apiKey", header: "Authorization", value: "" } },
+        { auth: { kind: "basic", username: "user", password: "", value: "public-auth" } },
+        { kind: "apiKey", value: "public-non-auth" },
+      ],
+    });
+    expect(source.external_config).toMatchObject({ auth: { value: "api-key-secret" } });
+    expect(JSON.stringify(exported)).not.toContain("api-key-secret");
+    expect(JSON.stringify(exported)).not.toContain("nested-api-key");
+    expect(JSON.stringify(exported)).not.toContain("basic-password");
+  });
+
   it("parses legacy arrays and dbx-config payloads without inventing a layout", () => {
     expect(parseConnectionConfigObject([conn("a", "A")])).toEqual({ connections: [conn("a", "A")] });
     expect(parseConnectionConfigObject({ format: "dbx-config", connections: [conn("a", "A")] })).toEqual({ connections: [conn("a", "A")] });

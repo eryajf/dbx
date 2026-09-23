@@ -5251,13 +5251,15 @@ fn delete_unreferenced_connection_secrets_in_tx(
 
 impl Storage {
     pub(crate) async fn apply_sync_import_transaction(&self, plan: SyncImportPlan) -> Result<(), String> {
-        let needs_key = plan
-            .connection_secrets
-            .as_ref()
-            .is_some_and(|secrets| secrets.iter().any(|secret| !secret.secret.is_empty()))
-            || plan.sync_credentials.as_ref().is_some_and(|credentials| !credentials.is_empty())
-            || plan.tunnel_secret_profiles.is_some()
-            || plan.ai_configs.is_some();
+        let needs_key =
+            plan.connections.iter().any(|config| config.url_params.as_deref().is_some_and(|value| !value.is_empty()))
+                || plan
+                    .connection_secrets
+                    .as_ref()
+                    .is_some_and(|secrets| secrets.iter().any(|secret| !secret.secret.is_empty()))
+                || plan.sync_credentials.as_ref().is_some_and(|credentials| !credentials.is_empty())
+                || plan.tunnel_secret_profiles.is_some()
+                || plan.ai_configs.is_some();
         let codec = self.secret_codec_for_write(needs_key)?;
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
@@ -7213,6 +7215,11 @@ fn apply_sync_connections_in_tx(
             persist_secret_in_tx(tx, codec, &config.id, "password", "")?;
             delete_secret_prefix_in_tx(tx, &config.id, NACOS_AUTH_SECRET_PREFIX)?;
         }
+        if let Some(url_params) = &config.url_params {
+            if !connection_secret_in_tx_exists(tx, &config.id, URL_PARAMS_SECRET_KEY)? {
+                persist_secret_in_tx(tx, codec, &config.id, URL_PARAMS_SECRET_KEY, url_params)?;
+            }
+        }
         let sanitized = sanitized_connection_config(&config);
         let json = serde_json::to_string(&sanitized).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO connections (id, config_json) VALUES (?1, ?2)", params![config.id, json])
@@ -7883,6 +7890,144 @@ mod tests {
             .unwrap()
             .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
         assert_eq!(reopened.get_secret("legacy", "password").await.unwrap().as_deref(), Some("old-secret"));
+    }
+
+    #[tokio::test]
+    async fn secret_migration_write_failure_rolls_back_all_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open_unmigrated(&directory.path().join("dbx.db"))
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        storage
+            .with_conn(|conn| {
+                conn.execute_batch(
+                    "INSERT INTO connection_secrets (connection_id, key, secret) VALUES
+                     ('first', 'password', 'first-secret'), ('second', 'password', 'second-secret');
+                     CREATE TRIGGER reject_second_encryption BEFORE UPDATE ON connection_secrets
+                     WHEN (SELECT COUNT(*) FROM connection_secrets WHERE secret_enc IS NOT NULL) > 0
+                     BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+                )
+                .map_err(|error| error.to_string())?;
+                let codec = super::SecretCodec::new([7u8; 32]);
+                let error = super::migrate_legacy_connection_secrets_sync(conn, &codec).unwrap_err();
+                assert!(error.contains("injected write failure"));
+                let unchanged: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM connection_secrets WHERE secret <> '' AND secret_enc IS NULL",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(unchanged, 2);
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn secret_migration_late_failure_restores_backup_and_retries_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("dbx.db");
+        let storage = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        storage
+            .with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO connection_secrets (connection_id, key, secret) VALUES ('legacy', 'password', 'old-secret')",
+                    [],
+                )
+                .map_err(|error| error.to_string())
+            })
+            .await
+            .unwrap();
+        let legacy_path = directory.path().join("connections.json");
+        std::fs::write(&legacy_path, "invalid json").unwrap();
+        assert!(storage.start_data_migration().await.unwrap_err().contains("connections.json"));
+        assert_eq!(std::fs::read_to_string(&legacy_path).unwrap(), "invalid json");
+        assert!(!directory.path().join("connections.json.bak").exists());
+        let record = storage.load_migration_state().await.unwrap();
+        assert_eq!(record.state, super::MigrationState::Failed);
+        assert!(std::path::Path::new(record.backup_path.as_ref().unwrap()).join("dbx.db").is_file());
+        storage
+            .with_conn(|conn| {
+                let row: (String, Option<String>) = conn
+                    .query_row(
+                        "SELECT secret, secret_enc FROM connection_secrets WHERE connection_id = 'legacy'",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(row, ("old-secret".to_string(), None));
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(storage.cleanup_migration_backups().await.is_err());
+        drop(storage);
+
+        std::fs::write(&legacy_path, "[]").unwrap();
+        let reopened = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        reopened.retry_data_migration().await.unwrap();
+        assert_eq!(reopened.get_secret("legacy", "password").await.unwrap().as_deref(), Some("old-secret"));
+        assert!(!legacy_path.exists());
+        assert!(directory.path().join("connections.json.bak").exists());
+        assert!(reopened.inspect_data_migration().await.unwrap().is_ready());
+    }
+
+    #[tokio::test]
+    async fn secret_migration_running_state_resumes_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("dbx.db");
+        let storage = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        storage.set_secret("legacy", "password", "secret").await.unwrap();
+        let backup = storage.create_migration_backup().await.unwrap();
+        storage.set_migration_state(super::MigrationState::Running, Some(&backup), None, None, None).await.unwrap();
+        drop(storage);
+        let reopened = Storage::open_unmigrated(&database_path)
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        let status = reopened.inspect_data_migration().await.unwrap();
+        assert_eq!(status.state, super::MigrationState::Running);
+        assert!(!status.is_ready());
+        reopened.retry_data_migration().await.unwrap();
+        assert!(reopened.inspect_data_migration().await.unwrap().is_ready());
+        assert_eq!(reopened.get_secret("legacy", "password").await.unwrap().as_deref(), Some("secret"));
+    }
+
+    #[tokio::test]
+    async fn secret_migration_rejects_wrong_or_invalid_managed_keys_without_replacing_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open_unmigrated(&directory.path().join("dbx.db"))
+            .await
+            .unwrap()
+            .with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
+        storage.set_secret("connection", "password", "secret").await.unwrap();
+        let key_path = managed_key_path(directory.path());
+        let original = std::fs::read(&key_path).unwrap();
+        for (material, expected) in [("00".repeat(32), "SECRET_KEY_MISMATCH"), ("\n".to_string(), "SECRET_KEY_INVALID")]
+        {
+            std::fs::write(&key_path, &material).unwrap();
+            let status = storage.inspect_data_migration().await.unwrap();
+            assert!(!status.is_ready());
+            assert!(!status.key_creation_allowed);
+            assert_eq!(status.error_code.as_deref(), Some(expected));
+            assert!(storage.get_secret("connection", "password").await.is_err());
+            assert_eq!(storage.start_data_migration().await.unwrap_err(), expected);
+            assert_eq!(std::fs::read_to_string(&key_path).unwrap(), material);
+        }
+        std::fs::write(&key_path, original).unwrap();
+        assert_eq!(storage.get_secret("connection", "password").await.unwrap().as_deref(), Some("secret"));
     }
 
     #[tokio::test]
@@ -11756,12 +11901,16 @@ mod tests {
 
     #[tokio::test]
     async fn sync_import_transaction_rolls_back_metadata_when_later_write_fails() {
-        let db = temp_db_path("sync-import-atomic");
-        let storage = Storage::open(&db).await.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let db = directory.path().join("dbx.db");
+        let storage =
+            Storage::open_unmigrated(&db).await.unwrap().with_secret_key_policy(SecretKeyPolicy::ManagedDataDir);
         storage.save_connections(&[plain_connection("existing", "old-secret")]).await.unwrap();
         let settings = storage.load_desktop_settings().await.unwrap();
+        let mut incoming = plain_connection("incoming", "new-secret");
+        incoming.url_params = Some("applicationName=dbx&sslmode=require".to_string());
         let plan = SyncImportPlan {
-            connections: vec![plain_connection("incoming", "new-secret")],
+            connections: vec![incoming],
             tunnel_profiles: Some(Vec::new()),
             tunnel_secret_profiles: None,
             sidebar_layout: None,
@@ -11801,8 +11950,7 @@ mod tests {
         assert_eq!(connections.len(), 1);
         assert_eq!(connections[0].id, "existing");
         assert_eq!(storage.get_secret("existing", "password").await.unwrap().as_deref(), Some("old-secret"));
-
-        std::fs::remove_file(&db).ok();
+        assert_eq!(storage.get_secret("incoming", "url_params").await.unwrap(), None);
     }
 
     #[test]
