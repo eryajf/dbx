@@ -151,7 +151,11 @@ export function useDataGridColumnFilters(options: UseDataGridColumnFiltersOption
     const query = state.localFilterSearch.value.trim().toLowerCase();
     const matchingOptions = localFilterAllOptions.value.filter((option) => !query || option.label.toLowerCase().includes(query));
     // Sort before limiting so frequent values outside the default first 500 remain discoverable.
-    return sortDataGridLocalFilterOptions(matchingOptions, localFilterSort.value).slice(0, 500);
+    // buildDataGridLocalFilterOptions already returns value-ascending options, so the default
+    // sort state skips the re-sort instead of re-running it on every search keystroke.
+    const sort = localFilterSort.value;
+    const sorted = sort.field === "value" && sort.direction === "asc" ? matchingOptions : sortDataGridLocalFilterOptions(matchingOptions, sort);
+    return sorted.slice(0, 500);
   });
   const localFilterTypedValue = computed(() => state.localFilterSearch.value.trim());
   const localFilterDraftIsAllSelected = computed(() => {
