@@ -2581,6 +2581,15 @@ html.theme-vscode .app-tab-scroll.wrap-mode .app-tab-pill[data-active-tab="false
 .app-panel-gutter .panel-resize-handle--left::before {
   transform: translate(calc(-50% - 2.5px), -50%);
 }
+/* The vertical editor tab bar is its own overflow-hidden clipping context, so
+   its handles keep the grip dots just inside the bar edge instead of the
+   gutter center, where they would be clipped away entirely. */
+.app-panel-gutter .app-tab-bar > .panel-resize-handle--right::before {
+  transform: translate(calc(-50% - 2.5px), -50%);
+}
+.app-panel-gutter .app-tab-bar > .panel-resize-handle--left::before {
+  transform: translate(calc(-50% + 2.5px), -50%);
+}
 .panel-resize-handle::before {
   position: absolute;
   top: 50%;
