@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, h, nextTick, onMounted, onUnmounted, reactive, ref, toRaw, watch, type Component } from "vue";
 import { uuid } from "@/lib/common/utils";
+import { deferUntilPanelResizeEnd } from "@/lib/app/panelResizeState";
 import { useI18n } from "vue-i18n";
 import { translateBackendError } from "@/i18n/backend-errors";
 import {
@@ -5076,6 +5077,15 @@ function hasOverflowingLabel(element: HTMLElement | null, selector: string): boo
 async function measureResponsiveControls(force = false) {
   const panel = promptPanelRef.value;
   if (!panel) return;
+  // Reading clientWidth/scrollWidth here forces a document-wide synchronous
+  // relayout, and the AI panel divider drag fires resize events every frame.
+  // Skip measurements while the drag is in flight and re-measure once at the end.
+  if (
+    deferUntilPanelResizeEnd(() => {
+      void measureResponsiveControls(force);
+    })
+  )
+    return;
   const panelWidth = panel.clientWidth;
   if (!force && lastResponsiveControlWidth === panelWidth) return;
 
