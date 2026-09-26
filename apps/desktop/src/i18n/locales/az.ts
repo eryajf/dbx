@@ -5838,6 +5838,15 @@ export default withEnglishFallback({
   },
   history: {
     title: "Tarixçə",
+    sources: { all: "Hamısı", sql: "SQL sorğuları", mcp: "MCP çağırışları" },
+    refresh: "Yenilə",
+    mcp: {
+      legacyResponse: "Bu köhnə qeyd yalnız xülasə saxlayır. İlkin cavabı bərpa etmək mümkün deyil. Yenilənmiş MCP xidməti ilə yeni çağırışlar cavab məzmununu saxlayır.",
+      request: "Sorğu parametrləri",
+      response: "Cavab məzmunu",
+      toolSearch: "MCP alət adına görə süzgəcdən keçir...",
+      allTools: "Bütün alətlər",
+    },
     search: "Tarixçədə axtar...",
     conversationSearch: "Söhbətləri axtar...",
     empty: "Hələ tarixçə yoxdur",
@@ -5861,6 +5870,7 @@ export default withEnglishFallback({
     rollbackSuccess: "Geri qaytarma icra edildi",
     rollbackFailed: "Geri qaytarma alınmadı: {message}",
     confirmDelete: "Bu tarixçə qeydi silinsin?",
+    confirmClearSource: "{source} tarixçəsinin hamısını təmizləyəsiniz?",
     confirmClear: "Bütün tarixçə təmizlənsin?",
     emptyFiltered: "Cari süzgəclərə uyğun tarixçə yoxdur",
     loadMore: "Daha çox yüklə",
@@ -5882,6 +5892,7 @@ export default withEnglishFallback({
       query: "Sorğular",
       data_change: "Məlumat dəyişiklikləri",
       schema_change: "Sxem dəyişiklikləri",
+      mcp_success: "Uğurlu",
       failed: "Uğursuz oldu",
     },
     dateRange: {
@@ -5912,6 +5923,7 @@ export default withEnglishFallback({
       redis_command: "Redis",
     },
     detail: {
+      mcpTool: "MCP aləti",
       kind: "Növ",
       operation: "Əməliyyat",
       connection: "Əlaqə",
@@ -6997,6 +7009,11 @@ export default withEnglishFallback({
   },
   settings: {
     historyRetentionLimit: "Sorğu tarixçəsinin saxlanma həddi",
+    mcpHistoryRetentionLimit: "MCP tarixçəsinin saxlanma həddi",
+    mcpHistoryRetentionDescription: "MCP çağırış tarixçəsinin sayını SQL tarixçəsindən müstəqil idarə edir.",
+    mcpHistoryCleanup: "MCP tarixçəsini indi təmizlə",
+    mcpHistoryCleanupCompleted: "{count} MCP tarixçə qeydi silindi.",
+    mcpHistoryCleanupFailed: "MCP tarixçəsi təmizlənə bilmədi: {error}",
     historyRetentionDescription: "Hədd azaldıldıqda köhnə qeydlər növbəti sorğu tarixçəsi yazıldıqda silinir. Həddi artırmaq və ya Limitsiz seçmək silinmiş qeydləri bərpa etmir. Bütün bağlantılara və icra mənbələrinə tətbiq olunur.",
     historyRetentionUnlimited: "Limitsiz",
     historyRetentionLoadFailed: "Tarixçənin saxlanma ayarı yüklənmədi: {error}",

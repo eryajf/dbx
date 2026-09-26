@@ -2272,6 +2272,19 @@ export async function saveHistoryRetentionLimit(limit: number): Promise<void> {
   if (!res.ok) throw await backendResponseError(res);
 }
 
+export async function loadMcpHistoryRetentionLimit(): Promise<number> {
+  return get("/api/app-settings/mcp-history-retention-limit");
+}
+
+export async function saveMcpHistoryRetentionLimit(limit: number): Promise<void> {
+  const res = await fetch(apiUrl("/api/app-settings/mcp-history-retention-limit"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ limit }),
+  });
+  if (!res.ok) throw await backendResponseError(res);
+}
+
 export async function loadMaxRetries(): Promise<number> {
   return get("/api/app-settings/max-retries");
 }
@@ -5190,6 +5203,14 @@ export async function loadRedisHistory(limit = 100, offset = 0): Promise<History
 
 export async function clearHistory(): Promise<void> {
   return del("/api/history");
+}
+
+export async function clearHistoryBySource(source: string): Promise<void> {
+  return del(`/api/history?source=${encodeURIComponent(source)}`);
+}
+
+export async function cleanupMcpHistoryRetention(): Promise<number> {
+  return post("/api/app-settings/mcp-history-retention-cleanup", {});
 }
 
 export async function clearRedisHistory(): Promise<void> {

@@ -6403,6 +6403,9 @@ export default withEnglishFallback({
     transactionEnded: "事务已结束或已回滚，未记录回滚成功。",
     rollbackBeforeClose: "撤销尚未提交的回滚修改并关闭历史记录？",
     title: "历史",
+    sources: { all: "全部", sql: "查询", mcp: "MCP 调用" },
+    refresh: "刷新",
+    mcp: { legacyResponse: "此旧记录仅保存了摘要，无法恢复原始响应。使用更新后的 MCP 服务再次调用后，可查看新记录的响应内容。", request: "请求参数", response: "响应内容", toolSearch: "按 MCP 工具名称筛选…", allTools: "全部工具" },
     search: "搜索历史...",
     conversationSearch: "搜索历史会话...",
     empty: "暂无历史记录",
@@ -6427,6 +6430,7 @@ export default withEnglishFallback({
     rollbackFailed: "回滚失败：{message}",
     confirmDelete: "确认删除这条历史记录吗？",
     confirmClear: "确认清空所有历史记录吗？",
+    confirmClearSource: "确认清空所有 {source} 历史记录吗？",
     emptyFiltered: "没有符合当前筛选条件的历史记录",
     loadMore: "加载更多",
     scope: {
@@ -6448,6 +6452,7 @@ export default withEnglishFallback({
       data_change: "数据变更",
       schema_change: "结构变更",
       failed: "失败",
+      mcp_success: "成功",
     },
     dateRange: {
       title: "时间范围",
@@ -6477,6 +6482,7 @@ export default withEnglishFallback({
       redis_command: "Redis",
     },
     detail: {
+      mcpTool: "MCP 工具",
       kind: "类型",
       operation: "操作",
       connection: "连接",
@@ -7617,6 +7623,11 @@ export default withEnglishFallback({
   },
   settings: {
     historyRetentionLimit: "查询历史保留条数",
+    mcpHistoryRetentionLimit: "MCP 历史保留条数",
+    mcpHistoryRetentionDescription: "独立控制 MCP 调用历史的保留数量，不影响 SQL 查询历史。",
+    mcpHistoryCleanup: "立即清理 MCP 历史",
+    mcpHistoryCleanupCompleted: "已清理 {count} 条 MCP 历史记录。",
+    mcpHistoryCleanupFailed: "无法清理 MCP 历史：{error}",
     historyRetentionDescription: "调小上限后，下次记录查询历史时将删除超过上限的旧记录。提高上限或选择“不限”不会恢复已删除记录。此上限适用于所有连接及执行来源。",
     historyRetentionUnlimited: "不限",
     historyRetentionLoadFailed: "无法加载历史保留设置：{error}",

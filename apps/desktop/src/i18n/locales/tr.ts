@@ -5732,6 +5732,15 @@ export default withEnglishFallback({
   },
   history: {
     title: "Geçmiş",
+    sources: { all: "Tümü", sql: "SQL sorguları", mcp: "MCP çağrıları" },
+    refresh: "Yenile",
+    mcp: {
+      legacyResponse: "Bu eski kayıt yalnızca özet içerir. Orijinal yanıt kurtarılamaz. Güncellenen MCP hizmetiyle yapılan yeni çağrılar yanıt içeriğini kaydeder.",
+      request: "İstek parametreleri",
+      response: "Yanıt içeriği",
+      toolSearch: "MCP araç adına göre filtrele...",
+      allTools: "Tüm araçlar",
+    },
     search: "Geçmişte ara...",
     conversationSearch: "Konuşmalarda ara...",
     empty: "Henüz geçmiş yok",
@@ -5755,6 +5764,7 @@ export default withEnglishFallback({
     rollbackSuccess: "Geri alma çalıştırıldı",
     rollbackFailed: "Geri alma başarısız: {message}",
     confirmDelete: "Bu geçmiş girdisi silinsin mi?",
+    confirmClearSource: "Tüm {source} geçmişi temizlensin mi?",
     confirmClear: "Tüm geçmiş temizlensin mi?",
     emptyFiltered: "Geçerli filtrelerle eşleşen geçmiş yok",
     loadMore: "Daha fazla yükle",
@@ -5776,6 +5786,7 @@ export default withEnglishFallback({
       query: "Sorgular",
       data_change: "Veri değişiklikleri",
       schema_change: "Şema değişiklikleri",
+      mcp_success: "Başarılı",
       failed: "Başarısız",
     },
     dateRange: {
@@ -5806,6 +5817,7 @@ export default withEnglishFallback({
       redis_command: "Redis",
     },
     detail: {
+      mcpTool: "MCP aracı",
       kind: "Tür",
       operation: "İşlem",
       connection: "Bağlantı",
@@ -6879,6 +6891,11 @@ export default withEnglishFallback({
   },
   settings: {
     historyRetentionLimit: "Sorgu geçmişi saklama sınırı",
+    mcpHistoryRetentionLimit: "MCP geçmişi saklama sınırı",
+    mcpHistoryRetentionDescription: "MCP çağrı geçmişi miktarını SQL geçmişinden bağımsız olarak denetler.",
+    mcpHistoryCleanup: "MCP geçmişini şimdi temizle",
+    mcpHistoryCleanupCompleted: "{count} MCP geçmiş kaydı kaldırıldı.",
+    mcpHistoryCleanupFailed: "MCP geçmişi temizlenemedi: {error}",
     historyRetentionDescription: "Sınır düşürüldüğünde eski kayıtlar bir sonraki sorgu geçmişi kaydında silinir. Sınırı artırmak veya Sınırsız seçmek silinen kayıtları geri getirmez. Tüm bağlantılar ve yürütme kaynakları için geçerlidir.",
     historyRetentionUnlimited: "Sınırsız",
     historyRetentionLoadFailed: "Geçmiş saklama ayarı yüklenemedi: {error}",
