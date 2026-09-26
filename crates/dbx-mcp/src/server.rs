@@ -540,15 +540,42 @@ impl Drop for CallHistoryGuard {
 
 fn history_request(value: &serde_json::Value, depth: usize) -> serde_json::Value {
     use serde_json::Value;
-    if depth > 8 { return json!("[depth limit]"); }
+    if depth > 8 {
+        return json!("[depth limit]");
+    }
     match value {
-        Value::Object(fields) => Value::Object(fields.iter().take(64).map(|(key, value)| {
-            let lower = key.to_ascii_lowercase();
-            let secret = ["password", "passwd", "secret", "token", "credential", "authorization", "private_key", "apikey", "api_key", "connection_string", "url", "dsn"]
-                .iter().any(|part| lower.contains(part));
-            (key.chars().take(128).collect(), if secret { json!("[redacted]") } else { history_request(value, depth + 1) })
-        }).collect()),
-        Value::Array(values) => Value::Array(values.iter().take(16).map(|value| history_request(value, depth + 1)).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .take(64)
+                .map(|(key, value)| {
+                    let lower = key.to_ascii_lowercase();
+                    let secret = [
+                        "password",
+                        "passwd",
+                        "secret",
+                        "token",
+                        "credential",
+                        "authorization",
+                        "private_key",
+                        "apikey",
+                        "api_key",
+                        "connection_string",
+                        "url",
+                        "dsn",
+                    ]
+                    .iter()
+                    .any(|part| lower.contains(part));
+                    (
+                        key.chars().take(128).collect(),
+                        if secret { json!("[redacted]") } else { history_request(value, depth + 1) },
+                    )
+                })
+                .collect(),
+        ),
+        Value::Array(values) => {
+            Value::Array(values.iter().take(16).map(|value| history_request(value, depth + 1)).collect())
+        }
         Value::String(value) => json!(value.chars().take(1024).collect::<String>()),
         value => value.clone(),
     }
@@ -558,23 +585,53 @@ fn bounded_history_request(value: &serde_json::Value) -> String {
     let sanitized = history_request(value, 0).to_string();
     if sanitized.len() > 16 * 1024 {
         json!({"truncated": true, "summary": "Request exceeds history size limit"}).to_string()
-    } else { sanitized }
+    } else {
+        sanitized
+    }
 }
 
 // Response payloads need their own sanitizer: request summaries intentionally
 // shorten strings and arrays, which would silently discard query results.
 fn history_response(value: &serde_json::Value, depth: usize) -> serde_json::Value {
     use serde_json::Value;
-    if depth > 32 { return json!({"truncated": true, "reason": "depth limit"}); }
+    if depth > 32 {
+        return json!({"truncated": true, "reason": "depth limit"});
+    }
     match value {
-        Value::Object(fields) => Value::Object(fields.iter().map(|(key, value)| {
-            let lower = key.to_ascii_lowercase();
-            let secret = ["password", "passwd", "secret", "token", "credential", "authorization", "private_key", "apikey", "api_key", "connection_string", "url", "dsn"]
-                .iter().any(|part| lower.contains(part));
-            let binary = key == "data" && fields.get("type").and_then(Value::as_str).is_some_and(|kind| kind == "image" || kind == "audio")
-                || key == "blob";
-            (key.clone(), if secret || binary { json!("[redacted]") } else { history_response(value, depth + 1) })
-        }).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| {
+                    let lower = key.to_ascii_lowercase();
+                    let secret = [
+                        "password",
+                        "passwd",
+                        "secret",
+                        "token",
+                        "credential",
+                        "authorization",
+                        "private_key",
+                        "apikey",
+                        "api_key",
+                        "connection_string",
+                        "url",
+                        "dsn",
+                    ]
+                    .iter()
+                    .any(|part| lower.contains(part));
+                    let binary = key == "data"
+                        && fields
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .is_some_and(|kind| kind == "image" || kind == "audio")
+                        || key == "blob";
+                    (
+                        key.clone(),
+                        if secret || binary { json!("[redacted]") } else { history_response(value, depth + 1) },
+                    )
+                })
+                .collect(),
+        ),
         Value::Array(values) => Value::Array(values.iter().map(|value| history_response(value, depth + 1)).collect()),
         Value::String(text) => {
             // MCP text blocks often contain JSON encoded inside a string.
@@ -818,16 +875,21 @@ impl DbxMcpServer {
             mcp_response_json: None,
             mcp_session_id: None,
         };
-        if CALL_HISTORY.try_with(|current| {
-            let mut current = current.lock().unwrap();
-            current.connection_id = entry.connection_id.clone();
-            current.connection_name = entry.connection_name.clone();
-            current.database = entry.database.clone();
-            current.sql = entry.sql.clone();
-            current.activity_kind = entry.activity_kind.clone();
-            current.operation = entry.operation.clone();
-            current.affected_rows = entry.affected_rows;
-        }).is_ok() { return; }
+        if CALL_HISTORY
+            .try_with(|current| {
+                let mut current = current.lock().unwrap();
+                current.connection_id = entry.connection_id.clone();
+                current.connection_name = entry.connection_name.clone();
+                current.database = entry.database.clone();
+                current.sql = entry.sql.clone();
+                current.activity_kind = entry.activity_kind.clone();
+                current.operation = entry.operation.clone();
+                current.affected_rows = entry.affected_rows;
+            })
+            .is_ok()
+        {
+            return;
+        }
         if let Err(error) = self.backend.save_history_entry(&entry).await {
             log::warn!("failed to save MCP SQL history for connection {}: {error}", connection.id);
         }
@@ -1316,7 +1378,17 @@ impl DbxMcpServer {
             self.backend.execute_agent_tool(connection, &database, "execute_query", arguments, permissions).await;
         let success = !result.is_error;
         let error = result.is_error.then(|| result.content.trim_start_matches("Error: ").to_string());
-        self.save_mcp_sql_history("dbx_execute_query", connection, &database, &history_sql, started_at, success, error, None).await;
+        self.save_mcp_sql_history(
+            "dbx_execute_query",
+            connection,
+            &database,
+            &history_sql,
+            started_at,
+            success,
+            error,
+            None,
+        )
+        .await;
         agent_result(result)
     }
 
@@ -1687,8 +1759,17 @@ impl DbxMcpServer {
                 tool_result
             }
             Err(error) => {
-                self.save_mcp_sql_history("dbx_execute_batch", connection, &database, sql, started_at, false, Some(error.clone()), None)
-                    .await;
+                self.save_mcp_sql_history(
+                    "dbx_execute_batch",
+                    connection,
+                    &database,
+                    sql,
+                    started_at,
+                    false,
+                    Some(error.clone()),
+                    None,
+                )
+                .await;
                 backend_tool_error("DBX_BATCH_EXECUTION_ERROR", error)
             }
         }
@@ -2702,7 +2783,7 @@ impl DbxMcpServer {
             error,
             None,
         )
-            .await;
+        .await;
         if !success {
             return agent_result(result);
         }
@@ -2996,15 +3077,25 @@ impl ServerHandler for DbxMcpServer {
         let args = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
         let arg = |name: &str| args.get(name).and_then(|value| value.as_str()).unwrap_or_default().to_string();
         let entry = HistoryEntry {
-            id: Uuid::new_v4().to_string(), connection_id: arg("connection_id"),
-            connection_name: arg("connection_name"), database: arg("database"),
-            sql: arg("sql"), executed_at: chrono::Utc::now().to_rfc3339(),
-            execution_time_ms: 0, success: false, error: None,
-            activity_kind: "mcp".into(), operation: request.name.to_string(), target: arg("table"),
-            affected_rows: None, rollback_sql: None,
-            details_json: Some(r#"{"source":"mcp"}"#.into()), source: "mcp".into(),
+            id: Uuid::new_v4().to_string(),
+            connection_id: arg("connection_id"),
+            connection_name: arg("connection_name"),
+            database: arg("database"),
+            sql: arg("sql"),
+            executed_at: chrono::Utc::now().to_rfc3339(),
+            execution_time_ms: 0,
+            success: false,
+            error: None,
+            activity_kind: "mcp".into(),
+            operation: request.name.to_string(),
+            target: arg("table"),
+            affected_rows: None,
+            rollback_sql: None,
+            details_json: Some(r#"{"source":"mcp"}"#.into()),
+            source: "mcp".into(),
             mcp_tool_name: Some(request.name.to_string()),
-            mcp_request_json: Some(bounded_history_request(&args)), mcp_response_json: None,
+            mcp_request_json: Some(bounded_history_request(&args)),
+            mcp_response_json: None,
             mcp_session_id: args.get("session_id").and_then(|v| v.as_str()).map(str::to_owned),
         };
         let mut guard = CallHistoryGuard { backend: self.backend.clone(), fallback: Some(entry.clone()), started };
@@ -4400,7 +4491,8 @@ mod tests {
 
     #[test]
     fn history_response_redacts_nested_json_and_marks_size_limit() {
-        let value = serde_json::json!({"content": [{"type": "text", "text": r#"{"password":"secret-value","rows":[1,2]}"#}]});
+        let value =
+            serde_json::json!({"content": [{"type": "text", "text": r#"{"password":"secret-value","rows":[1,2]}"#}]});
         let stored = super::bounded_history_response(&value);
         assert!(!stored.contains("secret-value"));
         assert!(stored.contains("[redacted]"));

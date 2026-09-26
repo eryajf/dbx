@@ -259,11 +259,7 @@ fn parse_host_rule(value: &str) -> Result<HostRule, String> {
     // the loopback defaults and settings UI naturally expose the bare form
     // (`::1`). Normalize that form before parsing so loopback HTTP services do
     // not fail immediately during startup.
-    let normalized = if value.parse::<Ipv6Addr>().is_ok() {
-        format!("[{value}]")
-    } else {
-        value.to_string()
-    };
+    let normalized = if value.parse::<Ipv6Addr>().is_ok() { format!("[{value}]") } else { value.to_string() };
     let authority = axum::http::uri::Authority::try_from(normalized.as_str())
         .map_err(|_| format!("invalid allowed host: {value}"))?;
     if value.contains('@') {
@@ -334,13 +330,8 @@ mod tests {
 
     #[test]
     fn bare_ipv6_loopback_host_is_normalized_for_uri_authority_parsing() {
-        let auth = HttpAuth::new_with_hosts(
-            Some("token".to_string()),
-            ["::1".to_string()],
-            Vec::<String>::new(),
-            true,
-        )
-        .unwrap();
+        let auth = HttpAuth::new_with_hosts(Some("token".to_string()), ["::1".to_string()], Vec::<String>::new(), true)
+            .unwrap();
         let uri: Uri = "/mcp".parse().unwrap();
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("[::1]"));
