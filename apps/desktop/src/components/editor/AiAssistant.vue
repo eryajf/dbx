@@ -89,6 +89,7 @@ import {
   type AiAction,
   type AiActionSelection,
   type AiAssistantMode,
+  type AiContext,
   type AiContextTarget,
   type AiCsvFileContext,
   type AiTextAttachmentEncoding,
@@ -186,7 +187,8 @@ import { buildAiConversationSearchIndex, filterAiConversationSearchIndex } from 
 import AiAttachmentCard from "@/components/editor/AiAttachmentCard.vue";
 import AiToolApprovalCard from "@/components/editor/AiToolApprovalCard.vue";
 import { resolveAiMessageCopyText } from "@/lib/ai/aiMessageCopy";
-import { buildPluginAiRequest, pluginContextFromMessages, pluginContextText, streamPluginAiConversation, type AiPluginContext, type AiPluginConversationRequest } from "@/lib/ai/aiPluginConversation";
+import { buildPluginAiRequest, createPluginAiConversation, pluginComposerConnectionLabel, pluginContextConnectionId, pluginContextFromMessages, pluginContextText, streamPluginAiConversation, type AiPluginContext, type AiPluginConversationRequest } from "@/lib/ai/aiPluginConversation";
+import type { PluginAiRecommendationHostUpdate } from "@/lib/plugins/pluginHostBridge";
 
 const { t } = useI18n();
 const AiChartRenderer = defineAsyncComponent({
@@ -290,6 +292,7 @@ const props = defineProps<{
   tab?: QueryTab;
   connection?: ConnectionConfig;
   maximized?: boolean;
+  pluginRecommendations?: PluginAiRecommendationHostUpdate;
 }>();
 
 // Every AI-initiated action carries the *target* it must run against: the
@@ -355,6 +358,15 @@ const boundConnectionId = computed(() => conversationBinding.value.connectionId)
 const boundConnection = computed(() => (boundConnectionId.value ? connectionStore.getConfig(boundConnectionId.value) : undefined));
 const boundDatabase = computed(() => conversationBinding.value.database);
 const boundSchema = computed(() => conversationBinding.value.schema);
+const pluginContextConnection = computed(() => {
+  const contextConnectionId = pluginContext.value ? pluginContextConnectionId(pluginContext.value) : undefined;
+  return boundConnection.value ?? (contextConnectionId ? connectionStore.getConfig(contextConnectionId) : undefined);
+});
+const pluginComposerConnectionName = computed(() => {
+  const context = pluginContext.value;
+  if (!context) return "";
+  return pluginComposerConnectionLabel(context, pluginContextConnection.value?.name, activeConversation.value?.connectionName);
+});
 
 // `immediate` runs this during setup whenever the AI config finished loading
 // before the panel mounted (the usual case: the app loads it at startup), and
@@ -1657,6 +1669,7 @@ function openCodeSnapshot(seg: { content: string; lang: string }) {
 }
 
 const showActionButtons = computed(() => {
+  if (pluginContext.value) return false;
   if (!boundConnection.value) return true;
   return !isVectorDbType(boundConnection.value.db_type);
 });
@@ -3239,9 +3252,9 @@ async function send() {
   // database. When it still matches, dropping it would silently discard what
   // the user attached alongside the affirmative.
   const confirmationRetargets = !!confirmationTarget && !sameConversationBinding(runBinding, conversationBinding.value);
-  const connection = runPluginContext ? undefined : runBinding.connectionId ? connectionStore.getConfig(runBinding.connectionId) : undefined;
+  const connection = runBinding.connectionId ? connectionStore.getConfig(runBinding.connectionId) : undefined;
   const tab = runPluginContext ? undefined : aiContextTargetFor(runBinding, props.tab);
-  const runSourceName = runPluginContext?.pluginName ?? connection?.name ?? "";
+  const runSourceName = connection?.name ?? runPluginContext?.pluginName ?? "";
   if (!runPluginContext && (!connection || !tab)) {
     clearPendingWriteGrant();
     return;
@@ -3461,7 +3474,7 @@ async function send() {
   if (autoSendVisible) scrollToBottom({ force: true });
 
   const requestedSelection: AiActionSelection = auto ? auto.action : activeAction.value;
-  const requestedMode: AiAssistantMode = runPluginContext ? "ask" : auto ? auto.mode : assistantMode.value;
+  const requestedMode: AiAssistantMode = auto ? auto.mode : assistantMode.value;
   // A confirmed-write turn (the ✅ reply, or the segment that resumes an
   // `awaiting_write_confirmation` run) is a continuation of the pending proposal,
   // not a new user request: its reply text is component copy, so the Auto router
@@ -3476,8 +3489,8 @@ async function send() {
   // router entirely, so their behavior is unchanged (#9118).
   let requestedAction: AiAction;
   if (runPluginContext) {
-    // A plugin conversation carries its own data snapshot: the Auto router must
-    // not classify the prompt, and the task contract stays host-owned.
+    // Plugin requests use the general action; the Agent decides which live
+    // plugin tools are needed from their advertised definitions.
     requestedAction = "general";
   } else if (!isAutoActionSelection(requestedSelection)) {
     requestedAction = requestedSelection;
@@ -3735,7 +3748,36 @@ async function send() {
       }
       if (runIsVisible()) scrollToBottom();
     };
-    if (runPluginContext) {
+    if (runPluginContext && requestedMode === "agent" && connection) {
+      if (!generationCanContinue()) return;
+      if (runIsVisible()) generationStatus.value = { ...generationStatus.value, phase: "waiting_model" };
+      const context: AiContext = {
+        connectionId: connection.id,
+        connectionName: connection.name,
+        databaseType: "plugin",
+        database: "",
+        currentSql: "",
+        tables: [],
+        sqlFiles: [],
+        truncated: false,
+      };
+      const instruction = [text, `Plugin: ${runPluginContext.pluginName}`, `Recommendation context: ${runPluginContext.title}`, "Use the connected plugin tools to retrieve the current state before answering."].filter(Boolean).join("\n\n");
+      await runAgentStream(
+        {
+          config: activeConfig,
+          action: requestedAction,
+          mode: requestedMode,
+          instruction,
+          taskContractUserRequest: text,
+          context,
+          inlineImages: imageAttachments.map(({ mediaType, data }) => ({ mediaType, data })),
+        },
+        history,
+        onEvent,
+        sessionId,
+        customPromptContext,
+      );
+    } else if (runPluginContext) {
       if (!generationCanContinue()) return;
       if (runIsVisible()) generationStatus.value = { ...generationStatus.value, phase: "waiting_model" };
       const request = buildPluginAiRequest(
@@ -4688,7 +4730,7 @@ function selectConversation(conv: AiConversation) {
   const activeRun = backgroundAiRunsEnabled ? desktopAiRun<ChatMessage>(conv.id) : undefined;
   messages.value = activeRun?.messages ?? chatMessagesFromConversation(conv);
   if (pluginContext.value) {
-    assistantMode.value = "ask";
+    assistantMode.value = pluginContext.value.mode ?? "ask";
     activeAction.value = "general";
   }
   unreadConversations.delete(conv.id);
@@ -5139,10 +5181,19 @@ function openPluginConversation(request: AiPluginConversationRequest) {
   defaultModeInitialized = true;
   startNewChat();
   draftPluginContext.value = request.context;
-  assistantMode.value = "ask";
+  const pluginConnectionId = pluginContextConnectionId(request.context);
+  const pluginConnection = pluginConnectionId ? connectionStore.getConfig(pluginConnectionId) : undefined;
+  draftBinding.value = pluginConnection ? { connectionId: pluginConnection.id, connectionName: pluginConnection.name, database: "", schema: undefined } : null;
+  assistantMode.value = request.mode ?? request.context.mode ?? "ask";
   activeAction.value = "general";
   setPrompt(request.prompt, true);
   if (request.send) void send();
+}
+
+function sendPluginRecommendation(item: { id: string; label: string; prompt: string }) {
+  const update = props.pluginRecommendations;
+  if (!update || !update.items.some((candidate) => candidate.id === item.id)) return;
+  openPluginConversation(createPluginAiConversation({ id: update.pluginId, name: update.pluginName }, { title: item.label, prompt: item.prompt, context: update.context, send: true, mode: "agent" }));
 }
 
 function setPrompt(text: string, fromPlugin = false) {
@@ -5369,10 +5420,34 @@ async function openExternalUrl(url: string) {
     <div v-if="messages.length === 0" class="flex-1 min-h-0 flex flex-col items-center justify-center text-center text-muted-foreground">
       <Bot class="h-10 w-10 mb-3 opacity-30" />
       <p class="text-sm">{{ t(pluginContext ? "ai.pluginWelcome" : "ai.welcome") }}</p>
+      <div v-if="pluginRecommendations?.items.length" class="mt-5 flex max-w-[95%] flex-wrap justify-center gap-2">
+        <button
+          v-for="recommendation in pluginRecommendations.items"
+          :key="recommendation.id"
+          type="button"
+          class="rounded-full border border-border/80 bg-background px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 hover:text-foreground"
+          :title="recommendation.prompt"
+          @click="sendPluginRecommendation(recommendation)"
+        >
+          {{ recommendation.label }}
+        </button>
+      </div>
     </div>
-    <div v-else class="relative min-h-0 flex-1">
-      <ScrollArea ref="scrollRef" class="ai-message-scroll h-full overflow-hidden">
+    <div v-else class="relative flex min-h-0 flex-1 flex-col">
+      <ScrollArea ref="scrollRef" class="ai-message-scroll min-h-0 flex-1 overflow-hidden">
         <div class="flex flex-col gap-3 p-3">
+          <div v-if="pluginRecommendations?.items.length" class="flex shrink-0 flex-wrap justify-center gap-2 border-b border-border/60 px-3 py-2" data-ai-plugin-recommendations>
+            <button
+              v-for="recommendation in pluginRecommendations.items"
+              :key="`history:${recommendation.id}`"
+              type="button"
+              class="rounded-full border border-border/80 bg-background px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 hover:text-foreground"
+              :title="recommendation.prompt"
+              @click="sendPluginRecommendation(recommendation)"
+            >
+              {{ recommendation.label }}
+            </button>
+          </div>
           <template v-for="(msg, i) in visibleMessages" :key="i">
             <div v-if="awayUpdatesBaselineIndex >= 0 && i === awayUpdatesBaselineIndex" class="mb-1 flex items-center gap-2 py-0.5" role="separator" :aria-label="t('ai.awayUpdatesDivider')">
               <span class="h-px flex-1 bg-primary/25" />
@@ -5761,10 +5836,11 @@ async function openExternalUrl(url: string) {
         <div class="resize-handle" @mousedown="startResize"></div>
         <div class="px-2 pb-2 pt-1">
           <div data-ai-composer-context-row :class="['ai-prompt-context-row mb-1 flex items-center gap-x-1 text-xs text-foreground/80', showAiSchemaSelector && 'ai-prompt-context-row--schema']">
-            <details v-if="pluginContext" class="min-w-0 flex-1" data-ai-plugin-context>
-              <summary class="cursor-pointer truncate">{{ pluginContext.pluginName }} · {{ pluginContext.title }}</summary>
-              <pre class="max-h-56 overflow-auto whitespace-pre-wrap break-all p-2 text-[11px]">{{ pluginContextText(pluginContext) }}</pre>
-            </details>
+            <div v-if="pluginContext" class="flex min-w-0 flex-1 items-center gap-1" data-ai-plugin-context :title="pluginContext.title">
+              <ConnectionIcon v-if="pluginContextConnection" :connection="pluginContextConnection" class="h-3 w-3 shrink-0" />
+              <Server v-else class="h-3 w-3 shrink-0" />
+              <span class="truncate">{{ pluginComposerConnectionName }}</span>
+            </div>
             <template v-else-if="connectionStore.connections.length">
               <ConnectionIcon v-if="boundConnection" :connection="boundConnection" class="h-3 w-3 shrink-0" />
               <Server v-else class="h-3 w-3 shrink-0" />
@@ -6127,8 +6203,7 @@ async function openExternalUrl(url: string) {
               </TooltipContent>
             </Tooltip>
             <!-- Combined mode + action selector -->
-            <span v-if="pluginContext" class="shrink-0 text-xs text-muted-foreground">{{ t("ai.modes.ask") }}</span>
-            <Popover v-else v-model:open="modeActionOpen">
+            <Popover v-model:open="modeActionOpen">
               <PopoverTrigger as-child>
                 <button type="button" class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[6px] border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" :aria-label="modeActionTriggerLabel">
                   <component :is="modeIcon" class="h-3 w-3" />

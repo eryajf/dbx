@@ -31,6 +31,16 @@ function bodyOf(fnSignature: string): string {
 }
 
 describe("AI conversation owns its connection binding (#9902)", () => {
+  it("renders plugin recommendation chips and sends the selected snapshot immediately", () => {
+    expect(source).toContain("pluginRecommendations?: PluginAiRecommendationHostUpdate");
+    expect(source).toContain('v-for="recommendation in pluginRecommendations.items"');
+    expect(source).toContain('@click="sendPluginRecommendation(recommendation)"');
+    expect(source).toContain("`history:${recommendation.id}`");
+    const recommendationStart = source.indexOf("function sendPluginRecommendation(");
+    expect(source.slice(recommendationStart, recommendationStart + 900)).toContain("send: true");
+    expect(source.slice(recommendationStart, recommendationStart + 900)).toContain("context: update.context");
+  });
+
   it("rebinding the conversation never rewrites the editor tab or the global active connection", () => {
     const body = bodyOf("async function changeConnection(connectionId: string)");
 
