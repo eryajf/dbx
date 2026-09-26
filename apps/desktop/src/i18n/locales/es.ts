@@ -6031,6 +6031,7 @@ export default withEnglishFallback({
       import: "Importación",
       transfer: "Transferencia",
       redis_command: "Comando Redis",
+      mcp: "Llamada MCP",
     },
     kindShort: {
       query: "SQL",

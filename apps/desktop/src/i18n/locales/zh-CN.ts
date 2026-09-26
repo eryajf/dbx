@@ -6472,6 +6472,7 @@ export default withEnglishFallback({
       import: "导入",
       transfer: "传输",
       redis_command: "Redis 命令",
+      mcp: "MCP 调用",
     },
     kindShort: {
       query: "查询",

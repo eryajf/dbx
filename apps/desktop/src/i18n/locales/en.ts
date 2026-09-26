@@ -6505,6 +6505,7 @@ export default {
       import: "Import",
       transfer: "Transfer",
       redis_command: "Redis Command",
+      mcp: "MCP call",
     },
     kindShort: {
       query: "SQL",

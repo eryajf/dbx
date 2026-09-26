@@ -7033,6 +7033,7 @@ export default withEnglishFallback({
       import: "Импорт",
       transfer: "Перенос",
       redis_command: "Команда Redis",
+      mcp: "Вызов MCP",
     },
     kindShort: {
       query: "SQL",

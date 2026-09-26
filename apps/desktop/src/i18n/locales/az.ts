@@ -5913,6 +5913,7 @@ export default withEnglishFallback({
       import: "İdxal",
       transfer: "Köçürmə",
       redis_command: "Redis əmri",
+      mcp: "MCP çağırışı",
     },
     kindShort: {
       query: "SQL",

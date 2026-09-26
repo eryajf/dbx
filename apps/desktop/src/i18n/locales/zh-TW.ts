@@ -5264,6 +5264,7 @@ export default withEnglishFallback({
       import: "匯入",
       transfer: "傳輸",
       redis_command: "Redis 命令",
+      mcp: "MCP 呼叫",
     },
     kindShort: {
       query: "查詢",

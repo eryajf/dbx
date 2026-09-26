@@ -5955,6 +5955,7 @@ export default withEnglishFallback({
       import: "Importação",
       transfer: "Transferência",
       redis_command: "Comando Redis",
+      mcp: "Chamada MCP",
     },
     kindShort: {
       query: "SQL",

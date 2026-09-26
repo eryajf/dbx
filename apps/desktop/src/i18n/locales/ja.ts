@@ -5975,6 +5975,7 @@ export default withEnglishFallback({
       import: "インポート",
       transfer: "転送",
       redis_command: "Redisコマンド",
+      mcp: "MCP 呼び出し",
     },
     kindShort: {
       query: "SQL",

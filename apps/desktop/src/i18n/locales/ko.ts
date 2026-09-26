@@ -5606,6 +5606,7 @@ export default withEnglishFallback({
       import: "가져오기",
       transfer: "이전",
       redis_command: "Redis 명령",
+      mcp: "MCP 호출",
     },
     kindShort: {
       query: "SQL",

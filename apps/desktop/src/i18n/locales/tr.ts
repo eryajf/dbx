@@ -5807,6 +5807,7 @@ export default withEnglishFallback({
       import: "İçe Aktar",
       transfer: "Aktarım",
       redis_command: "Redis Komutu",
+      mcp: "MCP çağrısı",
     },
     kindShort: {
       query: "SQL",
