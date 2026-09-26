@@ -2269,9 +2269,45 @@ fn postgres_index_column_sql(
     }
 }
 
-fn generate_postgres_index_ddl(indexes: &[db::IndexInfo], table: &str, schema: &str) -> Vec<String> {
+/// `CREATE INDEX/SEQUENCE IF NOT EXISTS` was added in PostgreSQL 9.5: 9.2/9.3/9.4
+/// reject both with `syntax error at or near "NOT"` (issue #8853). A server that does
+/// not report its version keeps the idempotent form, matching the long-standing behavior.
+fn postgres_if_not_exists_supported(server_version_num: Option<i32>) -> bool {
+    server_version_num.is_none_or(|version| version >= 90_500)
+}
+
+/// Decides whether the target index/sequence DDL may use `IF NOT EXISTS`. openGauss/GaussDB
+/// report a 9.x `server_version_num` but do implement the syntax, so only a plain
+/// PostgreSQL target is version-gated.
+async fn target_supports_if_not_exists_ddl(state: &AppState, pool_key: &str) -> bool {
+    let (_, _, db_type, _) = transfer_pool_context(state, pool_key).await;
+    if db_type != Some(DatabaseType::Postgres) {
+        return true;
+    }
+    let version = execute_read_on_pool(state, pool_key, "SHOW server_version_num")
+        .await
+        .ok()
+        .and_then(|result| result.rows.first().and_then(|row| row.first()).and_then(server_version_num_of));
+    postgres_if_not_exists_supported(version)
+}
+
+fn server_version_num_of(value: &serde_json::Value) -> Option<i32> {
+    match value {
+        serde_json::Value::Number(number) => number.as_i64().and_then(|version| i32::try_from(version).ok()),
+        serde_json::Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn generate_postgres_index_ddl(
+    indexes: &[db::IndexInfo],
+    table: &str,
+    schema: &str,
+    if_not_exists: bool,
+) -> Vec<String> {
     let full_table = qualified_table(table, schema, &DatabaseType::Postgres, None);
     let mut statements = Vec::new();
+    let idempotent = if if_not_exists { "IF NOT EXISTS " } else { "" };
     for index in indexes.iter().filter(|index| !index.is_primary) {
         if index.name.trim().is_empty() || index.columns.is_empty() {
             continue;
@@ -2323,7 +2359,7 @@ fn generate_postgres_index_ddl(indexes: &[db::IndexInfo], table: &str, schema: &
             .map(|value| format!(" WHERE {value}"))
             .unwrap_or_default();
         statements.push(format!(
-            "CREATE {unique}INDEX IF NOT EXISTS {} ON {full_table}{using_clause} ({columns}){include_clause}{filter_clause}",
+            "CREATE {unique}INDEX {idempotent}{} ON {full_table}{using_clause} ({columns}){include_clause}{filter_clause}",
             quote_identifier(&index.name, &DatabaseType::Postgres)
         ));
         if let Some(comment) = index.comment.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
@@ -2404,7 +2440,8 @@ async fn restore_postgres_table_schema_objects(
     source_indexes: &[db::IndexInfo],
     source_foreign_keys: &[db::ForeignKeyInfo],
 ) -> Result<(), String> {
-    for statement in generate_postgres_index_ddl(source_indexes, target_table, target_schema) {
+    let index_if_not_exists = target_supports_if_not_exists_ddl(state, target_pool_key).await;
+    for statement in generate_postgres_index_ddl(source_indexes, target_table, target_schema, index_if_not_exists) {
         execute_on_pool(state, target_pool_key, &statement)
             .await
             .map_err(|e| format!("Failed to create PostgreSQL index for {target_table}: {e}"))?;
@@ -2551,11 +2588,16 @@ fn postgres_sequence_qualified_name(schema: &str, sequence_name: &str) -> String
     }
 }
 
-fn generate_postgres_transfer_sequence_create_ddl(sequence: &PostgresTransferSequence, schema: &str) -> String {
+fn generate_postgres_transfer_sequence_create_ddl(
+    sequence: &PostgresTransferSequence,
+    schema: &str,
+    if_not_exists: bool,
+) -> String {
     let qualified_name = postgres_sequence_qualified_name(schema, &sequence.name);
     let cycle = if sequence.cycle { "CYCLE" } else { "NO CYCLE" };
+    let idempotent = if if_not_exists { "IF NOT EXISTS " } else { "" };
     format!(
-        "CREATE SEQUENCE IF NOT EXISTS {qualified_name}\n  AS {data_type}\n  START WITH {start_value}\n  INCREMENT BY {increment}\n  MINVALUE {min_value}\n  MAXVALUE {max_value}\n  CACHE {cache_value}\n  {cycle}",
+        "CREATE SEQUENCE {idempotent}{qualified_name}\n  AS {data_type}\n  START WITH {start_value}\n  INCREMENT BY {increment}\n  MINVALUE {min_value}\n  MAXVALUE {max_value}\n  CACHE {cache_value}\n  {cycle}",
         data_type = sequence.data_type,
         start_value = sequence.start_value,
         increment = sequence.increment,
@@ -3937,6 +3979,52 @@ pub fn generate_upsert_typed(
     )
 }
 
+fn generate_insert_ignore_duplicates_from_value_rows(
+    columns: &[String],
+    value_rows: &[String],
+    table: &str,
+    schema: &str,
+    db_type: &DatabaseType,
+    catalog: Option<&str>,
+    overrides_postgres_system_values: bool,
+    quote_target_column_names: bool,
+) -> String {
+    if value_rows.is_empty() || columns.is_empty() {
+        return String::new();
+    }
+
+    let full_table = qualified_table(table, schema, db_type, catalog);
+    let col_list = columns
+        .iter()
+        .map(|column| transfer_column_identifier(column, db_type, quote_target_column_names))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let overriding = if overrides_postgres_system_values && matches!(db_type, DatabaseType::Postgres) {
+        " OVERRIDING SYSTEM VALUE"
+    } else {
+        ""
+    };
+
+    let mut sql = format!("INSERT INTO {full_table} ({col_list}){overriding} VALUES\n{}", value_rows.join(",\n"));
+
+    match db_type {
+        db_type
+            if (is_postgres_transfer_dialect(db_type) && !matches!(db_type, DatabaseType::OpenGauss))
+                || matches!(db_type, DatabaseType::Sqlite | DatabaseType::CloudflareD1 | DatabaseType::DuckDb) =>
+        {
+            sql.push_str("\nON CONFLICT DO NOTHING");
+        }
+        db_type if uses_mysql_style_upsert(db_type) => {
+            let first_column = transfer_column_identifier(&columns[0], db_type, quote_target_column_names);
+            sql.push_str(&format!("\nON DUPLICATE KEY UPDATE {first_column} = {first_column}"));
+        }
+        _ => {}
+    }
+
+    sql
+}
+
 /// Upsert targets that take the MySQL-style `INSERT ... ON DUPLICATE KEY UPDATE
 /// ... VALUES(col)` arm. openGauss belongs here instead of the PostgreSQL
 /// `ON CONFLICT` arm: its INSERT grammar has no `ON CONFLICT` clause, but it
@@ -4549,9 +4637,114 @@ pub(crate) fn generate_insert_typed_sql_batches_from_value_rows(
     catalog: Option<&str>,
     limits: SqlBatchLimits,
 ) -> Result<Vec<(String, usize)>, String> {
-    generate_insert_sql_batches_from_value_rows(
-        columns, value_rows, table, schema, db_type, catalog, limits, false, true,
+    generate_insert_typed_sql_batches_from_value_rows_with_options(
+        columns, value_rows, table, schema, db_type, catalog, limits, false,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn generate_insert_typed_sql_batches_from_value_rows_with_options(
+    columns: &[String],
+    value_rows: &[String],
+    table: &str,
+    schema: &str,
+    db_type: &DatabaseType,
+    catalog: Option<&str>,
+    limits: SqlBatchLimits,
+    skip_duplicate_rows: bool,
+) -> Result<Vec<(String, usize)>, String> {
+    if !skip_duplicate_rows {
+        return generate_insert_sql_batches_from_value_rows(
+            columns, value_rows, table, schema, db_type, catalog, limits, false, true,
+        );
+    }
+
+    if value_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let max_rows = limits.max_rows.max(1).min(match db_type {
+        DatabaseType::SqlServer => MAX_SQLSERVER_INSERT_ROWS,
+        DatabaseType::Oracle => MAX_ORACLE_INSERT_ALL_ROWS,
+        _ => usize::MAX,
+    });
+    let target_sql_bytes = limits.target_sql_bytes.max(1);
+    let batch_sql_bytes = limits.hard_sql_bytes.map_or(target_sql_bytes, |hard| target_sql_bytes.min(hard));
+
+    let template = InsertSqlTemplate::new_with_column_quoting(columns, table, schema, db_type, catalog, false, true);
+
+    let value_row_bytes = value_rows.iter().map(|row| sql_text_bytes(row, db_type)).collect::<Vec<_>>();
+
+    let mut statements = Vec::new();
+    let mut start = 0usize;
+
+    while start < value_rows.len() {
+        let mut end = start;
+        let mut rows_bytes = 0usize;
+
+        while end < value_rows.len() && end - start < max_rows {
+            let single_row_bytes = template.statement_bytes(value_row_bytes[end], 1, db_type);
+
+            if let Some(hard_sql_bytes) = limits.hard_sql_bytes {
+                if single_row_bytes > hard_sql_bytes {
+                    return Err(format!(
+                        "SQL batch row {} requires {} bytes and exceeds the {} byte hard limit",
+                        end + 1,
+                        single_row_bytes,
+                        hard_sql_bytes
+                    ));
+                }
+            }
+
+            let candidate_rows_bytes = rows_bytes.saturating_add(value_row_bytes[end]);
+            let candidate_row_count = end - start + 1;
+            let candidate_bytes = template.statement_bytes(candidate_rows_bytes, candidate_row_count, db_type);
+
+            if candidate_row_count > 1 && candidate_bytes > batch_sql_bytes {
+                break;
+            }
+
+            rows_bytes = candidate_rows_bytes;
+            end += 1;
+        }
+
+        let value_rows_batch = &value_rows[start..end];
+
+        let mut sql = if matches!(
+            db_type,
+            DatabaseType::Postgres
+                | DatabaseType::Kingbase
+                | DatabaseType::Sqlite
+                | DatabaseType::CloudflareD1
+                | DatabaseType::DuckDb
+                | DatabaseType::Mysql
+                | DatabaseType::Doris
+                | DatabaseType::StarRocks
+                | DatabaseType::OpenGauss
+        ) {
+            generate_insert_ignore_duplicates_from_value_rows(
+                columns,
+                value_rows_batch,
+                table,
+                schema,
+                db_type,
+                catalog,
+                false,
+                true,
+            )
+        } else {
+            template.build(value_rows_batch)
+        };
+
+        if sql.is_empty() {
+            return Err("Generated empty SQL batch".to_string());
+        }
+
+        statements.push((std::mem::take(&mut sql), end - start));
+        start = end;
+    }
+
+    Ok(statements)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6590,6 +6783,7 @@ async fn prepare_postgres_owned_sequences_for_transfer(
             .map(|sequence| (sequence.name.clone(), sequence))
             .collect::<HashMap<_, _>>();
 
+    let sequence_if_not_exists = target_supports_if_not_exists_ddl(state, target_pool_key).await;
     for sequence in &owned_sequences {
         let should_create = validate_existing_postgres_sequence(
             sequence,
@@ -6600,7 +6794,11 @@ async fn prepare_postgres_owned_sequences_for_transfer(
             let definition = definitions
                 .get(&sequence.name)
                 .ok_or_else(|| format!("PostgreSQL sequence definition not found: {}", sequence.name))?;
-            let create_sql = generate_postgres_transfer_sequence_create_ddl(definition, &request.target_schema);
+            let create_sql = generate_postgres_transfer_sequence_create_ddl(
+                definition,
+                &request.target_schema,
+                sequence_if_not_exists,
+            );
             execute_on_pool(state, target_pool_key, &create_sql)
                 .await
                 .map_err(|e| format!("Failed to create PostgreSQL sequence for {target_table}: {e}"))?;
@@ -10130,6 +10328,11 @@ where
             .map_err(|e| format!("Failed to create PostgreSQL domain {}: {e}", domain.domain_name))?;
     }
 
+    let sequence_if_not_exists = if selected_sequences.is_empty() {
+        true
+    } else {
+        target_supports_if_not_exists_ddl(state, target_pool_key).await
+    };
     for sequence in selected_sequences {
         if is_cancelled(&request.transfer_id).await {
             return Err("Cancelled".to_string());
@@ -10149,7 +10352,7 @@ where
         execute_on_pool(
             state,
             target_pool_key,
-            &generate_postgres_transfer_sequence_create_ddl(&sequence, &request.target_schema),
+            &generate_postgres_transfer_sequence_create_ddl(&sequence, &request.target_schema, sequence_if_not_exists),
         )
         .await
         .map_err(|e| format!("Failed to create PostgreSQL sequence {}: {e}", sequence.name))?;
@@ -12232,8 +12435,14 @@ CREATE TABLE "Other"."prefix""Source"."NAME" ("ID" INT);"#;
             };
 
             assert_eq!(
-                generate_postgres_transfer_sequence_create_ddl(&sequence, "archive"),
+                generate_postgres_transfer_sequence_create_ddl(&sequence, "archive", true),
                 "CREATE SEQUENCE IF NOT EXISTS \"archive\".\"biz_banner_id_seq\"\n  AS bigint\n  START WITH 5\n  INCREMENT BY 2\n  MINVALUE -10\n  MAXVALUE 999\n  CACHE 7\n  CYCLE"
+            );
+            // PostgreSQL 9.2-9.4 reject `CREATE SEQUENCE IF NOT EXISTS` just like the
+            // index form, so legacy targets get the plain statement.
+            assert_eq!(
+                generate_postgres_transfer_sequence_create_ddl(&sequence, "archive", false),
+                "CREATE SEQUENCE \"archive\".\"biz_banner_id_seq\"\n  AS bigint\n  START WITH 5\n  INCREMENT BY 2\n  MINVALUE -10\n  MAXVALUE 999\n  CACHE 7\n  CYCLE"
             );
             assert_eq!(
                 generate_postgres_transfer_sequence_setval_sql(&sequence, "archive"),
@@ -14759,7 +14968,7 @@ PARTITION p_old VALUES LESS THAN (TO_DAYS('2026-01-01')))";
             },
         ];
 
-        let index_sql = generate_postgres_index_ddl(&indexes, "users", "public");
+        let index_sql = generate_postgres_index_ddl(&indexes, "users", "public", true);
         let foreign_key_sql = generate_postgres_foreign_key_ddl(&foreign_keys, "orders", "public", "archive");
 
         assert_eq!(
@@ -14794,12 +15003,50 @@ PARTITION p_old VALUES LESS THAN (TO_DAYS('2026-01-01')))";
             constraint_backed: false,
         }];
 
-        let sql = generate_postgres_index_ddl(&indexes, "users", "public");
+        let sql = generate_postgres_index_ddl(&indexes, "users", "public", true);
 
         assert_eq!(
             sql,
             vec!["CREATE INDEX IF NOT EXISTS \"users_name_trgm_idx\" ON \"public\".\"users\" USING gin (\"name\" gin_trgm_ops)".to_string()]
         );
+    }
+
+    #[test]
+    fn postgres_index_ddl_drops_if_not_exists_for_legacy_servers() {
+        // PostgreSQL 9.2/9.3/9.4 reject `CREATE INDEX IF NOT EXISTS` outright
+        // (`syntax error at or near "NOT"`), so the transfer must fall back to the
+        // plain form there (issue #8853).
+        let indexes = vec![db::IndexInfo {
+            name: "users_name_idx".to_string(),
+            columns: vec!["name".to_string(), "status".to_string()],
+            is_unique: false,
+            is_primary: false,
+            filter: None,
+            index_type: None,
+            included_columns: None,
+            comment: None,
+            key_is_expression: vec![false, false],
+            column_opclasses: vec![None, None],
+            key_options: Vec::new(),
+            constraint_backed: false,
+        }];
+
+        let sql = generate_postgres_index_ddl(&indexes, "users", "public", false);
+
+        assert_eq!(
+            sql,
+            vec!["CREATE INDEX \"users_name_idx\" ON \"public\".\"users\" (\"name\", \"status\")".to_string()]
+        );
+    }
+
+    #[test]
+    fn postgres_if_not_exists_is_version_gated() {
+        assert!(postgres_if_not_exists_supported(Some(150_001)));
+        assert!(postgres_if_not_exists_supported(Some(90_500)));
+        assert!(!postgres_if_not_exists_supported(Some(90_499)));
+        assert!(!postgres_if_not_exists_supported(Some(90_223)));
+        // Unknown version keeps the idempotent form used by every modern target.
+        assert!(postgres_if_not_exists_supported(None));
     }
 
     #[test]
@@ -14819,7 +15066,7 @@ PARTITION p_old VALUES LESS THAN (TO_DAYS('2026-01-01')))";
             constraint_backed: false,
         }];
 
-        let sql = generate_postgres_index_ddl(&indexes, "users", "public");
+        let sql = generate_postgres_index_ddl(&indexes, "users", "public", true);
 
         assert_eq!(
             sql,
@@ -14850,7 +15097,7 @@ PARTITION p_old VALUES LESS THAN (TO_DAYS('2026-01-01')))";
             constraint_backed: false,
         }];
 
-        let sql = generate_postgres_index_ddl(&indexes, "users", "public");
+        let sql = generate_postgres_index_ddl(&indexes, "users", "public", true);
 
         assert_eq!(
             sql,
@@ -14876,7 +15123,7 @@ PARTITION p_old VALUES LESS THAN (TO_DAYS('2026-01-01')))";
             constraint_backed: false,
         }];
 
-        let sql = generate_postgres_index_ddl(&indexes, "users", "public");
+        let sql = generate_postgres_index_ddl(&indexes, "users", "public", true);
 
         assert_eq!(
             sql,
@@ -14906,7 +15153,7 @@ PARTITION p_old VALUES LESS THAN (TO_DAYS('2026-01-01')))";
             constraint_backed: false,
         }];
 
-        let sql = generate_postgres_index_ddl(&indexes, "event_log", "public");
+        let sql = generate_postgres_index_ddl(&indexes, "event_log", "public", true);
 
         assert_eq!(
             sql,
@@ -14931,7 +15178,7 @@ PARTITION p_old VALUES LESS THAN (TO_DAYS('2026-01-01')))";
             constraint_backed: false,
         }];
 
-        let sql = generate_postgres_index_ddl(&indexes, "events", "public");
+        let sql = generate_postgres_index_ddl(&indexes, "events", "public", true);
 
         assert_eq!(
             sql,
@@ -14957,7 +15204,7 @@ PARTITION p_old VALUES LESS THAN (TO_DAYS('2026-01-01')))";
             constraint_backed: false,
         }];
 
-        let sql = generate_postgres_index_ddl(&indexes, "users", "public");
+        let sql = generate_postgres_index_ddl(&indexes, "users", "public", true);
 
         assert_eq!(
             sql,
@@ -16309,6 +16556,70 @@ SELECT 1 FROM dual"#
         );
 
         assert_eq!(sql, "INSERT INTO \"public\".\"users\" (\"id\", \"name\") VALUES\n(42, 'Ada')");
+    }
+
+    #[test]
+    fn postgres_insert_can_skip_duplicate_rows() {
+        let batches = generate_insert_typed_sql_batches_from_value_rows_with_options(
+            &[String::from("id"), String::from("name")],
+            &[String::from("(42, 'Ada')"), String::from("(43, 'Bob')")],
+            "users",
+            "public",
+            &DatabaseType::Postgres,
+            None,
+            SqlBatchLimits { max_rows: 100, target_sql_bytes: 1024, hard_sql_bytes: None },
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].1, 2);
+        assert!(batches[0].0.contains("ON CONFLICT DO NOTHING"));
+        assert!(batches[0].0.contains("(42, 'Ada')"));
+        assert!(batches[0].0.contains("(43, 'Bob')"));
+    }
+
+    #[test]
+    fn mysql_insert_can_skip_duplicate_rows() {
+        let batches = generate_insert_typed_sql_batches_from_value_rows_with_options(
+            &[String::from("id"), String::from("name")],
+            &[String::from("(42, 'Ada')"), String::from("(43, 'Bob')")],
+            "users",
+            "public",
+            &DatabaseType::Mysql,
+            None,
+            SqlBatchLimits { max_rows: 100, target_sql_bytes: 1024, hard_sql_bytes: None },
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].1, 2);
+        assert!(batches[0].0.contains("ON DUPLICATE KEY UPDATE"));
+        assert!(batches[0].0.contains("`id` = `id`"));
+        assert!(batches[0].0.contains("(42, 'Ada')"));
+        assert!(batches[0].0.contains("(43, 'Bob')"));
+    }
+
+    #[test]
+    fn sqlite_insert_can_skip_duplicate_rows() {
+        let batches = generate_insert_typed_sql_batches_from_value_rows_with_options(
+            &[String::from("id"), String::from("name")],
+            &[String::from("(42, 'Ada')"), String::from("(43, 'Bob')")],
+            "users",
+            "",
+            &DatabaseType::Sqlite,
+            None,
+            SqlBatchLimits { max_rows: 100, target_sql_bytes: 1024, hard_sql_bytes: None },
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].1, 2);
+        assert!(batches[0].0.contains("ON CONFLICT DO NOTHING"));
+        assert!(batches[0].0.contains("(42, 'Ada')"));
+        assert!(batches[0].0.contains("(43, 'Bob')"));
     }
 
     #[test]
