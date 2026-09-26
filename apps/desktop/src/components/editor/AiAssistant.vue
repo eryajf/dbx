@@ -369,6 +369,18 @@ const pluginComposerConnectionName = computed(() => {
   return pluginComposerConnectionLabel(context, pluginContextConnection.value?.name, activeConversation.value?.connectionName);
 });
 
+function canUsePluginAgentMode(context = pluginContext.value, connection = boundConnection.value): boolean {
+  return !context || !!connection;
+}
+
+watch(
+  [pluginContext, boundConnection],
+  ([context, connection]) => {
+    if (context && !connection && assistantMode.value === "agent") assistantMode.value = "ask";
+  },
+  { immediate: true },
+);
+
 // `immediate` runs this during setup whenever the AI config finished loading
 // before the panel mounted (the usual case: the app loads it at startup), and
 // `resolveDefaultActionSelection` reads `boundConnection`. It must therefore
@@ -1690,6 +1702,7 @@ const modeActionTriggerLabel = computed(() => {
 });
 
 function switchModeActionTab(mode: "ask" | "agent") {
+  if (mode === "agent" && !canUsePluginAgentMode()) return;
   activeAction.value = resolveDefaultActionSelection(mode);
   if (assistantMode.value !== mode) {
     // Set the mode after the action so the tab label and picker stay aligned.
@@ -4767,7 +4780,7 @@ function selectConversation(conv: AiConversation) {
   const activeRun = backgroundAiRunsEnabled ? desktopAiRun<ChatMessage>(conv.id) : undefined;
   messages.value = activeRun?.messages ?? chatMessagesFromConversation(conv);
   if (pluginContext.value) {
-    assistantMode.value = pluginContext.value.mode ?? "ask";
+    assistantMode.value = pluginContext.value.mode === "agent" && !boundConnection.value ? "ask" : (pluginContext.value.mode ?? "ask");
     activeAction.value = "general";
   }
   unreadConversations.delete(conv.id);
@@ -5311,7 +5324,7 @@ function openPluginConversation(request: AiPluginConversationRequest) {
   const pluginConnectionId = pluginContextConnectionId(request.context);
   const pluginConnection = pluginConnectionId ? connectionStore.getConfig(pluginConnectionId) : undefined;
   draftBinding.value = pluginConnection ? { connectionId: pluginConnection.id, connectionName: pluginConnection.name, database: "", schema: undefined } : null;
-  assistantMode.value = request.mode ?? request.context.mode ?? "ask";
+  assistantMode.value = request.mode === "agent" && !pluginConnection ? "ask" : (request.mode ?? request.context.mode ?? "ask");
   activeAction.value = "general";
   setPrompt(request.prompt, true);
   if (request.send) void send();
@@ -5981,11 +5994,12 @@ async function openExternalUrl(url: string) {
         <div class="resize-handle" @mousedown="startResize"></div>
         <div class="px-2 pb-2 pt-1">
           <div data-ai-composer-context-row :class="['ai-prompt-context-row mb-1 flex min-w-0 items-center gap-x-1 text-xs text-foreground/80', showAiSchemaSelector && 'ai-prompt-context-row--schema', compactContextControls && 'ai-prompt-context-row--compact']">
-            <details v-if="pluginContext" class="min-w-0 flex-1" data-ai-plugin-context>
-              <summary class="cursor-pointer truncate">{{ pluginContext.pluginName }} · {{ pluginContext.title }}</summary>
-              <pre class="max-h-56 overflow-auto whitespace-pre-wrap break-all p-2 text-[11px]">{{ pluginContextText(pluginContext) }}</pre>
-            </details>
-            <template v-else-if="connectionStore.connections.length">
+            <div v-if="pluginContext && !connectionStore.connections.length" class="flex min-w-0 max-w-[14rem] items-center gap-1" data-ai-plugin-context :title="pluginContext.title">
+              <ConnectionIcon v-if="pluginContextConnection" :connection="pluginContextConnection" class="h-3 w-3 shrink-0" />
+              <Server v-else class="h-3 w-3 shrink-0" />
+              <span class="truncate">{{ pluginComposerConnectionName }}</span>
+            </div>
+            <template v-if="connectionStore.connections.length">
               <ConnectionIcon v-if="boundConnection" :connection="boundConnection" class="h-3 w-3 shrink-0" />
               <Server v-else class="h-3 w-3 shrink-0" />
               <ConnectionTreeSelect
@@ -6347,12 +6361,7 @@ async function openExternalUrl(url: string) {
               </TooltipContent>
             </Tooltip>
             <!-- Combined mode + action selector -->
-            <span v-if="pluginContext" class="ai-mode-static-trigger flex shrink-0 items-center gap-1 text-xs text-muted-foreground" :title="t('ai.modes.ask')">
-              <MessageSquarePlus class="h-3 w-3" aria-hidden="true" />
-              <span class="ai-mode-action-label" aria-hidden="true">{{ t("ai.modes.ask") }}</span>
-              <span class="sr-only">{{ t("ai.modes.ask") }}</span>
-            </span>
-            <Popover v-else v-model:open="modeActionOpen">
+            <Popover v-model:open="modeActionOpen">
               <PopoverTrigger as-child>
                 <button type="button" class="ai-mode-action-trigger flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[6px] border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" :aria-label="modeActionTriggerLabel" :title="modeActionTriggerLabel">
                   <component :is="modeIcon" class="h-3 w-3" />
