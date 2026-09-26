@@ -3245,6 +3245,8 @@ export default withEnglishFallback({
     tempRunSql: "編集せずに実行",
     copyAll: "すべてコピー",
     copyMessage: "メッセージをコピー",
+    retryMessage: "このメッセージを再送信",
+    retryConfirmDescription: "このメッセージを再送信しますか？このターンと後続の返信は置き換えられます。",
     copied: "コピーしました",
     copyTestResult: "テスト結果をコピー",
     testErrorAuth: "認証またはアクセスに失敗しました。API キー、プロジェクト権限、API の有効化状態を確認してください。",

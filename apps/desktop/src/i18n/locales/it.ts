@@ -3105,6 +3105,8 @@ export default withEnglishFallback({
     tempRunSql: "Esegui senza modificare",
     copyAll: "Copia Tutto",
     copyMessage: "Copia messaggio",
+    retryMessage: "Invia di nuovo questo messaggio",
+    retryConfirmDescription: "Inviare di nuovo questo messaggio? Questo turno e le risposte successive verranno sostituiti.",
     copied: "Copiato",
     copyTestResult: "Copia risultato test",
     testErrorAuth: "Autenticazione o accesso non riusciti. Controlla la chiave API, i permessi del progetto e che l'API sia abilitata.",

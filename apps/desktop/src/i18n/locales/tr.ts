@@ -2907,6 +2907,8 @@ export default withEnglishFallback({
     tempRunSql: "Düzenleyiciyi değiştirmeden çalıştır",
     copyAll: "Tümünü Kopyala",
     copyMessage: "Mesajı kopyala",
+    retryMessage: "Bu mesajı yeniden gönder",
+    retryConfirmDescription: "Bu mesaj yeniden gönderilsin mi? Bu tur ve sonraki yanıtlar değiştirilecek.",
     copied: "Kopyalandı",
     copyTestResult: "Test sonucunu kopyala",
     testErrorAuth: "Kimlik doğrulama veya erişim başarısız oldu. API anahtarını, proje yetkilerini ve API erişilebilirliğini denetleyin.",

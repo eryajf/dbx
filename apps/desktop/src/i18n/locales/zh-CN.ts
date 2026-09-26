@@ -3203,6 +3203,8 @@ export default withEnglishFallback({
     tempRunSql: "临时运行",
     copyAll: "复制全部",
     copyMessage: "复制消息",
+    retryMessage: "重新发送这条消息",
+    retryConfirmDescription: "重新发送这条消息？当前轮次及后续回复将被替换。",
     copied: "已复制",
     copyTestResult: "复制测试结果",
     testErrorAuth: "身份验证或访问失败，请检查 API Key、项目权限和 API 启用状态。",

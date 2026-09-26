@@ -2931,6 +2931,8 @@ export default withEnglishFallback({
     tempRunSql: "Redaktoru dəyişdirmədən işlət",
     copyAll: "Hamısını kopyala",
     copyMessage: "Mesajı kopyala",
+    retryMessage: "Bu mesajı yenidən göndər",
+    retryConfirmDescription: "Bu mesaj yenidən göndərilsin? Bu tur və sonrakı cavablar əvəz olunacaq.",
     copied: "Kopyalandı",
     copyTestResult: "Sınaq nəticəsini kopyala",
     testErrorAuth: "Şəxsiyyətin təsdiqlənməsi və ya giriş alınmadı. API açarını, layihə icazələrini və API-nin əlçatanlığını yoxlayın.",

@@ -3103,6 +3103,8 @@ export default withEnglishFallback({
     tempRunSql: "臨時執行",
     copyAll: "複製全部",
     copyMessage: "複製訊息",
+    retryMessage: "重新傳送這則訊息",
+    retryConfirmDescription: "重新傳送這則訊息？目前輪次及後續回覆將被取代。",
     copied: "已複製",
     copyTestResult: "複製測試結果",
     testErrorAuth: "驗證或存取失敗，請檢查 API Key、專案權限和 API 啟用狀態。",

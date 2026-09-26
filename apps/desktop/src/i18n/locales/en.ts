@@ -3291,6 +3291,8 @@ export default {
     tempRunSql: "Run without modifying editor",
     copyAll: "Copy All",
     copyMessage: "Copy message",
+    retryMessage: "Resend this message",
+    retryConfirmDescription: "Resend this message? This turn and later replies will be replaced.",
     copied: "Copied",
     copyTestResult: "Copy test result",
     testErrorAuth: "Authentication or access failed. Check the API key, project permissions, and API availability.",
