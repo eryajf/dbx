@@ -157,11 +157,12 @@ function databaseContextMenuItems(row: DatabaseRow): ContextMenuItem[] {
 }
 
 function removeUnsupportedDatabaseItems(items: ContextMenuItem[]): ContextMenuItem[] {
-  // The sidebar's AI action needs the sidebar-level AI panel owner. The
-  // database browser has no such owner, so do not expose a menu item that
-  // would otherwise be a silent no-op here.
+  // The sidebar's AI action needs the sidebar-level AI panel owner, and the
+  // visible-schemas item emits "open-visible-schemas" which only the sidebar
+  // tree handles. The database browser wires neither, so do not expose menu
+  // items that would otherwise be a silent no-op here.
   return items.flatMap((item) => {
-    if (item.label.startsWith(t("contextMenu.addToAi")) || item.variant === "destructive") return [];
+    if (item.label.startsWith(t("contextMenu.addToAi")) || item.label === t("visibleSchemas.title") || item.variant === "destructive") return [];
     if (!item.children) return [item];
     const children = removeUnsupportedDatabaseItems(item.children);
     return children.length ? [{ ...item, children }] : [];
@@ -444,7 +445,7 @@ defineExpose({ focusSearch, refresh });
             @dblclick="openDatabase(row.name)"
             @keydown.enter.prevent="openDatabase(row.name)"
           >
-            <CustomContextMenu :items="databaseContextMenuItems(row)" v-slot="{ onContextMenu }">
+            <CustomContextMenu :items="() => databaseContextMenuItems(row)" v-slot="{ onContextMenu }">
               <div class="contents" @contextmenu="onContextMenu">
                 <div
                   v-for="key in columns"
@@ -470,7 +471,7 @@ defineExpose({ focusSearch, refresh });
           @dblclick="openDatabase(row.name)"
           @keydown.enter.prevent="openDatabase(row.name)"
         >
-          <CustomContextMenu :items="databaseContextMenuItems(row)" v-slot="{ onContextMenu }">
+          <CustomContextMenu :items="() => databaseContextMenuItems(row)" v-slot="{ onContextMenu }">
             <div class="contents" @contextmenu="onContextMenu">
               <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 shadow-sm"><Database class="h-6 w-6 text-emerald-600 dark:text-emerald-400" /></div>
               <span class="w-full truncate text-sm font-medium text-foreground" :title="row.name">{{ row.name }}</span>
