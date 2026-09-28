@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, h, nextTick, onMounted, onUnmounted, re
 import { uuid } from "@/lib/common/utils";
 import { useI18n } from "vue-i18n";
 import { translateBackendError } from "@/i18n/backend-errors";
+import { deferUntilPanelResizeEnd } from "@/lib/app/panelResizeState";
 import {
   ArrowDown,
   ArrowUp,
@@ -5169,6 +5170,15 @@ function hasOverflowingLabel(element: HTMLElement | null, selector: string): boo
 async function measureResponsiveControls(force = false) {
   const panel = promptPanelRef.value;
   if (!panel) return;
+  // Reading clientWidth/scrollWidth here forces a document-wide synchronous
+  // relayout, and the AI panel divider drag fires resize events every frame.
+  // Skip measurements while the drag is in flight and re-measure once at the end.
+  if (
+    deferUntilPanelResizeEnd(() => {
+      void measureResponsiveControls(force);
+    })
+  )
+    return;
   const panelWidth = panel.clientWidth;
   if (!force && lastResponsiveControlWidth === panelWidth) return;
 
@@ -6894,5 +6904,20 @@ html.dbx-legacy-webview.dark .ai-markdown :deep(.ai-markdown-table-wrap:hover::-
   z-index: 1;
   height: 9px;
   cursor: ns-resize;
+}
+
+.resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background-color: var(--border);
+  transition: background-color 0.15s ease;
+}
+
+.resize-handle:hover::before {
+  background-color: color-mix(in srgb, var(--foreground) 20%, transparent);
 }
 </style>
