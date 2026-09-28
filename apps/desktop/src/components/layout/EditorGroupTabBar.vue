@@ -84,7 +84,7 @@ import { hexToRgba } from "@/lib/common/color";
 import { copyToClipboard } from "@/lib/common/clipboard";
 import { parseTabDragPayload, serializeTabDragPayload } from "@/lib/tabs/tabDrag";
 import { createCloseAllTabMenuItem, createCloseLeftTabMenuItem, createCloseOtherTabMenuItem, createCloseRightTabMenuItem, createCloseTabMenuItem, createLocateTabMenuItem, createPinTabMenuItem, createRenameDuplicateTabItems } from "@/lib/tabs/tabMenu";
-import { connectionColor, dirtyTabTitleStyle, tabColorStyle as sharedTabColorStyle, tabDatabaseIconType, tabDisplayTitle, tabDisplayTitles, tabIconClass, tabTooltipLines } from "@/lib/tabs/tabPresentation";
+import { tabConnectionColor, dirtyTabTitleStyle, tabColorStyle as sharedTabColorStyle, tabDatabaseIconType, tabDisplayTitle, tabDisplayTitles, tabIconClass, tabTooltipLines } from "@/lib/tabs/tabPresentation";
 import { activeTabSidebarTarget } from "@/lib/sidebar/sidebarActiveTabTarget";
 import "./appTabBar.css";
 import type { QueryTab } from "@/types/database";
@@ -903,7 +903,7 @@ function tabColorStyle(tab: QueryTab): CSSProperties | undefined {
     if (!isTabActive(tab)) {
       return undefined;
     }
-    const color = connectionColor(tab.connectionId);
+    const color = settingsStore.editorSettings.colorizeConnectionTabs ? tabConnectionColor(tab.connectionId) : "";
     return { "--app-tab-background": color ? hexToRgba(color, 0.12) : "var(--accent)" } as CSSProperties;
   }
   return sharedTabColorStyle(tab, isTabActive(tab), isClassicLayout.value);

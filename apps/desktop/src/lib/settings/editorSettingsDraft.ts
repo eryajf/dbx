@@ -45,6 +45,7 @@ export const EDITOR_SETTINGS_DRAFT_KEYS = [
   "appLayout",
   "tabLayout",
   "tabPlacement",
+  "colorizeConnectionTabs",
   "tabGroupMode",
   "tabSortMode",
   "showColumnCommentsInHeader",
