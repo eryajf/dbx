@@ -691,7 +691,7 @@ function expandTabGroupForTab(tabId: string | null) {
 }
 
 function defaultTabGroupColor(tab: QueryTab) {
-  const connectionGroupColor = settingsStore.editorSettings.tabGroupMode === "connection" ? connectionColor(tab.connectionId) : undefined;
+  const connectionGroupColor = settingsStore.editorSettings.tabGroupMode === "connection" ? tabConnectionColor(tab.connectionId) : undefined;
   let hash = 0;
   for (const character of tabGroupKey(tab)) hash = (hash * 31 + character.codePointAt(0)!) | 0;
   return connectionGroupColor || tabGroupPalette[Math.abs(hash) % tabGroupPalette.length]!;
