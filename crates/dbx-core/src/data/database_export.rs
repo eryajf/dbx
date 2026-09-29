@@ -205,6 +205,7 @@ struct DatabaseExportObjectCounts {
     views: usize,
     sequences: usize,
     extensions: usize,
+    enums: usize,
     procedures: usize,
     functions: usize,
     triggers: usize,
@@ -241,7 +242,7 @@ fn database_export_total_objects(request: &DatabaseExportRequest, counts: &Datab
         total += counts.tables;
     }
     if request.include_structure {
-        total += counts.sequences + counts.extensions;
+        total += counts.sequences + counts.extensions + counts.enums;
     }
     if request.include_objects {
         total += counts.views;
@@ -443,6 +444,13 @@ struct PostgresExportSequence {
 struct PostgresExportExtension {
     name: String,
     schema: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PostgresExportEnum {
+    name: String,
+    schema: String,
+    labels: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -1897,6 +1905,17 @@ fn generate_postgres_extension_ddl(extension: &PostgresExportExtension) -> Strin
     )
 }
 
+fn generate_postgres_enum_ddl(enum_type: &PostgresExportEnum) -> String {
+    let labels =
+        enum_type.labels.iter().map(|label| quote_postgres_string_literal(label)).collect::<Vec<_>>().join(", ");
+    format!(
+        "CREATE TYPE {}.{} AS ENUM ({});",
+        quote_identifier(&enum_type.schema, &DatabaseType::Postgres),
+        quote_identifier(&enum_type.name, &DatabaseType::Postgres),
+        labels
+    )
+}
+
 async fn list_postgres_extension_members(
     state: &crate::connection::AppState,
     pool_key: &str,
@@ -1918,6 +1937,40 @@ async fn list_postgres_extension_members(
         }
     }
     Ok(members)
+}
+
+const POSTGRES_EXPORT_ENUMS_SQL: &str = "SELECT t.typname, \
+      COALESCE(array_to_json(array_agg(e.enumlabel ORDER BY e.enumsortorder))::text, '[]') \
+     FROM pg_catalog.pg_type t \
+     JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace \
+     LEFT JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid \
+     WHERE n.nspname = $1 AND t.typtype = 'e' \
+     GROUP BY t.typname \
+     ORDER BY t.typname";
+
+async fn list_postgres_export_enums(
+    state: &crate::connection::AppState,
+    pool_key: &str,
+    schema: &str,
+) -> Result<Vec<PostgresExportEnum>, String> {
+    let pool = {
+        let pool_handle = state.pool_handle(pool_key).await;
+        match pool_handle.as_ref() {
+            Some(crate::connection::PoolKind::Postgres(pool)) => pool.clone(),
+            _ => return Ok(Vec::new()),
+        }
+    };
+    let client = pool.get().await.map_err(|e| e.to_string())?;
+    let rows = client.query(POSTGRES_EXPORT_ENUMS_SQL, &[&schema]).await.map_err(|e| e.to_string())?;
+    rows.into_iter()
+        .map(|row| {
+            let name: String = row.get(0);
+            let labels_json: String = row.get(1);
+            let labels = serde_json::from_str::<Vec<String>>(&labels_json)
+                .map_err(|e| format!("invalid PostgreSQL enum labels for {name}: {e}"))?;
+            Ok(PostgresExportEnum { name, schema: schema.to_string(), labels })
+        })
+        .collect()
 }
 
 fn is_postgres_extension_member_routine(object: &crate::types::ObjectInfo, members: &PostgresExtensionMembers) -> bool {
@@ -3482,6 +3535,28 @@ async fn export_database_sql_core_inner(
     } else {
         Vec::new()
     };
+    let postgres_enums = if request.include_structure && matches!(db_type, DatabaseType::Postgres) {
+        match await_export_operation(
+            &request.export_id,
+            Box::pin(list_postgres_export_enums(state, &pool_key, &request.schema)),
+        )
+        .await
+        {
+            Ok(enums) => enums,
+            Err(e) if e == EXPORT_CANCELLED_ERROR => return Err(EXPORT_CANCELLED_ERROR.to_string()),
+            Err(e) => {
+                record_export_error(
+                    &mut file,
+                    request.fail_on_error,
+                    format!("exporting enums: {e}"),
+                    &mut lenient_errors,
+                )?;
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
     let all_tables = filter_export_table_infos(all_tables, &request.selected_tables, &request.excluded_tables)
         .into_iter()
         .filter(|table| !postgres_extension_members.relation_names.contains(&table.name))
@@ -3611,6 +3686,7 @@ async fn export_database_sql_core_inner(
             views: views.len(),
             sequences: postgres_sequences.len(),
             extensions: postgres_extensions.len(),
+            enums: postgres_enums.len(),
             procedures: procedures.len(),
             functions: functions.len(),
             triggers: triggers.len(),
@@ -3768,6 +3844,24 @@ async fn export_database_sql_core_inner(
             false,
         );
         writeln!(file, "{}\n", generate_postgres_extension_ddl(extension))
+            .map_err(|e| format!("Failed to write file: {e}"))?;
+        object_index += 1;
+    }
+
+    for enum_type in &postgres_enums {
+        if is_export_cancelled(&request.export_id).await {
+            return Err("Export cancelled".to_string());
+        }
+        emit_database_export_running(
+            &on_progress,
+            &request.export_id,
+            enum_type.name.clone(),
+            object_index,
+            total_objects,
+            total_rows_exported,
+            false,
+        );
+        writeln!(file, "{}\n", generate_postgres_enum_ddl(enum_type))
             .map_err(|e| format!("Failed to write file: {e}"))?;
         object_index += 1;
     }
@@ -4471,13 +4565,14 @@ mod tests {
         database_export_total_objects, drop_table_if_exists_sql, ensure_export_destination_dir,
         export_destination_identity_mismatch, filter_export_table_infos, format_export_sql_literal,
         format_export_table_ddl, format_mysql_spatial_export_literal, format_xugu_spatial_export_literal,
-        generate_postgres_extension_ddl, generate_postgres_sequence_create_ddl, generate_postgres_sequence_owner_ddl,
-        generate_postgres_sequence_setval_sql, is_postgres_extension_member_routine, mysql_database_export_preamble,
-        mysql_view_dependencies_from_rows, mysql_view_dependencies_sql, normalize_export_table_ddl,
-        record_export_destination_identity, record_export_error, replace_database_export_select_list,
-        sort_export_views_by_dependencies, split_postgres_export_table_triggers, write_database_export_rows,
-        BuildDatabaseSqlExportOptions, BuildExportInsertStatementsOptions, BuildExportSqlInsertOptions,
-        DatabaseExportObjectCounts, DatabaseExportRequest, DatabaseExportWriter, DdlNormalizeOptions, ExportedTableSql,
+        generate_postgres_enum_ddl, generate_postgres_extension_ddl, generate_postgres_sequence_create_ddl,
+        generate_postgres_sequence_owner_ddl, generate_postgres_sequence_setval_sql,
+        is_postgres_extension_member_routine, mysql_database_export_preamble, mysql_view_dependencies_from_rows,
+        mysql_view_dependencies_sql, normalize_export_table_ddl, record_export_destination_identity,
+        record_export_error, replace_database_export_select_list, sort_export_views_by_dependencies,
+        split_postgres_export_table_triggers, write_database_export_rows, BuildDatabaseSqlExportOptions,
+        BuildExportInsertStatementsOptions, BuildExportSqlInsertOptions, DatabaseExportObjectCounts,
+        DatabaseExportRequest, DatabaseExportWriter, DdlNormalizeOptions, ExportedTableSql, PostgresExportEnum,
         PostgresExportExtension, PostgresExportSequence, PostgresExtensionMembers, SqlInsertDialect,
         DATABASE_EXPORT_INSERT_BATCH_SIZE, DATABASE_EXPORT_ROW_LIMIT, POSTGRES_EXPORT_SEQUENCES_COMPAT_SQL,
         POSTGRES_EXPORT_SEQUENCES_SQL,
@@ -4786,6 +4881,7 @@ mod tests {
             views: 1,
             sequences: 2,
             extensions: 1,
+            enums: 1,
             procedures: 1,
             functions: 1,
             triggers: 2,
@@ -4793,10 +4889,10 @@ mod tests {
         };
 
         let cases = [
-            ("structure", export_request(true, false, false, Vec::new()), 5),
+            ("structure", export_request(true, false, false, Vec::new()), 6),
             ("data", export_request(false, true, false, Vec::new()), 2),
             ("objects", export_request(false, false, true, Vec::new()), 6),
-            ("all", export_request(true, true, true, Vec::new()), 11),
+            ("all", export_request(true, true, true, Vec::new()), 12),
             ("nothing", export_request(false, false, false, Vec::new()), 0),
         ];
 
@@ -4826,6 +4922,7 @@ mod tests {
             views: 1,
             sequences: 1,
             extensions: 1,
+            enums: 1,
             procedures: 4,
             functions: 5,
             triggers: 2,
@@ -4833,7 +4930,7 @@ mod tests {
         };
         let request = export_request(true, true, true, vec!["users".to_string(), "active_users".to_string()]);
 
-        assert_eq!(database_export_total_objects(&request, &counts), 4);
+        assert_eq!(database_export_total_objects(&request, &counts), 5);
     }
 
     #[test]
@@ -4889,6 +4986,20 @@ mod tests {
 
         assert_eq!(ddl, "CREATE EXTENSION IF NOT EXISTS \"pg_trgm\" WITH SCHEMA \"addons\";");
         assert!(!ddl.contains("VERSION"));
+    }
+
+    #[test]
+    fn postgres_enum_ddl_preserves_schema_order_and_escapes_labels() {
+        let enum_type = PostgresExportEnum {
+            name: "status\"type".to_string(),
+            schema: "app".to_string(),
+            labels: vec!["pending".to_string(), "it's\\ready".to_string(), "已完成".to_string()],
+        };
+
+        assert_eq!(
+            generate_postgres_enum_ddl(&enum_type),
+            "CREATE TYPE \"app\".\"status\"\"type\" AS ENUM ('pending', E'it''s\\\\ready', '已完成');"
+        );
     }
 
     #[test]
