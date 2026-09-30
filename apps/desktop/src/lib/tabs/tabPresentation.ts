@@ -342,6 +342,7 @@ export function queryResultStatementLabel(result: Pick<QueryResult, "sourceLabel
 }
 
 type ResultSourceFields = Pick<QueryResult, "sourceLabel" | "sourceLabelKind" | "sourceQualifier" | "sourceName">;
+type ResultNamingOptions = { includeSourceDatabase?: boolean; namingMode?: ResultTabNamingMode; preferComments?: boolean };
 
 function resultSourceLabel(result: ResultSourceFields, includeSourceDatabase: boolean): string | undefined {
   if (result.sourceName) {
@@ -349,6 +350,14 @@ function resultSourceLabel(result: ResultSourceFields, includeSourceDatabase: bo
     return result.sourceQualifier ? `${result.sourceQualifier}.${result.sourceName}` : result.sourceName;
   }
   return result.sourceLabelKind === "comment" ? undefined : result.sourceLabel;
+}
+
+function resultNamingLabel(result: ResultSourceFields, options: ResultNamingOptions): string | undefined {
+  if (options.namingMode === "ordinal") return undefined;
+  const commentLabel = result.sourceLabelKind === "comment" ? result.sourceLabel : undefined;
+  if (options.namingMode === "comment") return commentLabel;
+  if (options.preferComments !== false && commentLabel) return commentLabel;
+  return resultSourceLabel(result, options.includeSourceDatabase !== false);
 }
 
 export function middleEllipsis(value: string, maxLength = 24): string {
@@ -486,17 +495,13 @@ export function queryResultExecutionSql(tab: Pick<QueryTab, "result" | "resultBa
   return tab.resultSortedSql || resultSqlForGrid(tab);
 }
 
-export function tabularResultItems(results: QueryResult[] | undefined, options: { includeSourceDatabase?: boolean; namingMode?: ResultTabNamingMode } = {}): { result: QueryResult; index: number; n: number; label?: string; displayLabel?: string; labelTruncated: boolean; title?: string }[] {
+export function tabularResultItems(results: QueryResult[] | undefined, options: ResultNamingOptions = {}): { result: QueryResult; index: number; n: number; label?: string; displayLabel?: string; labelTruncated: boolean; title?: string }[] {
   if (!results) return [];
-  const namingMode = options.namingMode ?? "source";
   return results
     .map((result, index) => ({ result, index }))
     .filter((item) => item.result.columns.length > 0 && item.result.server_message !== true)
     .map((item, ordinal) => {
-      const sourceLabel = resultSourceLabel(item.result, options.includeSourceDatabase !== false);
-      const commentLabel = item.result.sourceLabelKind === "comment" ? item.result.sourceLabel : undefined;
-      const isCommentLabel = item.result.sourceLabelKind === "comment";
-      const displaySource = namingMode === "ordinal" ? undefined : namingMode === "comment" ? (isCommentLabel ? commentLabel : undefined) : sourceLabel;
+      const displaySource = resultNamingLabel(item.result, options);
       const displayLabel = displaySource ? middleEllipsis(displaySource) : undefined;
       return {
         ...item,
@@ -517,16 +522,18 @@ export function activeResultRun(tab: Pick<QueryTab, "resultRuns" | "activeResult
  * 执行批次默认显示名：取该批次主结果的来源（库名.表名 / 表名）。
  * 连表查询同样取 FROM 之后的第一个物理表，与结果集页签的来源解析保持一致。
  */
-function resultRunSourceLabel(run: QueryResultRun, includeSourceDatabase: boolean, namingMode: ResultTabNamingMode, fallback: { database?: string; databaseType?: DatabaseType }): string | undefined {
+function resultRunSourceLabel(run: QueryResultRun, options: ResultNamingOptions, fallback: { database?: string; databaseType?: DatabaseType }): string | undefined {
+  const includeSourceDatabase = options.includeSourceDatabase !== false;
+  const namingMode = options.namingMode ?? "source";
   if (namingMode === "ordinal") return undefined;
   // 优先用批次自带的来源：非活动批次的结果 payload 会被回收，payload 里的来源会丢失
-  const own = namingMode === "comment" ? (run.sourceLabelKind === "comment" ? run.sourceLabel : undefined) : run.sourceLabelKind === "comment" ? undefined : includeSourceDatabase ? run.sourceLabel || run.sourceName : run.sourceName || run.sourceLabel;
+  const own = run.sourceLabelKind === "comment" ? (namingMode === "comment" || options.preferComments !== false ? run.sourceLabel : undefined) : namingMode === "comment" ? undefined : includeSourceDatabase ? run.sourceLabel || run.sourceName : run.sourceName || run.sourceLabel;
   if (own) return own;
   const candidates = run.result ? [run.result, ...(run.results ?? [])] : (run.results ?? []);
   for (const result of candidates) {
     if (!result) continue;
     // 批次级来源缺失时回退到结果本身；关闭“结果集名称包含数据库名”时优先用对象名
-    const label = namingMode === "comment" ? (result.sourceLabelKind === "comment" ? result.sourceLabel : undefined) : resultSourceLabel(result, includeSourceDatabase);
+    const label = resultNamingLabel(result, options);
     if (label) return label;
   }
   // 历史批次（功能上线前创建的）没有来源信息：用批次 SQL 重新解析，连表查询同样取第一个物理表
@@ -537,16 +544,11 @@ function resultRunSourceLabel(run: QueryResultRun, includeSourceDatabase: boolea
   return undefined;
 }
 
-export function resultRunItems(
-  tab: Pick<QueryTab, "resultRuns" | "activeResultRunId">,
-  options: { includeSourceDatabase?: boolean; namingMode?: ResultTabNamingMode; database?: string; databaseType?: DatabaseType } = {},
-): { id: string; title: string; sequence: number; active: boolean; pinned: boolean; sourceLabel?: string }[] {
-  const includeSourceDatabase = options.includeSourceDatabase !== false;
-  const namingMode = options.namingMode ?? "source";
+export function resultRunItems(tab: Pick<QueryTab, "resultRuns" | "activeResultRunId">, options: ResultNamingOptions & { database?: string; databaseType?: DatabaseType } = {}): { id: string; title: string; sequence: number; active: boolean; pinned: boolean; sourceLabel?: string }[] {
   const fallback = { database: options.database, databaseType: options.databaseType };
   const seenBySource = new Map<string, number>();
   return (tab.resultRuns ?? []).map((run) => {
-    const source = resultRunSourceLabel(run, includeSourceDatabase, namingMode, fallback);
+    const source = resultRunSourceLabel(run, options, fallback);
     let sourceLabel = source;
     if (source) {
       // 同一张表被查询多次时用序号后缀区分页签（users、users (2)…）

@@ -502,8 +502,11 @@ const hasQueryOutput = computed(() => tabHasQueryOutput(props.activeTab));
 // 结果集页签/列表的名称是否带库名，由编辑器设置控制（默认带库名）
 const includeResultSourceDatabase = computed(() => settingsStore.editorSettings.showResultSourceDatabase);
 const resultTabNamingMode = computed(() => settingsStore.editorSettings.resultTabNamingMode);
-const visibleResultItems = computed(() => tabularResultItems(props.activeTab.results ?? (props.activeTab.result ? [props.activeTab.result] : undefined), { includeSourceDatabase: includeResultSourceDatabase.value, namingMode: resultTabNamingMode.value }));
-const tabularResults = computed(() => tabularResultItems(props.activeTab.results, { includeSourceDatabase: includeResultSourceDatabase.value, namingMode: resultTabNamingMode.value }));
+const preferResultTabComments = computed(() => settingsStore.editorSettings.resultTabPreferComments);
+const visibleResultItems = computed(() =>
+  tabularResultItems(props.activeTab.results ?? (props.activeTab.result ? [props.activeTab.result] : undefined), { includeSourceDatabase: includeResultSourceDatabase.value, namingMode: resultTabNamingMode.value, preferComments: preferResultTabComments.value }),
+);
+const tabularResults = computed(() => tabularResultItems(props.activeTab.results, { includeSourceDatabase: includeResultSourceDatabase.value, namingMode: resultTabNamingMode.value, preferComments: preferResultTabComments.value }));
 const allResultExportSheets = computed(() =>
   tabularResults.value.map((item) => ({
     sheetName: item.label || t("tabs.resultN", { n: item.n }),
@@ -516,6 +519,7 @@ const resultRuns = computed(() =>
   resultRunItems(props.activeTab, {
     includeSourceDatabase: includeResultSourceDatabase.value,
     namingMode: resultTabNamingMode.value,
+    preferComments: preferResultTabComments.value,
     database: props.activeTab.database,
     databaseType: activeEffectiveDatabaseType.value,
   }),

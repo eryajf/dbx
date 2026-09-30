@@ -55,6 +55,7 @@ export const EDITOR_SETTINGS_DRAFT_KEYS = [
   "showColumnHeaderTooltips",
   "showResultSourceDatabase",
   "resultTabNamingMode",
+  "resultTabPreferComments",
   "dataGridShowTransposeFieldMetadata",
   "colorizeDataGridCellTypes",
   "dataGridTypeColorSchemes",

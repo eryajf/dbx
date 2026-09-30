@@ -240,10 +240,22 @@ describe("query result labels", () => {
           sourceName: "users",
         },
       ],
-      { namingMode: "source" },
+      { namingMode: "source", preferComments: false },
     );
 
     expect(item?.label).toBe("app.users");
+  });
+
+  it.each([
+    ["source", undefined, true, "Weekly report"],
+    ["source", true, false, "Weekly report"],
+    ["source", false, true, "app.users"],
+    ["source", false, false, "users"],
+    ["comment", false, true, "Weekly report"],
+    ["ordinal", true, true, undefined],
+  ] as const)("respects %s naming with preferComments=%s and includeSourceDatabase=%s", (namingMode, preferComments, includeSourceDatabase, expected) => {
+    const result: QueryResult = { columns: ["id"], rows: [[1]], affected_rows: 0, execution_time_ms: 1, sourceLabel: "Weekly report", sourceLabelKind: "comment", sourceQualifier: "app", sourceName: "users" };
+    expect(tabularResultItems([result], { namingMode, preferComments, includeSourceDatabase })[0]?.label).toBe(expected);
   });
 
   it("uses the explicit label kind for comment mode and keeps legacy source labels out", () => {
@@ -347,7 +359,21 @@ describe("result run labels", () => {
   it("uses the source table for a commented run in source mode", () => {
     const commentRun = run("run-1", 1, { ...sourceResult("Weekly report", "app", "users"), sourceLabelKind: "comment" });
 
-    expect(resultRunItems(queryTab({ resultRuns: [commentRun] }) as QueryTab, { namingMode: "source" }).map((item) => item.sourceLabel)).toEqual(["app.users"]);
+    expect(resultRunItems(queryTab({ resultRuns: [commentRun] }) as QueryTab, { namingMode: "source", preferComments: false }).map((item) => item.sourceLabel)).toEqual(["app.users"]);
+  });
+
+  it.each([false, true])("switches comment preference after the run payload is evicted (%s)", (preferComments) => {
+    const commentRun = run("run-1", 1, undefined, { sourceLabel: "Weekly report", sourceLabelKind: "comment", sourceName: "users" });
+    const tab = queryTab({ resultRuns: [commentRun] }) as QueryTab;
+    expect(resultRunItems(tab, { database: "app", databaseType: "mysql", preferComments })[0]?.sourceLabel).toBe(preferComments ? "Weekly report" : "app.users");
+    expect(resultRunItems(tab, { database: "app", databaseType: "mysql", preferComments, includeSourceDatabase: false })[0]?.sourceLabel).toBe(preferComments ? "Weekly report" : "users");
+    expect(resultRunItems(tab, { namingMode: "comment", preferComments })[0]?.sourceLabel).toBe("Weekly report");
+    expect(resultRunItems(tab, { namingMode: "ordinal", preferComments })[0]?.sourceLabel).toBeUndefined();
+  });
+
+  it("prefers comments by default for stored runs without a result payload", () => {
+    const commentRun = run("run-1", 1, undefined, { sourceLabel: "Weekly report", sourceLabelKind: "comment" });
+    expect(resultRunItems(queryTab({ resultRuns: [commentRun] }) as QueryTab)[0]?.sourceLabel).toBe("Weekly report");
   });
 });
 

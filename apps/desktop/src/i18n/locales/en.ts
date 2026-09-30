@@ -8214,6 +8214,8 @@ export default {
     resultTabNamingModeSource: "Database and table",
     resultTabNamingModeOrdinal: "Result number",
     resultTabNamingModeComment: "SQL comment",
+    resultTabPreferComments: "Prefer SQL comments when available",
+    resultTabPreferCommentsDescription: "Use the comment above the SQL statement when available; turn off to always use the source table name.",
     dataGridShowTransposeFieldMetadata: "Show field metadata in transpose view",
     dataGridShowTransposeFieldMetadataDescription: "Display enabled column types and comments on separate lines in transpose view. This increases row height.",
     colorizeDataGridCellTypes: "Color-code data grid values",

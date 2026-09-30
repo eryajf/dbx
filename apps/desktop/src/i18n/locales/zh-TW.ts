@@ -6712,6 +6712,8 @@ export default withEnglishFallback({
     resultTabNamingModeSource: "資料庫名稱和資料表名稱",
     resultTabNamingModeOrdinal: "結果序號",
     resultTabNamingModeComment: "SQL 註解",
+    resultTabPreferComments: "有註解時優先顯示註解",
+    resultTabPreferCommentsDescription: "開啟後優先使用 SQL 語句上方的註解；關閉後依來源資料表名稱顯示。",
     dataGridShowTransposeFieldMetadata: "在轉置檢視中顯示欄位中繼資料",
     dataGridShowTransposeFieldMetadataDescription: "在轉置檢視中分行顯示已啟用的資料類型和註解。開啟後會增加列高。",
     colorizeDataGridCellTypes: "依資料類型為表格值著色",

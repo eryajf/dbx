@@ -7392,6 +7392,8 @@ export default withEnglishFallback({
     resultTabNamingModeSource: "Database e tabella",
     resultTabNamingModeOrdinal: "Numero risultato",
     resultTabNamingModeComment: "Commento SQL",
+    resultTabPreferComments: "Preferisci i commenti SQL se presenti",
+    resultTabPreferCommentsDescription: "Usa il commento sopra l’istruzione SQL; disattiva per usare sempre il nome della tabella di origine.",
     dataGridShowTransposeFieldMetadata: "Mostra i metadati dei campi nella vista trasposta",
     dataGridShowTransposeFieldMetadataDescription: "Visualizza i tipi di colonna e i commenti abilitati su righe separate nella vista trasposta. Questo aumenta l'altezza delle righe.",
     colorizeDataGridCellTypes: "Colora i valori in base al tipo di dato",

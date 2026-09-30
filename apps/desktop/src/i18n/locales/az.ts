@@ -7431,6 +7431,8 @@ export default withEnglishFallback({
     resultTabNamingModeSource: "Verilənlər bazası və cədvəl adı",
     resultTabNamingModeOrdinal: "Nəticə nömrəsi",
     resultTabNamingModeComment: "SQL şərhi",
+    resultTabPreferComments: "Mövcud olduqda SQL şərhlərinə üstünlük ver",
+    resultTabPreferCommentsDescription: "SQL ifadəsinin üstündəki şərhdən istifadə edin; həmişə mənbə cədvəlinin adını göstərmək üçün söndürün.",
     dataGridShowTransposeFieldMetadata: "Transpozisiya görünüşündə sahə metaverilənlərini göstər",
     dataGridShowTransposeFieldMetadataDescription: "Transpozisiya görünüşündə aktiv edilmiş sütun növlərini və şərhləri ayrı sətirlərdə göstər. Bu, sətrin hündürlüyünü artırır.",
     colorizeDataGridCellTypes: "Verilənlər cədvəlinin dəyərlərini rənglə fərqləndir",

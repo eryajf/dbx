@@ -913,6 +913,8 @@ export interface EditorSettings {
   showResultSourceDatabase: boolean;
   /** Naming strategy for query result execution and result-set tabs. */
   resultTabNamingMode: ResultTabNamingMode;
+  /** Prefer SQL preamble comments in source naming mode, preserving the original naming behavior. */
+  resultTabPreferComments: boolean;
   dataGridShowTransposeFieldMetadata: boolean;
   colorizeDataGridCellTypes: boolean;
   dataGridTypeColorSchemes: DataGridTypeColorScheme[];
@@ -1204,6 +1206,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   showColumnHeaderTooltips: true,
   showResultSourceDatabase: true,
   resultTabNamingMode: "source",
+  resultTabPreferComments: true,
   dataGridShowTransposeFieldMetadata: false,
   colorizeDataGridCellTypes: false,
   dataGridTypeColorSchemes: [],
@@ -1783,6 +1786,7 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
     showColumnHeaderTooltips: settings.showColumnHeaderTooltips ?? DEFAULT_EDITOR_SETTINGS.showColumnHeaderTooltips,
     showResultSourceDatabase: settings.showResultSourceDatabase ?? DEFAULT_EDITOR_SETTINGS.showResultSourceDatabase,
     resultTabNamingMode: normalizeResultTabNamingMode(settings.resultTabNamingMode),
+    resultTabPreferComments: settings.resultTabPreferComments !== false,
     dataGridShowTransposeFieldMetadata: settings.dataGridShowTransposeFieldMetadata === true,
     colorizeDataGridCellTypes: settings.colorizeDataGridCellTypes ?? DEFAULT_EDITOR_SETTINGS.colorizeDataGridCellTypes,
     dataGridTypeColorSchemes,
@@ -2625,6 +2629,7 @@ export const useSettingsStore = defineStore("settings", () => {
     if (partial.showColumnHeaderTooltips !== undefined) editorSettings.value.showColumnHeaderTooltips = partial.showColumnHeaderTooltips;
     if (partial.showResultSourceDatabase !== undefined) editorSettings.value.showResultSourceDatabase = partial.showResultSourceDatabase;
     if (partial.resultTabNamingMode !== undefined) editorSettings.value.resultTabNamingMode = normalizeResultTabNamingMode(partial.resultTabNamingMode);
+    if (partial.resultTabPreferComments !== undefined) editorSettings.value.resultTabPreferComments = partial.resultTabPreferComments !== false;
     if (partial.dataGridShowTransposeFieldMetadata !== undefined) editorSettings.value.dataGridShowTransposeFieldMetadata = partial.dataGridShowTransposeFieldMetadata === true;
     if (partial.colorizeDataGridCellTypes !== undefined) editorSettings.value.colorizeDataGridCellTypes = partial.colorizeDataGridCellTypes === true;
     if (partial.dataGridTypeColorSchemes !== undefined) {

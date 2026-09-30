@@ -8180,6 +8180,8 @@ export default withEnglishFallback({
     resultTabNamingModeSource: "数据库名和表名",
     resultTabNamingModeOrdinal: "结果序号",
     resultTabNamingModeComment: "SQL 注释",
+    resultTabPreferComments: "有注释时优先展示注释",
+    resultTabPreferCommentsDescription: "开启后优先使用 SQL 语句上方的注释；关闭后按来源表名显示。",
     dataGridShowTransposeFieldMetadata: "在转置视图中显示字段元数据",
     dataGridShowTransposeFieldMetadataDescription: "在转置视图中分行显示已启用的数据类型和注释。开启后会增加行高。",
     colorizeDataGridCellTypes: "按数据类型为表格值着色",

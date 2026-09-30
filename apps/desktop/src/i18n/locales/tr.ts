@@ -7313,6 +7313,8 @@ export default withEnglishFallback({
     resultTabNamingModeSource: "Veritabanı ve tablo adı",
     resultTabNamingModeOrdinal: "Sonuç numarası",
     resultTabNamingModeComment: "SQL yorumu",
+    resultTabPreferComments: "Varsa SQL yorumlarına öncelik ver",
+    resultTabPreferCommentsDescription: "SQL ifadesinin üstündeki yorumu kullan; her zaman kaynak tablo adını göstermek için kapat.",
     dataGridShowTransposeFieldMetadata: "Devrik görünümde alan meta verisini göster",
     dataGridShowTransposeFieldMetadataDescription: "Etkin sütun türlerini ve açıklamalarını devrik görünümde ayrı satırlarda göster. Bu, satır yüksekliğini artırır.",
     colorizeDataGridCellTypes: "Veri tablosu değerlerini renklendir",

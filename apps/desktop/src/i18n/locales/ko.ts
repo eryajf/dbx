@@ -7166,6 +7166,8 @@ export default withEnglishFallback({
     resultTabNamingModeSource: "데이터베이스 및 테이블 이름",
     resultTabNamingModeOrdinal: "결과 번호",
     resultTabNamingModeComment: "SQL 주석",
+    resultTabPreferComments: "SQL 주석이 있으면 우선 표시",
+    resultTabPreferCommentsDescription: "SQL 문 위의 주석을 우선 표시합니다. 끄면 항상 원본 테이블 이름을 표시합니다.",
     dataGridShowTransposeFieldMetadata: "전치 보기에 필드 메타데이터 표시",
     dataGridShowTransposeFieldMetadataDescription: "활성화된 데이터 타입과 주석을 전치 보기의 별도 줄에 표시합니다. 활성화하면 행 높이가 증가합니다.",
     colorizeDataGridCellTypes: "데이터 타입별 값 색상 표시",

@@ -7419,6 +7419,8 @@ export default withEnglishFallback({
     resultTabNamingModeSource: "データベース名とテーブル名",
     resultTabNamingModeOrdinal: "結果番号",
     resultTabNamingModeComment: "SQL コメント",
+    resultTabPreferComments: "SQL コメントがある場合は優先する",
+    resultTabPreferCommentsDescription: "SQL 文の上のコメントを優先します。オフにすると常に参照元のテーブル名を表示します。",
     dataGridShowTransposeFieldMetadata: "転置ビューにフィールドメタデータを表示",
     dataGridShowTransposeFieldMetadataDescription: "有効なデータ型とコメントを転置ビューの別行に表示します。有効にすると行の高さが増えます。",
     colorizeDataGridCellTypes: "データ型に応じて値を色分け",
