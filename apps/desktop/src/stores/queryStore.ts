@@ -466,9 +466,8 @@ function annotateQueryResultSources(results: QueryResult[], sql: string, databas
     if (customName) {
       result.sourceLabel = customName;
       result.sourceLabelKind = "comment";
-      // 自定义名称（-- name: xxx）优先：清除结构化来源，避免“结果集名称包含数据库名”设置把它替换成表名
-      result.sourceQualifier = undefined;
-      result.sourceName = undefined;
+      // 保留结构化来源，方便“来源表名”模式在注释存在时仍显示表名。
+      // “注释”模式通过 sourceLabelKind 选择这个自定义名称。
     }
     const successfulUseDatabase = result.execution_error !== true ? useDatabaseFromStatement(statement.sql, databaseType) : undefined;
     if (successfulUseDatabase) {

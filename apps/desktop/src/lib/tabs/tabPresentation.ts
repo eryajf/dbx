@@ -341,6 +341,16 @@ export function queryResultStatementLabel(result: Pick<QueryResult, "sourceLabel
   return result.sourceLabel;
 }
 
+type ResultSourceFields = Pick<QueryResult, "sourceLabel" | "sourceLabelKind" | "sourceQualifier" | "sourceName">;
+
+function resultSourceLabel(result: ResultSourceFields, includeSourceDatabase: boolean): string | undefined {
+  if (result.sourceName) {
+    if (!includeSourceDatabase) return result.sourceName;
+    return result.sourceQualifier ? `${result.sourceQualifier}.${result.sourceName}` : result.sourceName;
+  }
+  return result.sourceLabelKind === "comment" ? undefined : result.sourceLabel;
+}
+
 export function middleEllipsis(value: string, maxLength = 24): string {
   if (value.length <= maxLength) return value;
   if (maxLength <= 3) return ".".repeat(Math.max(0, maxLength));
@@ -483,14 +493,10 @@ export function tabularResultItems(results: QueryResult[] | undefined, options: 
     .map((result, index) => ({ result, index }))
     .filter((item) => item.result.columns.length > 0 && item.result.server_message !== true)
     .map((item, ordinal) => {
-      const label = queryResultStatementLabel(item.result);
-      const { sourceName, sourceQualifier } = item.result;
-      // 只有在标签确实由“库名.对象名”拼成时才启用短名称，避免覆盖 `-- name: xxx` 之类的自定义名称
-      const qualifiedLabel = sourceName ? (sourceQualifier ? `${sourceQualifier}.${sourceName}` : sourceName) : undefined;
-      // 关闭“结果集名称包含数据库名”时，页签与结果列表只展示对象名；
-      // 完整名称（含库名）仍保留在 title，供悬浮提示与搜索使用。
+      const sourceLabel = resultSourceLabel(item.result, options.includeSourceDatabase !== false);
+      const commentLabel = item.result.sourceLabelKind === "comment" ? item.result.sourceLabel : undefined;
       const isCommentLabel = item.result.sourceLabelKind === "comment";
-      const displaySource = namingMode === "ordinal" ? undefined : namingMode === "comment" ? (isCommentLabel ? label : undefined) : options.includeSourceDatabase === false && sourceName && qualifiedLabel === label ? sourceName : label;
+      const displaySource = namingMode === "ordinal" ? undefined : namingMode === "comment" ? (isCommentLabel ? commentLabel : undefined) : sourceLabel;
       const displayLabel = displaySource ? middleEllipsis(displaySource) : undefined;
       return {
         ...item,
@@ -514,13 +520,13 @@ export function activeResultRun(tab: Pick<QueryTab, "resultRuns" | "activeResult
 function resultRunSourceLabel(run: QueryResultRun, includeSourceDatabase: boolean, namingMode: ResultTabNamingMode, fallback: { database?: string; databaseType?: DatabaseType }): string | undefined {
   if (namingMode === "ordinal") return undefined;
   // 优先用批次自带的来源：非活动批次的结果 payload 会被回收，payload 里的来源会丢失
-  const own = namingMode === "comment" ? (run.sourceLabelKind === "comment" ? run.sourceLabel : undefined) : includeSourceDatabase ? run.sourceLabel || run.sourceName : run.sourceName || run.sourceLabel;
+  const own = namingMode === "comment" ? (run.sourceLabelKind === "comment" ? run.sourceLabel : undefined) : run.sourceLabelKind === "comment" ? undefined : includeSourceDatabase ? run.sourceLabel || run.sourceName : run.sourceName || run.sourceLabel;
   if (own) return own;
   const candidates = run.result ? [run.result, ...(run.results ?? [])] : (run.results ?? []);
   for (const result of candidates) {
     if (!result) continue;
     // 批次级来源缺失时回退到结果本身；关闭“结果集名称包含数据库名”时优先用对象名
-    const label = namingMode === "comment" ? (result.sourceLabelKind === "comment" ? result.sourceLabel : undefined) : includeSourceDatabase ? result.sourceLabel || result.sourceName : result.sourceName || result.sourceLabel;
+    const label = namingMode === "comment" ? (result.sourceLabelKind === "comment" ? result.sourceLabel : undefined) : resultSourceLabel(result, includeSourceDatabase);
     if (label) return label;
   }
   // 历史批次（功能上线前创建的）没有来源信息：用批次 SQL 重新解析，连表查询同样取第一个物理表

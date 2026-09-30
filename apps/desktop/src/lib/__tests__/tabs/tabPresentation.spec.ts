@@ -204,7 +204,7 @@ describe("query result labels", () => {
     expect(withoutDatabase?.title).toBe("cosimulation2.0.data_monitor");
   });
 
-  it("keeps a custom result name even when the database is hidden", () => {
+  it("uses a custom result name in comment mode even when the database is hidden", () => {
     const [item] = tabularResultItems(
       [
         {
@@ -213,16 +213,37 @@ describe("query result labels", () => {
           affected_rows: 0,
           execution_time_ms: 1,
           sourceLabel: "My weekly report",
+          sourceLabelKind: "comment",
           sourceQualifier: "app",
           sourceName: "users",
           sourceStatement: "SELECT * FROM users",
         },
       ],
-      { includeSourceDatabase: false },
+      { includeSourceDatabase: false, namingMode: "comment" },
     );
 
     expect(item?.label).toBe("My weekly report");
     expect(item?.title).toBe("My weekly report");
+  });
+
+  it("uses the source table in source mode when a SQL comment also names the result", () => {
+    const [item] = tabularResultItems(
+      [
+        {
+          columns: ["id"],
+          rows: [[1]],
+          affected_rows: 0,
+          execution_time_ms: 1,
+          sourceLabel: "My weekly report",
+          sourceLabelKind: "comment",
+          sourceQualifier: "app",
+          sourceName: "users",
+        },
+      ],
+      { namingMode: "source" },
+    );
+
+    expect(item?.label).toBe("app.users");
   });
 
   it("uses the explicit label kind for comment mode and keeps legacy source labels out", () => {
@@ -321,6 +342,12 @@ describe("result run labels", () => {
 
     expect(resultRunItems(queryTab({ resultRuns: [commentRun, legacySourceRun] }) as QueryTab, { namingMode: "comment" }).map((item) => item.sourceLabel)).toEqual(["Weekly report", undefined]);
     expect(resultRunItems(queryTab({ resultRuns: [commentRun] }) as QueryTab, { namingMode: "ordinal" })[0]?.sourceLabel).toBeUndefined();
+  });
+
+  it("uses the source table for a commented run in source mode", () => {
+    const commentRun = run("run-1", 1, { ...sourceResult("Weekly report", "app", "users"), sourceLabelKind: "comment" });
+
+    expect(resultRunItems(queryTab({ resultRuns: [commentRun] }) as QueryTab, { namingMode: "source" }).map((item) => item.sourceLabel)).toEqual(["app.users"]);
   });
 });
 
