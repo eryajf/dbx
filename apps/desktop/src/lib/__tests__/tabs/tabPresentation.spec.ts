@@ -224,6 +224,37 @@ describe("query result labels", () => {
     expect(item?.label).toBe("My weekly report");
     expect(item?.title).toBe("My weekly report");
   });
+
+  it("uses the explicit label kind for comment mode and keeps legacy source labels out", () => {
+    const comment = tabularResultItems(
+      [
+        {
+          columns: ["id"],
+          rows: [[1]],
+          affected_rows: 0,
+          execution_time_ms: 1,
+          sourceLabel: "Weekly report",
+          sourceLabelKind: "comment",
+        },
+      ],
+      { namingMode: "comment" },
+    )[0];
+    const legacySource = tabularResultItems(
+      [
+        {
+          columns: ["id"],
+          rows: [[1]],
+          affected_rows: 0,
+          execution_time_ms: 1,
+          sourceLabel: "app.users",
+        },
+      ],
+      { namingMode: "comment" },
+    )[0];
+
+    expect(comment?.label).toBe("Weekly report");
+    expect(legacySource?.label).toBeUndefined();
+  });
 });
 
 describe("query result grid identity", () => {
@@ -282,6 +313,14 @@ describe("result run labels", () => {
     const items = resultRunItems(queryTab({ resultRuns: [run("run-1", 1)] }) as QueryTab, { database: "cosimulation2.0", databaseType: "mysql" });
 
     expect(items[0]?.sourceLabel).toBe("cosimulation2.0.users");
+  });
+
+  it("uses explicit comment labels while ignoring legacy source labels in comment mode", () => {
+    const commentRun = run("run-1", 1, { ...sourceResult("Weekly report", "app", "users"), sourceLabelKind: "comment", sourceName: undefined });
+    const legacySourceRun = run("run-2", 2, { ...sourceResult("app.orders", "app", "orders"), sourceLabelKind: undefined });
+
+    expect(resultRunItems(queryTab({ resultRuns: [commentRun, legacySourceRun] }) as QueryTab, { namingMode: "comment" }).map((item) => item.sourceLabel)).toEqual(["Weekly report", undefined]);
+    expect(resultRunItems(queryTab({ resultRuns: [commentRun] }) as QueryTab, { namingMode: "ordinal" })[0]?.sourceLabel).toBeUndefined();
   });
 });
 
