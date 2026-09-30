@@ -337,10 +337,6 @@ export function tabTooltipLines(tab: QueryTab, t: Translate): { label: string; v
   return lines;
 }
 
-export function queryResultStatementLabel(result: Pick<QueryResult, "sourceLabel">): string | undefined {
-  return result.sourceLabel;
-}
-
 type ResultSourceFields = Pick<QueryResult, "sourceLabel" | "sourceLabelKind" | "sourceQualifier" | "sourceName">;
 type ResultNamingOptions = { includeSourceDatabase?: boolean; namingMode?: ResultTabNamingMode; preferComments?: boolean };
 
