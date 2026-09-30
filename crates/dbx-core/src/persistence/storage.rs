@@ -1837,7 +1837,7 @@ impl Storage {
             let renamed = self.finalize_legacy_json_files().await?;
             self.set_migration_state(
                 MigrationState::Succeeded,
-                Some(&backup_path),
+                Some(backup_path),
                 None,
                 None,
                 Some(&{
