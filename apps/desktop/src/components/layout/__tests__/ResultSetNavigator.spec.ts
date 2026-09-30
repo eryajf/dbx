@@ -16,13 +16,36 @@ async function mountNavigator(inputResults?: QueryResult[]) {
   // Include a non-tabular result so ordinal and storage index are different.
   const results = inputResults ?? ([{ columns: [], rows: [] }, ...Array.from({ length: 100 }, (_, i) => ({ columns: ["value"], rows: [[i + 1]], sourceStatement: `SELECT ${i + 1} AS value` }))] as QueryResult[]);
   const select = vi.fn();
+  const copySql = vi.fn();
   const container = document.createElement("div");
   document.body.append(container);
-  app = createApp(ResultSetNavigator, { items: tabularResultItems(results), activeIndex: 1, active: true, onSelect: select });
-  app.use(createI18n({ legacy: false, locale: "en", messages: { en: { tabs: { resultN: "Result {n}", resultSets: "Result sets", allResults: "All results ({count})", searchResults: "Search", noMatchingResults: "No matches" } } } }));
+  app = createApp(ResultSetNavigator, { items: tabularResultItems(results), activeIndex: 1, active: true, onSelect: select, onCopySql: copySql });
+  app.use(
+    createI18n({
+      legacy: false,
+      locale: "en",
+      messages: {
+        en: {
+          tabs: {
+            resultN: "Result {n}",
+            resultSets: "Result sets",
+            allResults: "All results ({count})",
+            searchResults: "Search",
+            noMatchingResults: "No matches",
+            batchResultActions: "Batch actions",
+            batchSelectedCount: "{count}/{total} selected",
+            selectAllResults: "Select all",
+            clearResultSelection: "Clear",
+            copyResultQueries: "Copy queries",
+            copyResultAsSql: "Copy as SQL",
+          },
+        },
+      },
+    }),
+  );
   app.mount(container);
   await nextTick();
-  return { container, select };
+  return { container, select, copySql };
 }
 
 describe("large result-set navigation", () => {
@@ -70,5 +93,20 @@ describe("large result-set navigation", () => {
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(select).toHaveBeenCalledOnce();
     expect(select.mock.calls[0]![0]).toMatchObject({ n: 8, index: 8 });
+  });
+
+  it("emits the selected result sets without changing the active result", async () => {
+    const { container, copySql } = await mountNavigator([
+      { columns: ["id"], rows: [[1]], sourceName: "first", sourceStatement: "SELECT 1" },
+      { columns: ["id"], rows: [[2]], sourceName: "second", sourceStatement: "SELECT 2" },
+    ]);
+    const batchTrigger = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Batch actions"))!;
+    batchTrigger.click();
+    await nextTick();
+    const action = [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("Copy as SQL"))!;
+    action.click();
+    await nextTick();
+    expect(copySql).toHaveBeenCalledOnce();
+    expect(copySql.mock.calls[0]?.[0]).toHaveLength(2);
   });
 });
