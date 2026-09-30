@@ -17,9 +17,11 @@ async function mountNavigator(inputResults?: QueryResult[]) {
   const results = inputResults ?? ([{ columns: [], rows: [] }, ...Array.from({ length: 100 }, (_, i) => ({ columns: ["value"], rows: [[i + 1]], sourceStatement: `SELECT ${i + 1} AS value` }))] as QueryResult[]);
   const select = vi.fn();
   const copySql = vi.fn();
+  const copyQuerySql = vi.fn();
+  const exportXlsx = vi.fn();
   const container = document.createElement("div");
   document.body.append(container);
-  app = createApp(ResultSetNavigator, { items: tabularResultItems(results), activeIndex: 1, active: true, onSelect: select, onCopySql: copySql });
+  app = createApp(ResultSetNavigator, { items: tabularResultItems(results), activeIndex: 1, active: true, onSelect: select, onCopySql: copySql, onCopyQuerySql: copyQuerySql, onExportXlsx: exportXlsx });
   app.use(
     createI18n({
       legacy: false,
@@ -38,6 +40,9 @@ async function mountNavigator(inputResults?: QueryResult[]) {
             clearResultSelection: "Clear",
             copyResultQueries: "Copy queries",
             copyResultAsSql: "Copy as SQL",
+            exportSelectedResultsXlsx: "Export XLSX",
+            batchLoadedRowsOnly: "Uses loaded rows",
+            batchIncompleteResult: "Incomplete",
           },
         },
       },
@@ -45,7 +50,21 @@ async function mountNavigator(inputResults?: QueryResult[]) {
   );
   app.mount(container);
   await nextTick();
-  return { container, select, copySql };
+  return { container, select, copySql, copyQuerySql, exportXlsx };
+}
+
+async function openBatchMenu(container: HTMLElement) {
+  [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Batch actions"))!.click();
+  await nextTick();
+  await nextTick();
+  const popup = [...document.querySelectorAll<HTMLElement>('[data-slot="popover-content"]')].find((candidate) => candidate.textContent?.includes("Batch actions"))!;
+  const input = popup.querySelector<HTMLInputElement>('input[type="search"]')!;
+  const filter = async (query: string) => {
+    input.value = query;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await nextTick();
+  };
+  return { popup, input, filter };
 }
 
 describe("large result-set navigation", () => {
@@ -108,5 +127,52 @@ describe("large result-set navigation", () => {
     await nextTick();
     expect(copySql).toHaveBeenCalledOnce();
     expect(copySql.mock.calls[0]?.[0]).toHaveLength(2);
+  });
+
+  it.each([
+    ["Copy as SQL", "copySql"],
+    ["Copy queries", "copyQuerySql"],
+    ["Export XLSX", "exportXlsx"],
+  ] as const)("%s only includes selected results matching the batch search", async (action, event) => {
+    const mounted = await mountNavigator([
+      { columns: [], rows: [] },
+      { columns: ["id"], rows: [[1]], sourceLabel: "apis", sourceStatement: "SELECT * FROM apis" },
+      { columns: ["id"], rows: [[2]], sourceLabel: "menus", sourceStatement: "SELECT * FROM menus WHERE enabled = true" },
+    ]);
+    const { popup, filter } = await openBatchMenu(mounted.container);
+    await filter("APIS");
+    expect(popup.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
+    expect(popup.textContent).toContain("2/2 selected");
+    [...popup.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Clear")!.click();
+    await nextTick();
+    expect(popup.textContent).toContain("1/2 selected");
+    await filter("enabled");
+    expect(popup.querySelectorAll("label")[0]?.textContent).toContain("menus");
+    [...popup.querySelectorAll("button")].find((button) => button.textContent?.includes(action))!.click();
+    expect(mounted[event]).toHaveBeenCalledOnce();
+    expect(mounted[event].mock.calls[0]?.[0].map((item: { index: number }) => item.index)).toEqual([2]);
+    expect(mounted.select).not.toHaveBeenCalled();
+  });
+
+  it("selects and clears only visible results and restores hidden selections when the search is cleared", async () => {
+    const { container } = await mountNavigator();
+    const { popup, filter } = await openBatchMenu(container);
+    await filter("8");
+    expect(popup.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
+    const clear = [...popup.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Clear")!;
+    const selectAll = [...popup.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Select all")!;
+    clear.click();
+    await nextTick();
+    expect(popup.textContent).toContain("99/100 selected");
+    await filter("");
+    expect(popup.textContent).toContain("99/100 selected");
+    await filter("8");
+    selectAll.click();
+    await nextTick();
+    await filter("");
+    expect(popup.textContent).toContain("100/100 selected");
+    await filter("no matching result");
+    expect(popup.querySelector('[role="status"]')?.textContent).toBe("No matches");
+    expect([...popup.querySelectorAll("button")].filter((button) => button.textContent?.includes("Select all") || button.textContent?.includes("Clear")).every((button) => button.disabled)).toBe(true);
   });
 });

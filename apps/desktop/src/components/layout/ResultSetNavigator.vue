@@ -25,19 +25,29 @@ const { t } = useI18n();
 const scroller = ref<HTMLElement | null>(null);
 const list = ref<HTMLElement | null>(null);
 const searchInput = ref<HTMLInputElement | null>(null);
+const batchSearchInput = ref<HTMLInputElement | null>(null);
 const open = ref(false);
 const search = ref("");
 const batchOpen = ref(false);
+const batchSearch = ref("");
 const selectedIndexes = ref<Set<number>>(new Set());
 const { hasTabOverflow, scrollThumbLeftPercent, scrollThumbWidthPercent, isScrollbarDragging, updateScrollButtons, onTabsWheel, startScrollbarDrag } = useTabScroll(scroller);
 const thumbStyle = computed(() => ({ left: `${scrollThumbLeftPercent.value}%`, width: `${scrollThumbWidthPercent.value}%` }));
-const filteredItems = computed(() => {
-  const query = search.value.trim().toLocaleLowerCase();
-  if (!query) return props.items;
+function filterResultItems(items: ResultItem[], rawQuery: string) {
+  const query = rawQuery.trim().toLocaleLowerCase();
+  if (!query) return items;
   // A number is an exact result ordinal, not a substring of every SQL statement.
-  if (/^\d+$/.test(query)) return props.items.filter((item) => item.n === Number(query));
-  return props.items.filter((item) => [item.label, item.title, item.result.sourceStatement, t("tabs.resultN", { n: item.n })].some((value) => value?.toLocaleLowerCase().includes(query)));
+  if (/^\d+$/.test(query)) return items.filter((item) => item.n === Number(query));
+  return items.filter((item) => [item.label, item.title, item.result.sourceName, item.result.sourceLabel, item.result.sourceStatement, t("tabs.resultN", { n: item.n })].some((value) => value?.toLocaleLowerCase().includes(query)));
+}
+
+const filteredItems = computed(() => {
+  return filterResultItems(props.items, search.value);
 });
+const filteredBatchItems = computed(() => {
+  return filterResultItems(props.items, batchSearch.value);
+});
+const selectedBatchItems = computed(() => props.items.filter((item) => selectedIndexes.value.has(item.index)));
 
 function revealActive() {
   const container = scroller.value;
@@ -70,6 +80,21 @@ function resetBatchSelection() {
   selectedIndexes.value = new Set(props.items.map((item) => item.index));
 }
 
+function onBatchOpenAutoFocus() {
+  batchSearch.value = "";
+  resetBatchSelection();
+  batchSearchInput.value?.focus();
+}
+
+function setVisibleBatchSelection(selected: boolean) {
+  const next = new Set(selectedIndexes.value);
+  for (const item of filteredBatchItems.value) {
+    if (selected) next.add(item.index);
+    else next.delete(item.index);
+  }
+  selectedIndexes.value = next;
+}
+
 function toggleBatchItem(item: ResultItem) {
   const next = new Set(selectedIndexes.value);
   if (next.has(item.index)) next.delete(item.index);
@@ -77,12 +102,8 @@ function toggleBatchItem(item: ResultItem) {
   selectedIndexes.value = next;
 }
 
-function selectedBatchItems() {
-  return props.items.filter((item) => selectedIndexes.value.has(item.index));
-}
-
 function emitBatch(action: "copySql" | "copyQuerySql" | "exportXlsx") {
-  const items = selectedBatchItems();
+  const items = selectedBatchItems.value;
   if (!items.length) return;
   if (action === "copySql") emit("copySql", items);
   else if (action === "copyQuerySql") emit("copyQuerySql", items);
@@ -186,33 +207,35 @@ function onListKeydown(event: KeyboardEvent, index: number) {
           <span class="hidden sm:inline">{{ t("tabs.batchResultActions") }}</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" class="w-[32rem] max-w-[calc(100vw-2rem)] gap-2 p-2" @open-auto-focus.prevent="resetBatchSelection">
+      <PopoverContent align="end" class="w-[32rem] max-h-[var(--reka-popover-content-available-height)] max-w-[calc(100vw-2rem)] gap-2 p-2" @open-auto-focus.prevent="onBatchOpenAutoFocus">
         <div class="flex items-center justify-between gap-2 border-b pb-2">
-          <span class="text-xs font-semibold">{{ t("tabs.batchResultActions") }}</span>
-          <span class="text-[11px] text-muted-foreground">{{ t("tabs.batchSelectedCount", { count: selectedIndexes.size, total: items.length }) }}</span>
+          <span class="shrink-0 text-xs font-semibold">{{ t("tabs.batchResultActions") }}</span>
+          <input ref="batchSearchInput" v-model="batchSearch" type="search" class="min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring" :placeholder="t('tabs.searchResults')" :aria-label="t('tabs.searchResults')" />
+          <span class="shrink-0 text-[11px] text-muted-foreground">{{ t("tabs.batchSelectedCount", { count: selectedBatchItems.length, total: items.length }) }}</span>
         </div>
-        <div class="flex max-h-56 flex-col gap-1 overflow-y-auto py-1">
-          <label v-for="item in items" :key="item.index" class="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-accent">
+        <div class="flex min-h-0 max-h-56 flex-col gap-1 overflow-y-auto py-1">
+          <label v-for="item in filteredBatchItems" :key="item.index" class="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-accent">
             <input type="checkbox" :checked="selectedIndexes.has(item.index)" @change="toggleBatchItem(item)" />
             <span class="min-w-0 flex-1 truncate">{{ item.displayLabel || item.label || t("tabs.resultN", { n: item.n }) }}</span>
             <span class="shrink-0 text-[10px] text-muted-foreground tabular-nums"
               >{{ item.result.rows.length }}<template v-if="item.result.has_more || item.result.truncated"> · {{ t("tabs.batchIncompleteResult") }}</template></span
             >
           </label>
+          <p v-if="!filteredBatchItems.length" role="status" class="p-4 text-center text-xs text-muted-foreground">{{ t("tabs.noMatchingResults") }}</p>
         </div>
         <p class="text-[11px] text-muted-foreground">{{ t("tabs.batchLoadedRowsOnly") }}</p>
         <div class="flex flex-wrap items-center gap-1 border-t pt-2">
-          <Button variant="ghost" size="sm" class="h-6 px-2 text-xs" @click="resetBatchSelection">{{ t("tabs.selectAllResults") }}</Button>
-          <Button variant="ghost" size="sm" class="h-6 px-2 text-xs" @click="selectedIndexes = new Set()">{{ t("tabs.clearResultSelection") }}</Button>
+          <Button variant="ghost" size="sm" class="h-6 px-2 text-xs" :disabled="!filteredBatchItems.length" @click="setVisibleBatchSelection(true)">{{ t("tabs.selectAllResults") }}</Button>
+          <Button variant="ghost" size="sm" class="h-6 px-2 text-xs" :disabled="!filteredBatchItems.length" @click="setVisibleBatchSelection(false)">{{ t("tabs.clearResultSelection") }}</Button>
           <span class="flex-1" />
-          <Button variant="outline" size="sm" class="h-6 gap-1 px-2 text-xs" :disabled="busy || selectedIndexes.size === 0" @click="emitBatch('copyQuerySql')">
+          <Button variant="outline" size="sm" class="h-6 gap-1 px-2 text-xs" :disabled="busy || selectedBatchItems.length === 0" @click="emitBatch('copyQuerySql')">
             <FileCode2 class="h-3.5 w-3.5" />
             {{ t("tabs.copyResultQueries") }}
           </Button>
-          <Button variant="outline" size="sm" class="h-6 gap-1 px-2 text-xs" :disabled="busy || selectedIndexes.size === 0" @click="emitBatch('exportXlsx')">
+          <Button variant="outline" size="sm" class="h-6 gap-1 px-2 text-xs" :disabled="busy || selectedBatchItems.length === 0" @click="emitBatch('exportXlsx')">
             {{ t("tabs.exportSelectedResultsXlsx") }}
           </Button>
-          <Button size="sm" class="h-6 gap-1 px-2 text-xs" :disabled="busy || selectedIndexes.size === 0" @click="emitBatch('copySql')">
+          <Button size="sm" class="h-6 gap-1 px-2 text-xs" :disabled="busy || selectedBatchItems.length === 0" @click="emitBatch('copySql')">
             <Copy class="h-3.5 w-3.5" />
             {{ t("tabs.copyResultAsSql") }}
           </Button>
