@@ -14,6 +14,7 @@ const props = defineProps<{
   activeIndex: number;
   active: boolean;
   busy?: boolean;
+  canExportXlsx?: boolean;
 }>();
 const emit = defineEmits<{
   select: [item: ResultItem];
@@ -232,7 +233,7 @@ function onListKeydown(event: KeyboardEvent, index: number) {
             <FileCode2 class="h-3.5 w-3.5" />
             {{ t("tabs.copyResultQueries") }}
           </Button>
-          <Button variant="outline" size="sm" class="h-6 gap-1 px-2 text-xs" :disabled="busy || selectedBatchItems.length === 0" @click="emitBatch('exportXlsx')">
+          <Button variant="outline" size="sm" class="h-6 gap-1 px-2 text-xs" :disabled="!canExportXlsx || busy || selectedBatchItems.length === 0" @click="emitBatch('exportXlsx')">
             {{ t("tabs.exportSelectedResultsXlsx") }}
           </Button>
           <Button size="sm" class="h-6 gap-1 px-2 text-xs" :disabled="busy || selectedBatchItems.length === 0" @click="emitBatch('copySql')">

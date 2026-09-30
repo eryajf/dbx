@@ -8741,6 +8741,7 @@ export const useQueryStore = defineStore("query", () => {
     const connection = useConnectionStore().getConfig(location.connectionId);
     const databaseType = effectiveDatabaseTypeForConnection(connection);
     if (result === tab.result) {
+      if (tab.mode === "data" && (tab.tableMetaPending || !tab.tableMeta?.columns.length)) return undefined;
       const tableMeta = tab.mode === "data" ? tableMetaForDataTab(tab) : tab.tableMeta;
       const structure = analyzeSelectStructureForDisplay(result.sourceStatement);
       const sameTable = structure?.tableName && tableMeta?.tableName && structure.tableName.toLowerCase() === tableMeta.tableName.toLowerCase() && (!structure.schema || !tableMeta.schema || structure.schema.toLowerCase() === tableMeta.schema.toLowerCase());

@@ -557,11 +557,13 @@ async function copySelectedResultSql(items: ResultSetItem[]) {
 
 async function exportSelectedResultSheets(items: ResultSetItem[]) {
   if (resultBatchBusy.value) return;
+  const dataGrid = dataGridRef.value;
+  if (!dataGrid) return;
   const sheets = items.filter((item) => !item.result.execution_error && !item.result.server_message).map((item) => ({ sheetName: item.label || t("tabs.resultN", { n: item.n }), result: item.result, sql: item.result.sourceStatement }));
   if (!sheets.length) return;
   resultBatchBusy.value = true;
   try {
-    await dataGridRef.value?.exportResultSheetsXlsx(sheets);
+    await dataGrid.exportResultSheetsXlsx(sheets);
   } finally {
     resultBatchBusy.value = false;
   }
@@ -1952,6 +1954,7 @@ defineExpose({
                   :key="`${activeTab.id}:${activeTab.activeResultRunId ?? 'current'}`"
                   :items="visibleResultItems"
                   :busy="resultBatchBusy"
+                  :can-export-xlsx="activeOutputView === 'result' && redisResultViewMode === 'grid' && !!activeTab.result && hasTabularResult && !activeElasticsearchJsonResponse"
                   :active-index="activeTab.activeResultIndex ?? 0"
                   :active="activeOutputView === 'result'"
                   @select="selectResultItem"

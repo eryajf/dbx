@@ -12,7 +12,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-async function mountNavigator(inputResults?: QueryResult[]) {
+async function mountNavigator(inputResults?: QueryResult[], canExportXlsx = true) {
   // Include a non-tabular result so ordinal and storage index are different.
   const results = inputResults ?? ([{ columns: [], rows: [] }, ...Array.from({ length: 100 }, (_, i) => ({ columns: ["value"], rows: [[i + 1]], sourceStatement: `SELECT ${i + 1} AS value` }))] as QueryResult[]);
   const select = vi.fn();
@@ -21,7 +21,7 @@ async function mountNavigator(inputResults?: QueryResult[]) {
   const exportXlsx = vi.fn();
   const container = document.createElement("div");
   document.body.append(container);
-  app = createApp(ResultSetNavigator, { items: tabularResultItems(results), activeIndex: 1, active: true, onSelect: select, onCopySql: copySql, onCopyQuerySql: copyQuerySql, onExportXlsx: exportXlsx });
+  app = createApp(ResultSetNavigator, { items: tabularResultItems(results), activeIndex: 1, active: true, canExportXlsx, onSelect: select, onCopySql: copySql, onCopyQuerySql: copyQuerySql, onExportXlsx: exportXlsx });
   app.use(
     createI18n({
       legacy: false,
@@ -152,6 +152,20 @@ describe("large result-set navigation", () => {
     expect(mounted[event]).toHaveBeenCalledOnce();
     expect(mounted[event].mock.calls[0]?.[0].map((item: { index: number }) => item.index)).toEqual([2]);
     expect(mounted.select).not.toHaveBeenCalled();
+  });
+
+  it("disables XLSX export when the result view is inactive", async () => {
+    const mounted = await mountNavigator(
+      [
+        { columns: ["id"], rows: [[1]], sourceStatement: "SELECT 1" },
+        { columns: ["id"], rows: [[2]], sourceStatement: "SELECT 2" },
+      ],
+      false,
+    );
+    const { popup } = await openBatchMenu(mounted.container);
+    const exportButton = [...popup.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Export XLSX"));
+
+    expect(exportButton?.disabled).toBe(true);
   });
 
   it("selects and clears only visible results and restores hidden selections when the search is cleared", async () => {
