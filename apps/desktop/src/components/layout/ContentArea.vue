@@ -220,6 +220,7 @@ type DataGridHandle = DataGridColumnLayoutHandle & {
   exportJson: () => Promise<void>;
   exportSql: () => Promise<void>;
   exportXlsx: () => Promise<void>;
+  openXlsx: () => Promise<void>;
 };
 
 type SearchableBrowserHandle = {
