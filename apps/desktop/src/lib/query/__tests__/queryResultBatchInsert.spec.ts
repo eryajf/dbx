@@ -47,6 +47,17 @@ describe("batch result INSERT requests", () => {
     expect(batchResultInsertRequest(result, noKeyMetadata, "mysql", "`", options)?.rows).toEqual([[1, "root"]]);
   });
 
+  it("keeps an aliased projection mapped to its source column", () => {
+    const result: QueryResult = {
+      columns: ["id"],
+      rows: [["root"]],
+      sourceStatement: "SELECT name AS id FROM menus",
+    };
+    const aliasedMetadata = { ...metadata(), querySourceColumns: ["name"] };
+
+    expect(batchResultInsertRequest(result, aliasedMetadata, "mysql", "`", options)?.columns[0]?.sourceName).toBe("name");
+  });
+
   it("rejects a joined result even when metadata has a mapping", () => {
     const result: QueryResult = {
       columns: ["id", "name"],

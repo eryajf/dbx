@@ -8747,15 +8747,22 @@ export const useQueryStore = defineStore("query", () => {
       const sameTable = structure?.tableName && tableMeta?.tableName && structure.tableName.toLowerCase() === tableMeta.tableName.toLowerCase() && (!structure.schema || !tableMeta.schema || structure.schema.toLowerCase() === tableMeta.schema.toLowerCase());
       if (!sameTable || !tableMeta?.tableName || !canInsertTableRows(databaseType) || tableMeta.tableType?.toUpperCase().includes("VIEW")) return undefined;
       const metadataNames = tableMeta.columns.map((column) => column.name);
-      const querySourceColumns = result.columns.map((column) => resolveMetadataColumnName(databaseType ?? "", column, undefined, metadataNames));
-      if (querySourceColumns.some((column) => !column)) return undefined;
+      const querySourceColumns = structure.selectStar
+        ? result.columns.map((column) => resolveMetadataColumnName(databaseType ?? "", column, undefined, metadataNames))
+        : structure.columns.length === result.columns.length
+          ? structure.columns.map((column) => {
+              if (!column.sourceName || (column.sourceQualifier && !column.sourceKey)) return undefined;
+              return resolveMetadataColumnName(databaseType ?? "", column.sourceName, column.sourceNameQuoted, metadataNames);
+            })
+          : undefined;
+      if (!querySourceColumns || querySourceColumns.some((column) => !column)) return undefined;
       return {
         queryAnalysis: {
           schema: tableMeta.schema,
           tableName: tableMeta.tableName,
-          tableAlias: undefined,
-          selectStar: true,
-          columns: [],
+          tableAlias: structure.tableAlias,
+          selectStar: structure.selectStar,
+          columns: structure.columns,
           allowInsert: true,
           allowInsertDelete: true,
         },
