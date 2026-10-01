@@ -1,19 +1,39 @@
 // @vitest-environment happy-dom
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createApp, defineComponent, h, nextTick, reactive, type Component } from "vue";
 import { createI18n } from "vue-i18n";
 import { afterEach, describe, expect, it } from "vitest";
 import { Dialog, DialogContent, DialogScrollContent, DialogTitle } from "@/components/ui/dialog";
+import { useFloatingLayerOrder } from "@/components/ui/dialog/useDialogLayerOrder";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const mountedApps: Array<{ unmount: () => void; host: HTMLElement }> = [];
+const mountedStyles: HTMLStyleElement[] = [];
+const floatingLayerRule = readFileSync(resolve(process.cwd(), "apps/desktop/src/styles/globals.css"), "utf8").match(/\[data-dbx-floating-layer\]\s*\{[^}]+\}/)?.[0];
+
+if (!floatingLayerRule) {
+  throw new Error("globals.css is missing the floating layer z-index rule");
+}
 
 afterEach(() => {
   for (const { unmount, host } of mountedApps.splice(0)) {
     unmount();
     host.remove();
   }
+  for (const style of mountedStyles.splice(0)) {
+    style.remove();
+  }
   document.body.innerHTML = "";
 });
+
+function installFloatingLayerStyles() {
+  const style = document.createElement("style");
+  style.textContent = floatingLayerRule;
+  document.head.append(style);
+  mountedStyles.push(style);
+}
 
 async function flush() {
   for (let turn = 0; turn < 5; turn += 1) {
@@ -190,5 +210,110 @@ describe("dialog layer order", () => {
     const confirm = layer("dialog-positioner", "confirm transfer");
     expect(transfer.zIndex).toBeGreaterThan(50);
     expect(confirm.zIndex).toBeGreaterThan(transfer.zIndex);
+  });
+
+  it("resets the layer sequence after all dialogs close", async () => {
+    const state = mountSiblingDialogs();
+
+    state.transferOpen = true;
+    await flush();
+    expect(layer("dialog-positioner", "transfer form").zIndex).toBe(51);
+
+    state.transferOpen = false;
+    await flush();
+    expect(document.documentElement.style.getPropertyValue("--dbx-dialog-top-z-index")).toBe("50");
+    expect(document.documentElement.style.getPropertyValue("--dbx-floating-layer-z-index")).toBe("51");
+
+    state.transferOpen = true;
+    await flush();
+    expect(layer("dialog-positioner", "transfer form").zIndex).toBe(51);
+  });
+
+  it("exposes a floating layer above the open dialog", async () => {
+    installFloatingLayerStyles();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const state = reactive({ dialogOpen: true, selectOpen: false });
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h("div", [
+              h(
+                Dialog,
+                { open: state.dialogOpen, "onUpdate:open": (open: boolean) => (state.dialogOpen = open) },
+                {
+                  default: () =>
+                    h(DialogContent, null, {
+                      default: () => [
+                        h(DialogTitle, null, { default: () => "settings" }),
+                        h(
+                          Select,
+                          { open: state.selectOpen, "onUpdate:open": (open: boolean) => (state.selectOpen = open) },
+                          {
+                            default: () => [h(SelectTrigger, null, { default: () => h(SelectValue, { placeholder: "Choose" }) }), h(SelectContent, null, { default: () => h(SelectItem, { value: "one" }, { default: () => "One" }) })],
+                          },
+                        ),
+                      ],
+                    }),
+                },
+              ),
+            ]);
+        },
+      }),
+    );
+    app.use(createI18n({ legacy: false, locale: "en", messages: { en: {} }, missingWarn: false, fallbackWarn: false }));
+    app.mount(host);
+    mountedApps.push({ unmount: () => app.unmount(), host });
+    await flush();
+
+    const dialog = layer("dialog-positioner", "settings");
+    state.selectOpen = true;
+    await flush();
+
+    const selectContent = document.body.querySelector<HTMLElement>('[data-slot="select-content"]');
+    const popperWrapper = document.body.querySelector<HTMLElement>("[data-reka-popper-content-wrapper]");
+    expect(selectContent).not.toBeNull();
+    expect(popperWrapper?.hasAttribute("data-dbx-floating-layer")).toBe(true);
+    expect(selectContent?.className).toContain("z-(--dbx-floating-layer-z-index)");
+    expect(Number(document.documentElement.style.getPropertyValue("--dbx-floating-layer-z-index"))).toBe(dialog.zIndex + 1);
+    expect(getComputedStyle(popperWrapper!).zIndex).toContain(String(dialog.zIndex + 1));
+  });
+
+  it("preserves an explicit floating layer z-index", async () => {
+    installFloatingLayerStyles();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const FloatingProbe = defineComponent({
+      setup() {
+        const { forwardRef } = useFloatingLayerOrder();
+        return () => h("div", { ref: forwardRef, "data-reka-popper-content-wrapper": "", style: { zIndex: "80" } }, h("div", { style: { zIndex: "80" } }));
+      },
+    });
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h(
+              Dialog,
+              { open: true },
+              {
+                default: () =>
+                  h(DialogContent, null, {
+                    default: () => [h(DialogTitle, null, { default: () => "settings" }), h(FloatingProbe)],
+                  }),
+              },
+            );
+        },
+      }),
+    );
+    app.use(createI18n({ legacy: false, locale: "en", messages: { en: {} }, missingWarn: false, fallbackWarn: false }));
+    app.mount(host);
+    mountedApps.push({ unmount: () => app.unmount(), host });
+    await flush();
+
+    const popperWrapper = document.body.querySelector<HTMLElement>("[data-reka-popper-content-wrapper]");
+    expect(popperWrapper?.style.getPropertyValue("--dbx-floating-content-z-index")).toBe("80");
+    expect(getComputedStyle(popperWrapper!).zIndex).toContain("80");
   });
 });
