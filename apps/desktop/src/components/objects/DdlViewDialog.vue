@@ -372,9 +372,12 @@ function onDdlDialogCloseAutoFocus(event: Event) {
  * - Prec.highest overrides Cmd+F to open EditorSearchPanel.
  * - Editor theme/font are loaded from user settings for consistent appearance.
  */
-watch(() => settingsStore.editorSettings.shortcuts.selectLineEnds, (shortcut) => {
-  ddlEditorView.value?.dispatch({ effects: ddlEditorShortcut.reconfigure(codeMirrorKeymap.of([{ key: shortcutToCodeMirrorKey(shortcut), preventDefault: true, run: selectLineEnds }])) });
-});
+watch(
+  () => settingsStore.editorSettings.shortcuts.selectLineEnds,
+  (shortcut) => {
+    ddlEditorView.value?.dispatch({ effects: ddlEditorShortcut.reconfigure(codeMirrorKeymap.of([{ key: shortcutToCodeMirrorKey(shortcut), preventDefault: true, run: selectLineEnds }])) });
+  },
+);
 
 async function initDdlEditor(content: string) {
   if (!ddlEditorContainer.value) return;
@@ -409,7 +412,7 @@ async function initDdlEditor(content: string) {
       // Intercept Cmd+F at highest precedence so EditorSearchPanel opens
       // instead of the default search panel (which is hidden above).
       ddlEditorShortcut.of(keymap.of([{ key: shortcutToCodeMirrorKey(settingsStore.editorSettings.shortcuts.selectLineEnds), preventDefault: true, run: selectLineEnds }])),
-      keymap.of([{ key: "Mod-f", run: () => ddlSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }])),
+      Prec.highest(keymap.of([{ key: "Mod-f", run: () => ddlSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }])),
       // Remove CodeMirror's default 1px dotted focus outline,
       // which is visible below the content when the DDL is short.
       EditorView.theme({

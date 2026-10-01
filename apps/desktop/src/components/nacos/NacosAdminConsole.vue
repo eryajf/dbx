@@ -638,7 +638,7 @@ async function mountConfigEditor() {
       EditorState.allowMultipleSelections.of(true),
       trimmedSelectionLayer(),
       configEditorShortcut.of(keymap.of([{ key: shortcutToCodeMirrorKey(settingsStore.editorSettings.shortcuts.selectLineEnds), preventDefault: true, run: selectLineEnds }])),
-      keymap.of([{ key: "Mod-f", run: () => configSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }, { key: replaceFallbackKey(), run: () => configSearchPanelRef.value?.openReplace() ?? false, preventDefault: true }, indentWithTab]),
+      Prec.highest(keymap.of([{ key: "Mod-f", run: () => configSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }, { key: replaceFallbackKey(), run: () => configSearchPanelRef.value?.openReplace() ?? false, preventDefault: true }, indentWithTab])),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.domEventHandlers({
         wheel(event, eventView) {

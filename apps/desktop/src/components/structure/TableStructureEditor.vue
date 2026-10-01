@@ -344,9 +344,12 @@ function observeDdlEditorScroll(view: EditorView) {
   ddlEditorScrollCleanup = () => scrollDOM.removeEventListener("scroll", onScroll);
 }
 
-watch(() => settingsStore.editorSettings.shortcuts.selectLineEnds, (shortcut) => {
-  ddlEditorView.value?.dispatch({ effects: ddlEditorShortcut.reconfigure(codeMirrorKeymap.of([{ key: shortcutToCodeMirrorKey(shortcut), preventDefault: true, run: selectLineEnds }])) });
-});
+watch(
+  () => settingsStore.editorSettings.shortcuts.selectLineEnds,
+  (shortcut) => {
+    ddlEditorView.value?.dispatch({ effects: ddlEditorShortcut.reconfigure(codeMirrorKeymap.of([{ key: shortcutToCodeMirrorKey(shortcut), preventDefault: true, run: selectLineEnds }])) });
+  },
+);
 
 async function initDdlEditor(content: string) {
   const container = ddlEditorContainer.value;
@@ -392,7 +395,7 @@ async function initDdlEditor(content: string) {
       themeExt,
       fontExt,
       ddlEditorShortcut.of(keymap.of([{ key: shortcutToCodeMirrorKey(settingsStore.editorSettings.shortcuts.selectLineEnds), preventDefault: true, run: selectLineEnds }])),
-      keymap.of([{ key: "Mod-f", run: () => ddlSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }])),
+      Prec.highest(keymap.of([{ key: "Mod-f", run: () => ddlSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }])),
       EditorView.theme({
         "&.cm-focused": { outline: "none" },
         ".cm-content": {
