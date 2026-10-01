@@ -1909,7 +1909,6 @@ export default withEnglishFallback({
     copyResultAsSql: "複製為 SQL",
     batchCopyNoCompatibleResults: "沒有選取的結果可複製為 SQL。",
     batchCopyTooLarge: "產生的 SQL 太大，無法放入剪貼簿。請改為匯出至檔案。",
-    batchCopyPartial: "已複製；{count} 個結果因沒有可寫入的目標資料表而略過。",
     noMatchingResults: "沒有符合的結果",
     removeRun: "移除執行 {n}",
     renameResultRun: "重新命名結果分頁",

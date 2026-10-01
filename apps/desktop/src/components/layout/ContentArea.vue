@@ -564,7 +564,7 @@ async function exportSelectedResultSheets(items: ResultSetItem[]) {
   if (resultBatchBusy.value) return;
   const dataGrid = dataGridRef.value;
   if (!dataGrid) return;
-  const sheets = items.filter((item) => !item.result.execution_error && !item.result.server_message).map((item) => ({ sheetName: item.label || t("tabs.resultN", { n: item.n }), result: item.result, sql: item.result.sourceStatement }));
+  const sheets = items.filter((item) => !item.result.execution_error && !item.result.server_message).map((item) => ({ sheetName: item.label || t("tabs.resultN", { n: item.n }), result: item.result }));
   if (!sheets.length) return;
   resultBatchBusy.value = true;
   try {

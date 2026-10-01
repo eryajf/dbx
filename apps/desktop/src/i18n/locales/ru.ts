@@ -1892,7 +1892,6 @@ export default withEnglishFallback({
     copyResultAsSql: "Копировать как SQL",
     batchCopyNoCompatibleResults: "Ни один выбранный результат нельзя скопировать как SQL.",
     batchCopyTooLarge: "Сформированный SQL слишком велик для буфера обмена. Экспортируйте его в файл.",
-    batchCopyPartial: "Скопировано; пропущено результатов: {count}, так как для них нет доступной для записи целевой таблицы.",
     noMatchingResults: "Нет подходящих результатов",
     removeRun: "Удалить запуск {n}",
     renameResultRun: "Переименовать вкладку результата",

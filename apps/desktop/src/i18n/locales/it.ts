@@ -1907,7 +1907,6 @@ export default withEnglishFallback({
     copyResultAsSql: "Copia come SQL",
     batchCopyNoCompatibleResults: "Nessun risultato selezionato può essere copiato come SQL.",
     batchCopyTooLarge: "L'SQL generato è troppo grande per gli appunti. Esportalo in un file.",
-    batchCopyPartial: "Copiato; {count} risultato/i ignorato/i perché non hanno una tabella di destinazione scrivibile.",
     noMatchingResults: "Nessun risultato corrispondente",
     removeRun: "Rimuovi esecuzione {n}",
     renameResultRun: "Rinomina scheda dei risultati",

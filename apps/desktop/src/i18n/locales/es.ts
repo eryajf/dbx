@@ -1973,7 +1973,6 @@ export default withEnglishFallback({
     copyResultAsSql: "Copiar como SQL",
     batchCopyNoCompatibleResults: "Ningún resultado seleccionado se puede copiar como SQL.",
     batchCopyTooLarge: "El SQL generado es demasiado grande para el portapapeles. Expórtalo a un archivo.",
-    batchCopyPartial: "Copiado; se omitieron {count} resultado(s) porque no tienen una tabla de destino escribible.",
     noMatchingResults: "No hay resultados coincidentes",
     removeRun: "Eliminar ejecución {n}",
     renameResultRun: "Renombrar pestaña de resultados",

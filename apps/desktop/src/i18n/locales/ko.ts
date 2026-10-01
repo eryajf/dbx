@@ -1821,7 +1821,6 @@ export default withEnglishFallback({
     copyResultAsSql: "SQL로 복사",
     batchCopyNoCompatibleResults: "선택한 결과를 SQL로 복사할 수 없습니다.",
     batchCopyTooLarge: "생성된 SQL이 클립보드 용량을 초과했습니다. 대신 파일로 내보내세요.",
-    batchCopyPartial: "복사했습니다. 쓰기 가능한 대상 테이블이 없어 {count}개 결과를 건너뛰었습니다.",
     noMatchingResults: "일치하는 결과가 없습니다",
     removeRun: "실행 {n} 제거",
     renameResultRun: "결과 탭 이름 변경",

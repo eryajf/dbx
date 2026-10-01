@@ -1926,7 +1926,6 @@ export default withEnglishFallback({
     copyResultAsSql: "SQL としてコピー",
     batchCopyNoCompatibleResults: "選択した結果を SQL としてコピーできません。",
     batchCopyTooLarge: "生成された SQL がクリップボードの容量を超えています。ファイルにエクスポートしてください。",
-    batchCopyPartial: "コピーしました。書き込み可能な対象テーブルがないため {count} 件の結果をスキップしました。",
     noMatchingResults: "一致する結果はありません",
     removeRun: "実行 {n} を削除",
     renameResultRun: "結果タブの名前を変更",

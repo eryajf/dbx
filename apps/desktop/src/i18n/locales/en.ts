@@ -2009,7 +2009,6 @@ export default {
     copyResultAsSql: "Copy as SQL",
     batchCopyNoCompatibleResults: "No selected result can be copied as SQL.",
     batchCopyTooLarge: "The generated SQL is too large for the clipboard. Export it to a file instead.",
-    batchCopyPartial: "Copied; {count} result(s) were skipped because they have no writable table target.",
     noMatchingResults: "No matching results",
     removeRun: "Remove run {n}",
     renameResultRun: "Rename result tab",

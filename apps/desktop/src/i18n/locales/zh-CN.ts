@@ -1923,7 +1923,6 @@ export default withEnglishFallback({
     copyResultAsSql: "复制为 SQL",
     batchCopyNoCompatibleResults: "所选结果没有可转换为 SQL 的结果集。",
     batchCopyTooLarge: "生成的 SQL 超过剪贴板容量，请改用文件导出。",
-    batchCopyPartial: "已复制，{count} 个结果因缺少可写入的目标表而跳过。",
     noMatchingResults: "没有匹配的结果",
     removeRun: "删除执行 {n}",
     renameResultRun: "重命名结果标签",
