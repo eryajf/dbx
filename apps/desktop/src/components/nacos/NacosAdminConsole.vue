@@ -57,7 +57,7 @@ import { editorFontTheme, loadEditorTheme } from "@/lib/editor/editorThemes";
 import { clampEditorFontSize, createEditorWheelZoomGestureGuard, createEditorZoomCommitScheduler, fontSizeFromWheelDelta } from "@/lib/editor/editorZoom";
 import { replaceFallbackKey } from "@/lib/editor/queryEditorSearchKeymap";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
-import { shortcutToCodeMirrorKey } from "@/lib/editor/shortcutRegistry";
+import { selectLineEndsDefaultShortcut, shortcutToCodeMirrorKey } from "@/lib/editor/shortcutRegistry";
 import { selectLineEnds } from "@/lib/editor/selectLineEnds";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useTheme } from "@/composables/useTheme";
@@ -252,6 +252,7 @@ const configEditorWordWrap = new Compartment();
 const configEditorLanguage = new Compartment();
 const configValidationHighlight = new Compartment();
 const configEditorShortcut = new Compartment();
+const selectLineEndsShortcut = () => settingsStore.editorSettings?.shortcuts?.selectLineEnds ?? selectLineEndsDefaultShortcut();
 const setConfigValidationHighlight = StateEffect.define<NacosConfigDiagnostic[]>();
 const configListRequestGuard = createNacosLatestRequestGuard();
 const configDetailRequestGuard = createNacosLatestRequestGuard();
@@ -596,12 +597,9 @@ function configValidationHighlightExtension() {
   return field;
 }
 
-watch(
-  () => settingsStore.editorSettings.shortcuts.selectLineEnds,
-  (shortcut) => {
-    configEditorView.value?.dispatch({ effects: configEditorShortcut.reconfigure(codeMirrorKeymap.of([{ key: shortcutToCodeMirrorKey(shortcut), preventDefault: true, run: selectLineEnds }])) });
-  },
-);
+watch(selectLineEndsShortcut, (shortcut) => {
+  configEditorView.value?.dispatch({ effects: configEditorShortcut.reconfigure(codeMirrorKeymap.of([{ key: shortcutToCodeMirrorKey(shortcut), preventDefault: true, run: selectLineEnds }])) });
+});
 
 async function mountConfigEditor() {
   await nextTick();
@@ -637,7 +635,7 @@ async function mountConfigEditor() {
       basicSetup,
       EditorState.allowMultipleSelections.of(true),
       trimmedSelectionLayer(),
-      configEditorShortcut.of(keymap.of([{ key: shortcutToCodeMirrorKey(settingsStore.editorSettings.shortcuts.selectLineEnds), preventDefault: true, run: selectLineEnds }])),
+      configEditorShortcut.of(keymap.of([{ key: shortcutToCodeMirrorKey(selectLineEndsShortcut()), preventDefault: true, run: selectLineEnds }])),
       Prec.highest(keymap.of([{ key: "Mod-f", run: () => configSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }, { key: replaceFallbackKey(), run: () => configSearchPanelRef.value?.openReplace() ?? false, preventDefault: true }, indentWithTab])),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.domEventHandlers({

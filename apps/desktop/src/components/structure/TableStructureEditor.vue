@@ -27,7 +27,7 @@ import { useProductionSafetyStore } from "@/stores/productionSafetyStore";
 import { productionContextForDatabase } from "@/lib/database/productionSafety";
 import { useQueryStore } from "@/stores/queryStore";
 import { useHistoryStore } from "@/stores/historyStore";
-import { shortcutToCodeMirrorKey } from "@/lib/editor/shortcutRegistry";
+import { selectLineEndsDefaultShortcut, shortcutToCodeMirrorKey } from "@/lib/editor/shortcutRegistry";
 import { selectLineEnds } from "@/lib/editor/selectLineEnds";
 import { useSettingsStore, type StructureEditorDensity } from "@/stores/settingsStore";
 import { useTheme } from "@/composables/useTheme";
@@ -248,6 +248,7 @@ const ddlSearchPanelRef = ref<InstanceType<typeof EditorSearchPanel>>();
 const ddlSearchOpen = ref(false);
 const ddlEditorView = shallowRef<EditorView | null>(null);
 const ddlEditorShortcut = new Compartment();
+const selectLineEndsShortcut = () => settingsStore.editorSettings?.shortcuts?.selectLineEnds ?? selectLineEndsDefaultShortcut();
 let ddlEditorInitRequestId = 0;
 let ddlEditorScrollCleanup: (() => void) | null = null;
 const loadedMetadataFacets = new Set<ObjectMetadataFacet>();
@@ -344,12 +345,9 @@ function observeDdlEditorScroll(view: EditorView) {
   ddlEditorScrollCleanup = () => scrollDOM.removeEventListener("scroll", onScroll);
 }
 
-watch(
-  () => settingsStore.editorSettings.shortcuts.selectLineEnds,
-  (shortcut) => {
-    ddlEditorView.value?.dispatch({ effects: ddlEditorShortcut.reconfigure(codeMirrorKeymap.of([{ key: shortcutToCodeMirrorKey(shortcut), preventDefault: true, run: selectLineEnds }])) });
-  },
-);
+watch(selectLineEndsShortcut, (shortcut) => {
+  ddlEditorView.value?.dispatch({ effects: ddlEditorShortcut.reconfigure(codeMirrorKeymap.of([{ key: shortcutToCodeMirrorKey(shortcut), preventDefault: true, run: selectLineEnds }])) });
+});
 
 async function initDdlEditor(content: string) {
   const container = ddlEditorContainer.value;
@@ -394,7 +392,7 @@ async function initDdlEditor(content: string) {
       langSql.sql({ dialect }),
       themeExt,
       fontExt,
-      ddlEditorShortcut.of(keymap.of([{ key: shortcutToCodeMirrorKey(settingsStore.editorSettings.shortcuts.selectLineEnds), preventDefault: true, run: selectLineEnds }])),
+      ddlEditorShortcut.of(keymap.of([{ key: shortcutToCodeMirrorKey(selectLineEndsShortcut()), preventDefault: true, run: selectLineEnds }])),
       Prec.highest(keymap.of([{ key: "Mod-f", run: () => ddlSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }])),
       EditorView.theme({
         "&.cm-focused": { outline: "none" },
