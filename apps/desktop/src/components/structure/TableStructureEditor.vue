@@ -1554,9 +1554,10 @@ function structureColumnClipboardText(): string {
 }
 
 function setStructureColumnSelection(keys: Iterable<string>, anchorKey: string | null) {
+  // Clears first: setColumnSelection also resets the header-column keys.
+  clearColumnSelection();
   selectedStructureColumnKeys.value = new Set(keys);
   structureColumnSelectionAnchorKey.value = anchorKey;
-  clearColumnSelection();
 }
 
 function selectStructureColumnKey(key: string, event: MouseEvent) {
@@ -3123,11 +3124,18 @@ function columnIsSelectable(column: EditableStructureColumn): boolean {
   return !column.markedForDrop && columns.value.some((item) => item.id === column.id);
 }
 
-/** Replace the whole selection state (set + active + shift anchor) atomically. */
+/**
+ * Replace the whole selection state (set + active + shift anchor) atomically.
+ * Header-column selection and row selection are exclusive modes, so any row
+ * selection also clears the header-column keys, mirroring how
+ * `setStructureColumnSelection` clears the row selection.
+ */
 function setColumnSelection(ids: Iterable<string>, activeId: string | null, anchorId: string | null) {
   selectedColumnIds.value = new Set(ids);
   selectedColumnId.value = activeId;
   columnSelectionAnchorId.value = anchorId;
+  selectedStructureColumnKeys.value = new Set();
+  structureColumnSelectionAnchorKey.value = null;
 }
 
 function clearColumnSelection() {
@@ -5335,7 +5343,7 @@ watch(
                           v-for="(columnLabel, i) in colLabels"
                           :key="columnLabel.key"
                           :class="[structureHeaderCellClass, 'bg-background select-none', { 'text-center': columnLabel.key === 'primaryKey' }]"
-                          :aria-selected="columnLabel.key === 'actions' ? undefined : selectedStructureColumnKeys.has(columnLabel.key)"
+                          :data-column-selected="columnLabel.key === 'actions' ? undefined : selectedStructureColumnKeys.has(columnLabel.key)"
                           :style="{
                             width: visibleColWidths[i] + 'px',
                             minWidth: visibleColWidths[i] + 'px',
