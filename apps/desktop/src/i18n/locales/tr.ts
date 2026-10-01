@@ -7896,6 +7896,8 @@ export default withEnglishFallback({
     shortcutScopeHintSearch: "Arama alanı odaktayken geçerli",
     shortcutScopeHintSidebar: "Kenar çubuğu odaktayken geçerli",
     shortcutGroupCount: "{count} eylem",
+    shortcutGroupCollapse: "Grubu daralt",
+    shortcutGroupExpand: "Grubu genişlet",
     shortcutGroupUnbound: "{count} atanmamış",
     shortcutGroupUnboundTooltip: "Bu eylemlerde kısayol atanmamış; satırdaki kalem simgesiyle atayabilirsiniz.",
     shortcutModifiedTag: "Değiştirildi",
