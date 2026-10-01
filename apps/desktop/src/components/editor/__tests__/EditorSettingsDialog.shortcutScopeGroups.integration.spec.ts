@@ -222,12 +222,14 @@ describe("EditorSettingsDialog shortcut scope grouping (behaviour)", () => {
     header.click();
     await flushAsyncUpdates();
     expect(header.getAttribute("aria-expanded")).toBe("false");
-    expect(contentFor(host, "editor").style.display).toBe("none");
+    expect(contentFor(host, "editor").getAttribute("aria-hidden")).toBe("true");
+    expect(contentFor(host, "editor").hasAttribute("inert")).toBe(true);
 
     header.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await flushAsyncUpdates();
     expect(header.getAttribute("aria-expanded")).toBe("true");
-    expect(contentFor(host, "editor").style.display).not.toBe("none");
+    expect(contentFor(host, "editor").getAttribute("aria-hidden")).toBe("false");
+    expect(contentFor(host, "editor").hasAttribute("inert")).toBe(false);
     expect(rowFor(host, "formatSql")).toBeTruthy();
 
     header.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
@@ -256,7 +258,8 @@ describe("EditorSettingsDialog shortcut scope grouping (behaviour)", () => {
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await flushAsyncUpdates();
     expect(header.getAttribute("aria-expanded")).toBe("false");
-    expect(contentFor(host, "editor").style.display).toBe("none");
+    expect(contentFor(host, "editor").getAttribute("aria-hidden")).toBe("true");
+    expect(contentFor(host, "editor").hasAttribute("inert")).toBe(true);
   });
 
   it("treats a same-scope duplicate as blocking: red pills, footer reason and a disabled Apply", async () => {
