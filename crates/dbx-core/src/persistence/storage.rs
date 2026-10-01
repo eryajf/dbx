@@ -207,12 +207,20 @@ pub struct Storage {
     /// round-trips to the OS credential store, so hydrating N stored secrets
     /// used to mean N credential-store accesses on the startup path.
     secret_codec_cache: Arc<Mutex<Option<CachedSecretCodec>>>,
+    /// A failed platform lookup is cached for the startup boundary as well.
+    /// Without this, each consumer can prompt a locked Secret Service again.
+    secret_key_error_cache: Arc<Mutex<Option<CachedSecretKeyError>>>,
     migration_failure: Arc<Mutex<Option<MigrationFailure>>>,
 }
 
 /// Key material plus the digest of every key file it was resolved from.
 struct CachedSecretCodec {
     codec: SecretCodec,
+    key_files: Vec<(PathBuf, Option<[u8; 32]>)>,
+}
+
+struct CachedSecretKeyError {
+    error: String,
     key_files: Vec<(PathBuf, Option<[u8; 32]>)>,
 }
 
@@ -1301,6 +1309,7 @@ impl Storage {
             secret_key_policy: SecretKeyPolicy::PlatformDefault,
             secret_key_creation_allowed: true,
             secret_codec_cache: Arc::new(Mutex::new(None)),
+            secret_key_error_cache: Arc::new(Mutex::new(None)),
             migration_failure: Arc::new(Mutex::new(None)),
         };
         // Best-effort: switching journal mode is itself a lock-sensitive
@@ -1339,7 +1348,22 @@ impl Storage {
     }
 
     fn resolve_secret_key(&self, allow_create: bool) -> Result<SecretKeyResolution, String> {
+        if !allow_create {
+            let key_files = self.key_file_digests();
+            let mut cache = self.secret_key_error_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(cached) = cache.as_ref() {
+                if cached.key_files == key_files {
+                    return Err(cached.error.clone());
+                }
+                *cache = None;
+            }
+        }
         SecretCodec::resolve(self.secret_key_policy, self.data_dir(), allow_create)
+    }
+
+    fn cache_secret_key_error(&self, error: &str, key_files: Vec<(PathBuf, Option<[u8; 32]>)>) {
+        *self.secret_key_error_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(CachedSecretKeyError { error: error.to_string(), key_files });
     }
 
     /// Resolution cost is dominated by the platform credential store, so the
@@ -1389,6 +1413,7 @@ impl Storage {
 
     fn invalidate_secret_codec(&self) {
         *self.secret_codec_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *self.secret_key_error_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 
     /// Digest of every file that can supply key material on its own. Comparing
@@ -1635,6 +1660,11 @@ impl Storage {
         // entry, key file, or change permissions while displaying status.
         let key_files_before = self.key_file_digests();
         let key_probe = self.resolve_secret_key(false);
+        if let Err(error) = key_probe.as_ref() {
+            // Keep one startup probe from being repeated by each subsequent
+            // storage read while the desktop keyring is locked or unavailable.
+            self.cache_secret_key_error(error, key_files_before.clone());
+        }
         let mut key_provider_available = key_probe.is_ok();
         let database_plaintext_count = (plaintext + ai + tunnels).max(0) as usize;
         let has_legacy_data =
