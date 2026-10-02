@@ -35,6 +35,7 @@ const emit = defineEmits<{
   "import-config": [];
   "open-github": [];
   "open-mcp-guide": [];
+  "open-website": [];
   "open-settings": [];
 }>();
 
@@ -101,7 +102,7 @@ function welcomeConnectionSubtitle(connection: ConnectionConfig): string {
         <span>DBX {{ appVersion ? "v" + appVersion : "" }}</span
         ><span>·</span>
         <a href="#" class="hover:text-foreground" @click.prevent="emit('open-github')">GitHub</a>
-        <span>·</span><button type="button" class="hover:text-foreground" @click="emit('open-mcp-guide')">{{ t("welcome.mcpLearnMore") }}</button>
+        <span>·</span><button type="button" class="hover:text-foreground" @click="emit('open-website')">{{ t("welcome.mcpLearnMore") }}</button>
       </div>
     </div>
 

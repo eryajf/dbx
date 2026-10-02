@@ -3191,6 +3191,9 @@ function openGitHub() {
 function openMcpGuide() {
   openUrl("https://dbxio.com/cn/docs/mcp");
 }
+function openDbxWebsite() {
+  openUrl("https://dbxio.com");
+}
 
 function setSidebarOpen(open: boolean) {
   sidebarOpen.value = open;
@@ -4580,6 +4583,7 @@ onUnmounted(() => {
                         @import-config="dialogs.onImportClick"
                         @open-github="openGitHub"
                         @open-mcp-guide="openMcpGuide"
+                        @open-website="openDbxWebsite"
                         @open-settings="openSettings('appearance', 'welcome-page-settings')"
                       />
                     </template>
