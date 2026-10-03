@@ -70,6 +70,7 @@ import { Input } from "@/components/ui/input";
 import { appTabActiveBackground, appTabActiveIndicator } from "@/lib/tabs/tabPresentation";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import ConnectionIcon from "@/components/icons/ConnectionIcon.vue";
 import DatabaseIcon from "@/components/icons/DatabaseIcon.vue";
 import TabExecutionStatus from "@/components/layout/TabExecutionStatus.vue";
 import TabModeIcon from "@/components/layout/TabModeIcon.vue";
@@ -82,7 +83,7 @@ import { useTabScroll } from "@/composables/useTabScroll";
 import { useToast } from "@/composables/useToast";
 import { hexToRgba } from "@/lib/common/color";
 import { copyToClipboard } from "@/lib/common/clipboard";
-import { connectionIconType } from "@/lib/connection/connectionPresentation";
+import { redisDatabaseLabel } from "@/lib/redis/redisDatabaseAlias";
 import { parseTabDragPayload, serializeTabDragPayload } from "@/lib/tabs/tabDrag";
 import { createCloseAllTabMenuItem, createCloseLeftTabMenuItem, createCloseOtherTabMenuItem, createCloseRightTabMenuItem, createCloseTabMenuItem, createLocateTabMenuItem, createPinTabMenuItem, createRenameDuplicateTabItems } from "@/lib/tabs/tabMenu";
 import { tabConnectionColor, dirtyTabTitleStyle, tabColorStyle as sharedTabColorStyle, tabDatabaseIconType, tabDisplayTitle, tabDisplayTitles, tabIconClass, tabTooltipLines } from "@/lib/tabs/tabPresentation";
@@ -440,6 +441,12 @@ function databaseTabGroupBaseLabel(tab: QueryTab) {
   if (connectionStore.getConfig(tab.connectionId)?.db_type === "redis") return tabConnectionLabel(tab);
   if (!tab.database) return tabConnectionLabel(tab);
   return [tab.database, ...(tab.catalog ? [tab.catalog] : [])].join(" · ");
+}
+
+function hierarchyDatabaseLabel(tab: QueryTab) {
+  const connection = connectionStore.getConfig(tab.connectionId);
+  if (connection?.db_type === "redis" && tab.database !== "") return redisDatabaseLabel(tab.database, connection.redis_database_aliases);
+  return tab.database ? databaseTabGroupBaseLabel(tab) : tab.catalog || tabConnectionLabel(tab);
 }
 
 const databaseTabGroupIdentityDisplaysByLabel = computed(() => {
@@ -929,7 +936,7 @@ function getTabGroupHeaderMenuItems(entry: Extract<StripEntry, { kind: "header" 
       : [];
   return [
     ...customizationItems,
-    { label: t("contextMenu.collapseAll"), action: () => beginTabGroupCollapse(new Set([entry.groupId])), icon: ChevronsDownUp },
+    { label: t("contextMenu.collapseAll"), action: collapseAllTabGroups, icon: ChevronsDownUp },
     { label: t("contextMenu.expandAll"), action: () => expandAllTabGroups(), icon: ChevronsUpDown },
     { label: "", separator: true },
     { label: t("contextMenu.closeTabGroup"), action: () => closeTabsByIds(entry.tabIds), icon: X, variant: "destructive" },
@@ -996,11 +1003,16 @@ const filteredRegularTabs = computed(() => {
 
 function buildStripEntries(section: QueryTab[], pinned: boolean): StripEntry[] {
   if (settingsStore.editorSettings.tabGroupMode === "sidebar") {
-    return buildConnectionDatabaseTabGroupStripEntries(section, pinned).map((entry): StripEntry => {
+    const connectionlessEntries: StripEntry[] = section.filter((tab) => !tab.connectionId).map((tab) => ({ kind: "tab", key: tab.id, tab, groupId: "", depth: 0, ancestorIds: [], groupFirst: false, groupLast: false, grouping: false }));
+    const hierarchyEntries = buildConnectionDatabaseTabGroupStripEntries(
+      section.filter((tab) => tab.connectionId),
+      pinned,
+    ).map((entry): StripEntry => {
       if (entry.kind === "tab") return entry;
-      const label = entry.level === "connection" ? tabGroupLabel(entry.tab) : entry.tab.database ? databaseTabGroupBaseLabel(entry.tab) : entry.tab.catalog || tabConnectionLabel(entry.tab);
+      const label = entry.level === "connection" ? tabGroupLabel(entry.tab) : hierarchyDatabaseLabel(entry.tab);
       return { ...entry, label };
     });
+    return [...connectionlessEntries, ...hierarchyEntries];
   }
   const entries: StripEntry[] = [];
   const grouping = settingsStore.editorSettings.tabGroupMode !== "none";
@@ -1715,12 +1727,8 @@ watch([() => props.specialPageTabs?.settingsActive, () => props.specialPageTabs?
                         <span class="tab-group-marker" aria-hidden="true" />
                         <Pin v-if="entry.pinned" class="tab-group-pin" aria-hidden="true" />
                         <ChevronDown class="tab-group-chevron" :class="{ 'tab-group-chevron--collapsed': isGroupCollapsed(entry.groupId) }" aria-hidden="true" />
-                        <DatabaseIcon
-                          v-if="entry.level === 'connection'"
-                          :db-type="settingsStore.editorSettings.tabGroupMode === 'sidebar' ? connectionIconType(connectionStore.getConfig(entry.tab.connectionId)) : tabDatabaseIconType(entry.tab)"
-                          class="tab-group-database-icon tab-group-connection-icon"
-                          aria-hidden="true"
-                        />
+                        <ConnectionIcon v-if="entry.level === 'connection' && settingsStore.editorSettings.tabGroupMode === 'sidebar'" :connection="connectionStore.getConfig(entry.tab.connectionId)" class="tab-group-database-icon tab-group-connection-icon" aria-hidden="true" />
+                        <DatabaseIcon v-else-if="entry.level === 'connection'" :db-type="tabDatabaseIconType(entry.tab)" class="tab-group-database-icon tab-group-connection-icon" aria-hidden="true" />
                         <Database v-else class="tab-group-database-icon tab-group-library-icon text-yellow-500" aria-hidden="true" />
                         <span class="tab-group-label">{{ entry.label }}</span>
                         <span v-if="isGroupCollapsed(entry.groupId)" class="tab-group-count">{{ entry.count }}</span>
