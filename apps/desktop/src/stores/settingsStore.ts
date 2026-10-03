@@ -706,7 +706,7 @@ const TAB_LAYOUT_MODES = ["scroll", "wrap"] as const;
 export type TabLayoutMode = (typeof TAB_LAYOUT_MODES)[number];
 const TAB_PLACEMENTS = ["top", "bottom", "left", "right"] as const;
 export type TabPlacement = (typeof TAB_PLACEMENTS)[number];
-const TAB_GROUP_MODES = ["none", "database-type", "database", "connection"] as const;
+const TAB_GROUP_MODES = ["none", "database-type", "database", "connection", "sidebar"] as const;
 export type TabGroupMode = (typeof TAB_GROUP_MODES)[number];
 export interface TabGroupCustomization {
   name?: string;
@@ -988,9 +988,11 @@ export interface EditorSettings {
   sidebarGlobalSearchLocal: boolean;
   sidebarSearchOpenedDatabasesOnly: boolean;
   autoSelectActiveSidebarNode: boolean;
+  sidebarPinDefaultDatabase: boolean;
   sidebarBrowseObjectsOnDatabaseActivation: boolean;
   sidebarBrowseObjectsOnDatabaseActivationMigrationVersion: number;
   openTabsRestoreMode: OpenTabsRestoreMode;
+  autoReloadRestoredDataTabsOnOpen: boolean;
   disconnectTabHandlingMode: DisconnectTabHandlingMode;
   deleteConnectionTabHandlingMode: DeleteConnectionTabHandlingMode;
   /** 删除连接时记住「连接名 → 数据库名」，新建同名同类型连接时自动回填并重绑保留的 SQL 页签。 */
@@ -1282,9 +1284,11 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   sidebarGlobalSearchLocal: false,
   sidebarSearchOpenedDatabasesOnly: true,
   autoSelectActiveSidebarNode: false,
+  sidebarPinDefaultDatabase: true,
   sidebarBrowseObjectsOnDatabaseActivation: false,
   sidebarBrowseObjectsOnDatabaseActivationMigrationVersion: SIDEBAR_BROWSE_OBJECTS_MIGRATION_VERSION,
   openTabsRestoreMode: "all",
+  autoReloadRestoredDataTabsOnOpen: false,
   disconnectTabHandlingMode: "close-tabs",
   deleteConnectionTabHandlingMode: "close-tabs",
   rememberConnectionDatabaseOnDelete: true,
@@ -1865,6 +1869,7 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
     sidebarGlobalSearchLocal: typeof settings.sidebarGlobalSearchLocal === "boolean" ? settings.sidebarGlobalSearchLocal : DEFAULT_EDITOR_SETTINGS.sidebarGlobalSearchLocal,
     sidebarSearchOpenedDatabasesOnly: typeof settings.sidebarSearchOpenedDatabasesOnly === "boolean" ? settings.sidebarSearchOpenedDatabasesOnly : DEFAULT_EDITOR_SETTINGS.sidebarSearchOpenedDatabasesOnly,
     autoSelectActiveSidebarNode: settings.autoSelectActiveSidebarNode ?? DEFAULT_EDITOR_SETTINGS.autoSelectActiveSidebarNode,
+    sidebarPinDefaultDatabase: typeof settings.sidebarPinDefaultDatabase === "boolean" ? settings.sidebarPinDefaultDatabase : DEFAULT_EDITOR_SETTINGS.sidebarPinDefaultDatabase,
     sidebarBrowseObjectsOnDatabaseActivation:
       typeof settings.sidebarBrowseObjectsOnDatabaseActivation === "boolean"
         ? settings.sidebarBrowseObjectsOnDatabaseActivation
@@ -1884,6 +1889,7 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
         }
       ).restoreOpenTabsOnLaunch,
     ),
+    autoReloadRestoredDataTabsOnOpen: settings.autoReloadRestoredDataTabsOnOpen === true,
     disconnectTabHandlingMode: normalizeDisconnectTabHandlingMode(
       (settings as Partial<EditorSettings>).disconnectTabHandlingMode,
       (
@@ -2717,8 +2723,10 @@ export const useSettingsStore = defineStore("settings", () => {
     if (partial.sidebarGlobalSearchLocal !== undefined) editorSettings.value.sidebarGlobalSearchLocal = partial.sidebarGlobalSearchLocal;
     if (partial.sidebarSearchOpenedDatabasesOnly !== undefined) editorSettings.value.sidebarSearchOpenedDatabasesOnly = partial.sidebarSearchOpenedDatabasesOnly;
     if (partial.autoSelectActiveSidebarNode !== undefined) editorSettings.value.autoSelectActiveSidebarNode = partial.autoSelectActiveSidebarNode;
+    if (partial.sidebarPinDefaultDatabase !== undefined) editorSettings.value.sidebarPinDefaultDatabase = partial.sidebarPinDefaultDatabase === true;
     if (partial.sidebarBrowseObjectsOnDatabaseActivation !== undefined) editorSettings.value.sidebarBrowseObjectsOnDatabaseActivation = partial.sidebarBrowseObjectsOnDatabaseActivation === true;
     if (partial.openTabsRestoreMode !== undefined) editorSettings.value.openTabsRestoreMode = normalizeOpenTabsRestoreMode(partial.openTabsRestoreMode);
+    if (partial.autoReloadRestoredDataTabsOnOpen !== undefined) editorSettings.value.autoReloadRestoredDataTabsOnOpen = partial.autoReloadRestoredDataTabsOnOpen === true;
     if (partial.disconnectTabHandlingMode !== undefined) editorSettings.value.disconnectTabHandlingMode = normalizeDisconnectTabHandlingMode(partial.disconnectTabHandlingMode);
     if (partial.deleteConnectionTabHandlingMode !== undefined) editorSettings.value.deleteConnectionTabHandlingMode = normalizeDeleteConnectionTabHandlingMode(partial.deleteConnectionTabHandlingMode);
     if (partial.rememberConnectionDatabaseOnDelete !== undefined) editorSettings.value.rememberConnectionDatabaseOnDelete = partial.rememberConnectionDatabaseOnDelete === true;
