@@ -39,6 +39,28 @@ use web_mcp::WebMcpRuntime;
 
 const XLSX_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const DATA_GRID_EXTRACTOR_BODY_LIMIT_BYTES: usize = 96 * 1024 * 1024;
+const HELP_TEXT: &str = r#"Usage: dbx-web [OPTION]
+
+Start the DBX Web browser service.
+
+Options:
+  -h, --help, /help  Show this help message and exit.
+
+Environment variables:
+  DBX_PORT              Listen port (default: 4224)
+  DBX_DATA_DIR          Data directory (default: ~/.dbx-web)
+  DBX_PUBLIC_BASE_PATH  URL path prefix (default: /)
+  DBX_PASSWORD          Set the Web login password
+  DBX_DISABLE_PASSWORD  Set to 1 to disable login protection
+  DBX_STATIC_DIR        Serve frontend assets from this directory
+  RUST_LOG              Configure backend log filtering
+  RUST_BACKTRACE        Set to 1 to include Rust backtraces
+
+Examples:
+  DBX_PORT=8080 dbx-web
+  RUST_LOG=dbx_web=debug,tower_http=info dbx-web
+  RUST_BACKTRACE=1 RUST_LOG=dbx_web=debug dbx-web
+"#;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -55,6 +77,15 @@ async fn openapi_json() -> axum::Json<utoipa::openapi::OpenApi> {
 #[cfg(test)]
 mod data_grid_extractor_openapi_tests {
     use super::*;
+
+    #[test]
+    fn help_flags_are_detected_without_starting_the_server() {
+        for flag in ["-h", "--help", "/help"] {
+            assert!(help_requested(&[flag.to_string()]));
+        }
+        assert!(help_requested(&["extra".to_string(), "--help".to_string()]));
+        assert!(!help_requested(&["--helpful".to_string()]));
+    }
 
     #[test]
     fn extractor_openapi_contains_the_versioned_request_and_error_responses() {
@@ -173,6 +204,10 @@ where
             }
         }),
     )
+}
+
+fn help_requested(args: &[String]) -> bool {
+    args.iter().any(|arg| matches!(arg.as_str(), "-h" | "--help" | "/help"))
 }
 
 /// Frontend build output compiled into the binary by the `embed-static` feature.
@@ -385,6 +420,12 @@ fn add_mq_routes(router: Router<Arc<WebState>>) -> Router<Arc<WebState>> {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if help_requested(&args) {
+        print!("{HELP_TEXT}");
+        return;
+    }
+
     let runtime = dbx_core::scheduled_backup::worker_runtime().expect("Failed to build tokio runtime");
     runtime.block_on(serve());
 }
