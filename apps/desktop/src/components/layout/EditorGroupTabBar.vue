@@ -1627,6 +1627,7 @@ watch([() => props.specialPageTabs?.settingsActive, () => props.specialPageTabs?
         :show-chevron="false"
         :close-on-select="false"
         :match-trigger-width="false"
+        max-height="min(600px, calc(100vh - 16px))"
         align="end"
         @update:model-value="selectTabOrganizationItem"
       />
@@ -1653,6 +1654,7 @@ watch([() => props.specialPageTabs?.settingsActive, () => props.specialPageTabs?
         :show-chevron="false"
         :close-on-select="false"
         :match-trigger-width="false"
+        max-height="min(600px, calc(100vh - 16px))"
         @update:model-value="selectTabOrganizationItem"
       />
       <div class="app-tab-strip relative h-full min-w-0 flex-1 overflow-hidden">
