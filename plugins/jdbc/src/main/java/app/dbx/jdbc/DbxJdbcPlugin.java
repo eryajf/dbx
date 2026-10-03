@@ -393,7 +393,8 @@ public final class DbxJdbcPlugin {
                 registerDrivers(connection);
                 return handle(method, params, connection);
             } catch (Exception | LinkageError error) {
-                if ("connect".equals(method)) {
+                if ("connect".equals(method)
+                    && (state.sharedConnection == null || !isPostgresJdbcUrl(optionalText(connection, "connection_string")))) {
                     closeSharedConnection();
                     state.closing = true;
                     LOGICAL_SESSIONS.remove(id, state);
@@ -527,6 +528,15 @@ public final class DbxJdbcPlugin {
     }
 
     private static JsonNode handle(String method, JsonNode params, JsonNode connection) throws Exception {
+        String database = optionalText(params, "database");
+        if (isPostgresJdbcUrl(optionalText(connection, "connection_string"))) {
+            database = postgresDatabase(params);
+            if (database != null) {
+                ObjectNode targeted = connection.deepCopy();
+                targeted.put("database", database);
+                connection = targeted;
+            }
+        }
         return switch (method) {
             case "testConnection" -> connectionTestResult(openConnection(connection));
             case "connect" -> {
@@ -539,7 +549,7 @@ public final class DbxJdbcPlugin {
             case "executeQuery" -> executeQuery(
                 connection,
                 requireText(params, "sql"),
-                optionalText(params, "database"),
+                database,
                 optionalText(params, "schema"),
                 positiveInt(params, "maxRows", MAX_ROWS),
                 nonNegativeInt(params, "fetchSize", 0),
@@ -548,13 +558,13 @@ public final class DbxJdbcPlugin {
             );
             case "beginManualTransaction", "begin_manual_transaction" -> beginManualTransaction(
                 connection,
-                optionalText(params, "database"),
+                database,
                 optionalText(params, "schema")
             );
             case "executeInManualTransaction", "execute_in_manual_transaction" -> executeInManualTransaction(
                 connection,
                 requireText(params, "sql"),
-                optionalText(params, "database"),
+                database,
                 optionalText(params, "schema"),
                 positiveInt(params, "maxRows", MAX_ROWS),
                 nonNegativeInt(params, "fetchSize", 0),
@@ -566,7 +576,7 @@ public final class DbxJdbcPlugin {
             case "executeQueryPage", "execute_query_page" -> executeQueryPage(
                 connection,
                 requireText(params, "sql"),
-                optionalText(params, "database"),
+                database,
                 optionalText(params, "schema"),
                 positiveInt(params, "pageSize", 100),
                 positiveInt(params, "maxRows", MAX_ROWS),
@@ -579,10 +589,10 @@ public final class DbxJdbcPlugin {
             );
             case "closeQuerySession", "close_query_session" -> closeQuerySessionResult(requireText(params, "sessionId"));
             case "listDatabases" -> listDatabases(connection);
-            case "listSchemas" -> listSchemas(connection, optionalText(params, "database"));
+            case "listSchemas" -> listSchemas(connection, database);
             case "listTables" -> listTables(
                 connection,
-                optionalText(params, "database"),
+                database,
                 optionalText(params, "schema"),
                 optionalText(params, "filter"),
                 nonNegativeInt(params, "limit", 0),
@@ -591,7 +601,7 @@ public final class DbxJdbcPlugin {
             );
             case "listObjects", "list_objects" -> listObjects(
                 connection,
-                optionalText(params, "database"),
+                database,
                 optionalText(params, "schema"),
                 optionalText(params, "filter"),
                 nonNegativeInt(params, "limit", 0),
@@ -600,28 +610,28 @@ public final class DbxJdbcPlugin {
             );
             case "listIndexes", "list_indexes" -> listIndexes(
                 connection,
-                optionalText(params, "database"),
+                database,
                 optionalText(params, "schema"),
                 requireText(params, "table")
             );
-            case "listDataTypes", "list_data_types" -> listDataTypes(connection, optionalText(params, "database"));
+            case "listDataTypes", "list_data_types" -> listDataTypes(connection, database);
             case "getObjectSource", "get_object_source" -> getObjectSource(
                 connection,
-                optionalText(params, "database"),
+                database,
                 optionalText(params, "schema"),
                 requireText(params, "name"),
                 requireText(params, "object_type")
             );
             case "getColumns" -> getColumns(
                 connection,
-                optionalText(params, "database"),
+                database,
                 optionalText(params, "schema"),
                 requireText(params, "table")
             );
             case "getExplainInfo" -> getExplainInfo(
                 connection,
                 requireText(params, "sql"),
-                optionalText(params, "database"),
+                database,
                 optionalText(params, "schema"),
                 nonNegativeInt(params, "timeoutSecs", -1),
                 optionalText(params, "mode")
@@ -732,7 +742,17 @@ public final class DbxJdbcPlugin {
             throw new SQLException("JDBC logical sessions require the same selected driver");
         }
         if (connectionState() != DEFAULT_CONNECTION_STATE) logicalDriverKey = driverKey;
+        String driverClass = optionalText(connection, "jdbc_driver_class");
         if (driverKey.equals(registeredDriverKey) && registeredDriver != null) {
+            if (driverClass != null) {
+                LegacyJdbcDriverClass.load(
+                    driverClass,
+                    optionalText(connection, "connection_string"),
+                    registeredDriverClassLoader != null
+                        ? registeredDriverClassLoader
+                        : Thread.currentThread().getContextClassLoader()
+                );
+            }
             if (registeredDriverClassLoader != null) {
                 Thread.currentThread().setContextClassLoader(registeredDriverClassLoader);
             }
@@ -757,9 +777,10 @@ public final class DbxJdbcPlugin {
         Thread.currentThread().setContextClassLoader(loader);
         registeredDriverClassLoader = loader;
 
-        String driverClass = optionalText(connection, "jdbc_driver_class");
         if (driverClass != null) {
-            Constructor<?> constructor = Class.forName(driverClass, true, loader).getDeclaredConstructor();
+            Constructor<?> constructor = LegacyJdbcDriverClass.load(
+                driverClass, optionalText(connection, "connection_string"), loader
+            ).getDeclaredConstructor();
             constructor.setAccessible(true);
             Driver driver = (Driver) constructor.newInstance();
             registeredDriver = new DriverShim(driver);
@@ -796,7 +817,12 @@ public final class DbxJdbcPlugin {
             configureOrdinaryAutoCommit(state.sharedConnection);
             return state.sharedConnection;
         }
-        closeSharedConnection();
+        boolean postgres = isPostgresJdbcUrl(url);
+        if (postgres && state.sharedConnection != null
+            && (state.manualTransactionActive || hasActiveQuerySession(state.sharedConnection))) {
+            throw new SQLException("Cannot change PostgreSQL database while a transaction or query session is active");
+        }
+        if (!postgres) closeSharedConnection();
 
         JdbcUrlCredentials urlCredentials = extractJdbcUrlCredentials(url);
         url = urlCredentials.url;
@@ -824,7 +850,21 @@ public final class DbxJdbcPlugin {
         // Prefer the explicitly registered driver. DriverManager.getConnection only catches
         // SQLException; Hive/Inceptor drivers may throw UnsupportedOperationException for optional
         // methods, which aborts connect before the intended driver is reached.
-        state.sharedConnection = connectWithRegisteredDriver(url, properties);
+        Connection opened = connectWithRegisteredDriver(url, properties);
+        if (postgres) {
+            try {
+                configureOrdinaryAutoCommit(opened);
+            } catch (SQLException | RuntimeException | Error error) {
+                try {
+                    opened.close();
+                } catch (SQLException closeError) {
+                    error.addSuppressed(closeError);
+                }
+                throw error;
+            }
+            closeSharedConnection();
+        }
+        state.sharedConnection = opened;
         state.sharedConnectionKey = key;
         configureOrdinaryAutoCommit(state.sharedConnection);
         return state.sharedConnection;
@@ -3681,6 +3721,7 @@ public final class DbxJdbcPlugin {
 
     private static String connectionKey(JsonNode connection) {
         String connectionString = optionalText(connection, "connection_string");
+        if (isPostgresJdbcUrl(connectionString)) connectionString = jdbcUrl(connection);
         String jdbcxSecurityKey = isJdbcxUrl(connectionString)
             ? "|jdbcxHighPrivilegeExtensions=" + jdbcxHighPrivilegeExtensionsEnabled(connection)
             : "";
@@ -3728,7 +3769,51 @@ public final class DbxJdbcPlugin {
 
     static String jdbcUrl(JsonNode connection) {
         String url = appendJdbcUrlParams(optionalText(connection, "connection_string"), optionalText(connection, "url_params"));
+        url = postgresDatabaseUrl(url, postgresDatabase(connection));
         return jdbcUrlWithPasswordKey(url, optionalText(connection, "password"));
+    }
+
+    private static boolean isPostgresJdbcUrl(String url) {
+        return url != null && url.startsWith("jdbc:postgresql:");
+    }
+
+    private static String postgresDatabase(JsonNode node) {
+        String database = node.path("database").asText(null);
+        return database == null || database.isBlank() ? null : database;
+    }
+
+    private static String postgresDatabaseUrl(String url, String database) {
+        if (!isPostgresJdbcUrl(url) || database == null) return url;
+        String prefix = "jdbc:postgresql:";
+        int queryStart = url.indexOf('?');
+        String location = url.substring(prefix.length(), queryStart < 0 ? url.length() : queryStart);
+        String authority = "";
+        String originalDatabase = location;
+        if (location.equals("//") || location.equals("///")) {
+            originalDatabase = "";
+        } else if (location.startsWith("//")) {
+            int slash = location.indexOf('/', 2);
+            if (slash < 0 || location.indexOf('/', slash + 1) >= 0) {
+                throw new IllegalArgumentException("Invalid PostgreSQL JDBC URL database path");
+            }
+            authority = location.substring(0, slash + 1);
+            originalDatabase = location.substring(slash + 1);
+        } else if (location.startsWith("/")) {
+            throw new IllegalArgumentException("Invalid PostgreSQL JDBC URL database path");
+        }
+        try {
+            URLDecoder.decode(originalDatabase, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException("Invalid PostgreSQL JDBC URL database encoding");
+        }
+        String targeted = prefix + authority + URLEncoder.encode(database, StandardCharsets.UTF_8);
+        if (queryStart < 0) return targeted;
+        List<String> parameters = new ArrayList<>();
+        for (String part : url.substring(queryStart + 1).split("&", -1)) {
+            String name = partName(part);
+            if (!name.equals("PGDBNAME") && !name.equals("dbname")) parameters.add(part);
+        }
+        return targeted + "?" + String.join("&", parameters);
     }
 
     private record JdbcUrlCredentials(String url, String username, String password) {}
@@ -4281,11 +4366,52 @@ public final class DbxJdbcPlugin {
             throw new SQLException("Object source not found");
         }
 
+        if (isSybaseConnection(connection) && "VIEW".equals(normalizeObjectType(objectType))) {
+            return sybaseViewObjectSource(connection, conn, database, schema, name, objectType);
+        }
+
         if ("TABLE".equals(normalizeObjectType(objectType))) {
             return genericTableObjectSource(connection, database, schema, name);
         }
 
         throw new SQLException("Object source is not supported by this JDBC driver");
+    }
+
+    private static JsonNode sybaseViewObjectSource(
+        JsonNode connection,
+        Connection conn,
+        String database,
+        String schema,
+        String name,
+        String objectType
+    ) throws SQLException {
+        applyExecutionContext(connection, conn, database, schema);
+        String sql = "SELECT sc.text FROM sysobjects so, syscomments sc "
+            + "WHERE user_name(so.uid) = ? AND so.name = ? AND sc.id = so.id ORDER BY sc.colid";
+        StringBuilder source = new StringBuilder();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, schema);
+            ps.setString(2, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String fragment = rs.getString(1);
+                    if (fragment != null) {
+                        source.append(fragment);
+                    }
+                }
+            }
+        }
+        String ddl = source.toString();
+        if (ddl.isBlank()) {
+            throw new SQLException("Object source not found");
+        }
+
+        ObjectNode item = MAPPER.createObjectNode();
+        item.put("name", name);
+        item.put("object_type", objectType);
+        putNullable(item, "schema", emptyToNull(schema));
+        item.put("source", ddl);
+        return item;
     }
 
     /**
