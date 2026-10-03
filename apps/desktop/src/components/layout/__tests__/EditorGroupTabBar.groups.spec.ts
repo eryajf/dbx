@@ -338,6 +338,35 @@ describe("EditorGroupTabBar group behavior", () => {
     host.remove();
   });
 
+  it("renders connection-to-database-to-tab guide segments for multiple databases", async () => {
+    const store = useQueryStore();
+    const settings = useSettingsStore();
+    settings.editorSettings.tabGroupMode = "sidebar";
+    settings.editorSettings.tabPlacement = "left";
+    store.createTab("mysql-1", "app", "App 1", "query");
+    store.createTab("mysql-1", "app", "App 2", "query");
+    store.createTab("mysql-1", "audit", "Audit", "query");
+    const { app, host } = mountBar(store.groups[0]!.id, store.tabs.slice(), store.activeTabId, pinia);
+    await settle();
+
+    expect(host.querySelectorAll(".tab-group-header")).toHaveLength(3);
+    expect(host.querySelectorAll("[data-tree-level='connection']")).toHaveLength(1);
+    expect(host.querySelectorAll("[data-tree-level='database']")).toHaveLength(2);
+    expect(host.querySelector("[data-tree-level='connection'] .tab-group-connection-icon")).not.toBeNull();
+    expect(host.querySelector("[data-tree-level='database'] .tab-group-library-icon")).not.toBeNull();
+    expect(host.querySelectorAll(".tab-tree-guide--through")).toHaveLength(2);
+    expect(host.querySelectorAll(".tab-tree-guide--branch")).toHaveLength(2);
+    expect(host.querySelectorAll(".tab-tree-guide--last-branch")).toHaveLength(3);
+
+    const databaseHeader = host.querySelector<HTMLElement>("[data-tree-level='database']")!;
+    databaseHeader.click();
+    await settle();
+    expect(databaseHeader.querySelector(".tab-tree-guide--start")).toBeNull();
+
+    app.unmount();
+    host.remove();
+  });
+
   it("sizes the header chevron and rotates it only while the cluster is collapsed", async () => {
     const store = useQueryStore();
     const settings = useSettingsStore();
