@@ -256,6 +256,15 @@ export interface SshTunnelConfig {
   /** Allow `nc` through an SSH exec channel when direct-tcpip is prohibited. */
   allow_exec_channel_proxy?: boolean;
   /**
+   * OpenSSH-style `ProxyCommand` used to reach this host instead of a direct
+   * TCP connection, e.g. `nc %h %p` or
+   * `cloudflared access ssh --hostname %h`. `%h`/`%p`/`%r`/`%%` expand from
+   * the effective host, port and user. The executable must be one of the
+   * helpers the backend allowlists (`nc`, `ncat`, `netcat`, `cloudflared`,
+   * `socat`, `connect`, `corkscrew`, `ssh`). Empty means a direct connection.
+   */
+  proxy_command?: string;
+  /**
    * When set, this layer references a shared tunnel profile; the profile's
    * configuration replaces this layer's fields at connect time (only `id`
    * and `enabled` are kept).
@@ -269,6 +278,7 @@ export interface SshConfigHostEntry {
   port?: number;
   user?: string;
   identity_file?: string;
+  proxy_command?: string | null;
 }
 
 export interface ProxyTunnelConfig {
@@ -1896,6 +1906,35 @@ export interface TabUiState {
   page?: Record<string, TabPageUiState>;
 }
 
+export interface DatabaseSearchResultItem {
+  id: string;
+  schema?: string;
+  tableName: string;
+  tableType?: string;
+  matchedColumns: string[];
+  preview: string;
+  whereInput: string;
+}
+
+export interface DatabaseSearchTableTask {
+  schema?: string;
+  table: TableInfo;
+}
+
+export interface DatabaseSearchTabState {
+  keyword: string;
+  perTableLimit: number;
+  progressDone: number;
+  progressTotal: number;
+  results: DatabaseSearchResultItem[];
+  tableErrors: Array<{ tableName: string; message: string }>;
+  generalError: string;
+  tableTasks: DatabaseSearchTableTask[];
+  nextTableIndex: number;
+  activeKeyword: string;
+  activePerTableLimit: number;
+}
+
 export interface QueryTab {
   id: string;
   /** Stable creation time used when tabs are displayed in creation order. */
@@ -2066,7 +2105,8 @@ export interface QueryTab {
     | "solr-admin"
     | "dolt-version-control"
     | "plugin-workbench"
-    | "plugin-filesystem";
+    | "plugin-filesystem"
+    | "database-search";
   pluginWorkbench?: {
     /** Host command that created this tab; distinct commands can share a workbench. */
     commandId?: string;
@@ -2099,6 +2139,7 @@ export interface QueryTab {
   structureInitialTabRequestId?: number;
   structureInitialTarget?: TableStructureEditorTarget;
   structureDraft?: TableStructureEditorDraft;
+  databaseSearchState?: DatabaseSearchTabState;
   objectBrowser?: {
     catalog?: string;
     schema?: string;

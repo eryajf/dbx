@@ -30,6 +30,7 @@ export const EDITOR_SETTINGS_DRAFT_KEYS = [
   "tableCompletionSchemaQualification",
   "insertSpaceAfterCompletion",
   "sqlServerSpaceConfirmsCompletion",
+  "snippetTriggerKey",
   "sortCompletionColumnsAlphabetically",
   "selectFirstCompletionOnOpen",
   "wordWrap",
@@ -44,6 +45,7 @@ export const EDITOR_SETTINGS_DRAFT_KEYS = [
   "confirmUnsavedSqlClose",
   "appCloseUnsavedTabsMode",
   "savedSqlOpenTargetMode",
+  "welcomePageMode",
   "appLayout",
   "tabLayout",
   "tabPlacement",
@@ -71,7 +73,10 @@ export const EDITOR_SETTINGS_DRAFT_KEYS = [
   "multiStatementDefaultView",
   "dataGridAutoTransposeSingleRow",
   "dataGridCellDetailButtonVisible",
+  "dataGridCellDetailDialogDefault",
   "dataGridCrosshairHighlight",
+  "dataGridStripedRows",
+  "dataGridZebraRowBg",
   "pageSize",
   "tableOpenPageSize",
   "tableOpenSortMode",
@@ -94,8 +99,10 @@ export const EDITOR_SETTINGS_DRAFT_KEYS = [
   "sidebarTableSearchEnabled",
   "sidebarSearchOpenedDatabasesOnly",
   "autoSelectActiveSidebarNode",
+  "sidebarPinDefaultDatabase",
   "sidebarBrowseObjectsOnDatabaseActivation",
   "openTabsRestoreMode",
+  "autoReloadRestoredDataTabsOnOpen",
   "disconnectTabHandlingMode",
   "deleteConnectionTabHandlingMode",
   "rememberConnectionDatabaseOnDelete",
@@ -173,6 +180,7 @@ function normalizedDraftValue(key: EditorSettingsDraftKey, value: unknown): unkn
   if (key === "redisKeyTemplates") return normalizeRedisKeyTemplates(value);
   if (key === "csvNullMode") return normalizeCsvNullMode(value);
   if (key === "backgroundImage") return normalizeBackgroundImageSettings(value);
+  if (key === "snippetTriggerKey") return value === "space" || value === "both" ? value : "tab";
   return value;
 }
 
