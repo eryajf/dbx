@@ -57,6 +57,7 @@ import { editorFontTheme, loadEditorTheme } from "@/lib/editor/editorThemes";
 import { clampEditorFontSize, createEditorWheelZoomGestureGuard, createEditorZoomCommitScheduler, fontSizeFromWheelDelta } from "@/lib/editor/editorZoom";
 import { replaceFallbackKey } from "@/lib/editor/queryEditorSearchKeymap";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { matchesShortcut } from "@/lib/editor/keyboardShortcuts";
 import { selectLineEndsDefaultShortcut, shortcutToCodeMirrorKey } from "@/lib/editor/shortcutRegistry";
 import { selectLineEnds } from "@/lib/editor/selectLineEnds";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -639,6 +640,11 @@ async function mountConfigEditor() {
       Prec.highest(keymap.of([{ key: "Mod-f", run: () => configSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }, { key: replaceFallbackKey(), run: () => configSearchPanelRef.value?.openReplace() ?? false, preventDefault: true }, indentWithTab])),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.domEventHandlers({
+        keydown(event, eventView) {
+          if (!matchesShortcut(event, selectLineEndsShortcut())) return false;
+          event.preventDefault();
+          return selectLineEnds(eventView);
+        },
         wheel(event, eventView) {
           if (!configEditorWheelZoomGestureGuard.accepts(event)) return false;
           event.preventDefault();

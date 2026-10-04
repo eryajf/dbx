@@ -8,6 +8,7 @@ import { bracketMatching, foldGutter, foldKeymap } from "@codemirror/language";
 import { trimmedSelectionLayer } from "@/lib/editor/codemirrorTrimmedSelectionLayer";
 import { EDITOR_FONT_FAMILY_CSS_VAR, EDITOR_FONT_SIZE_CSS_VAR, cellDetailActiveLineColor, loadEditorTheme, editorFontTheme } from "@/lib/editor/editorThemes";
 import { editorClipboardLineEndingsExtension } from "@/lib/editor/editorClipboardLineEndings";
+import { matchesShortcut } from "@/lib/editor/keyboardShortcuts";
 import { shortcutToCodeMirrorKey } from "@/lib/editor/shortcutRegistry";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { CELL_DETAIL_JSON_FORMAT_MAX_LENGTH, isJsonColumnType } from "@/lib/dataGrid/cellDetailPresentation";
@@ -290,7 +291,11 @@ export function useCellDetailEditor(options: UseCellDetailEditorOptions): UseCel
           }
         }),
         EditorView.domEventHandlers({
-          keydown(event) {
+          keydown(event, eventView) {
+            if (matchesShortcut(event, settingsStore.editorSettings.shortcuts.selectLineEnds)) {
+              event.preventDefault();
+              return selectLineEnds(eventView);
+            }
             if (!options.onSaveShortcut?.(event)) return false;
             event.preventDefault();
             event.stopPropagation();

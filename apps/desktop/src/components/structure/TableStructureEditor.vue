@@ -27,6 +27,7 @@ import { useProductionSafetyStore } from "@/stores/productionSafetyStore";
 import { productionContextForDatabase } from "@/lib/database/productionSafety";
 import { useQueryStore } from "@/stores/queryStore";
 import { useHistoryStore } from "@/stores/historyStore";
+import { matchesShortcut } from "@/lib/editor/keyboardShortcuts";
 import { selectLineEndsDefaultShortcut, shortcutToCodeMirrorKey } from "@/lib/editor/shortcutRegistry";
 import { selectLineEnds } from "@/lib/editor/selectLineEnds";
 import { useSettingsStore, type StructureEditorDensity } from "@/stores/settingsStore";
@@ -139,7 +140,7 @@ import {
 import { CREATE_DATABASE_CHARSET_OPTIONS, createDatabaseCollationOptionsForCharset, fallbackCreateDatabaseCharsetMetadata, normalizeCreateDatabaseCharsetKey, parseCreateDatabaseCharsetMetadata } from "@/lib/database/createDatabaseCharsetOptions";
 import type { CreateDatabaseCharsetMetadata } from "@/lib/database/createDatabaseCharsetOptions";
 import * as api from "@/lib/backend/api";
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 
 const { t } = useI18n();
 const { isDark, themePalette } = useTheme();
@@ -394,6 +395,13 @@ async function initDdlEditor(content: string) {
       themeExt,
       fontExt,
       ddlEditorShortcut.of(keymap.of([{ key: shortcutToCodeMirrorKey(selectLineEndsShortcut()), preventDefault: true, run: selectLineEnds }])),
+      EditorView.domEventHandlers({
+        keydown(event, eventView) {
+          if (!matchesShortcut(event, selectLineEndsShortcut())) return false;
+          event.preventDefault();
+          return selectLineEnds(eventView);
+        },
+      }),
       Prec.highest(keymap.of([{ key: "Mod-f", run: () => ddlSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }])),
       EditorView.theme({
         "&.cm-focused": { outline: "none" },

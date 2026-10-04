@@ -8,6 +8,7 @@ import { useI18n } from "vue-i18n";
 import { Clipboard, ExternalLink, Loader2, Maximize2, Minimize2, RefreshCw } from "@lucide/vue";
 import { useToast } from "@/composables/useToast";
 import { useTheme } from "@/composables/useTheme";
+import { matchesShortcut } from "@/lib/editor/keyboardShortcuts";
 import { selectLineEndsDefaultShortcut, shortcutToCodeMirrorKey } from "@/lib/editor/shortcutRegistry";
 import { selectLineEnds } from "@/lib/editor/selectLineEnds";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -25,7 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { HelpTooltip } from "@/components/ui/tooltip";
 import EditorSearchPanel from "@/components/editor/EditorSearchPanel.vue";
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import type { DatabaseType, ObjectSourceKind } from "@/types/database";
 
 const props = withDefaults(
@@ -410,6 +411,13 @@ async function initDdlEditor(content: string) {
       // Intercept Cmd+F at highest precedence so EditorSearchPanel opens
       // instead of the default search panel (which is hidden above).
       ddlEditorShortcut.of(keymap.of([{ key: shortcutToCodeMirrorKey(selectLineEndsShortcut()), preventDefault: true, run: selectLineEnds }])),
+      EditorView.domEventHandlers({
+        keydown(event, eventView) {
+          if (!matchesShortcut(event, selectLineEndsShortcut())) return false;
+          event.preventDefault();
+          return selectLineEnds(eventView);
+        },
+      }),
       Prec.highest(keymap.of([{ key: "Mod-f", run: () => ddlSearchPanelRef.value?.openSearch() ?? false, preventDefault: true }])),
       // Remove CodeMirror's default 1px dotted focus outline,
       // which is visible below the content when the DDL is short.
