@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { MoreHorizontal } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ const { t } = useI18n();
 const runtime = ref<InstanceType<typeof SidebarTreeRuntimeHost> | null>(null);
 const runtimeNode: TreeNode = { id: "__database-actions-runtime__", label: "", type: "connection-group" };
 const items = ref<ContextMenuItem[]>([]);
+const runtimeMounted = ref(false);
 const target = computed<TreeNode>(() => ({
   id: `${props.connection.id}:${props.database}`,
   label: props.database,
@@ -26,8 +27,10 @@ const target = computed<TreeNode>(() => ({
 // A catalog browser must not accidentally offer operations on the connection's database.
 const available = computed(() => !props.catalog && (canEmptyDatabaseTables(target.value, props.connection) || canDropDatabaseNode(target.value, props.connection)));
 
-function onOpen(open: boolean) {
+async function onOpen(open: boolean) {
   if (!open) return;
+  runtimeMounted.value = true;
+  await nextTick();
   // Build only when opened: the runtime binds immutable targets to the actions.
   const menu = runtime.value?.buildContextMenu(target.value) ?? [];
   items.value = menu.find((item) => item.label === t("common.more"))?.children ?? [];
@@ -51,6 +54,6 @@ function onOpen(open: boolean) {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-    <SidebarTreeRuntimeHost ref="runtime" :node="runtimeNode" :depth="0" @open-danger-dialog="openSidebarDangerDialog" />
+    <SidebarTreeRuntimeHost v-if="runtimeMounted" ref="runtime" :node="runtimeNode" :depth="0" @open-danger-dialog="openSidebarDangerDialog" />
   </template>
 </template>
