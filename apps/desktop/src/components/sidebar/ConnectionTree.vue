@@ -79,7 +79,6 @@ import { Switch } from "@/components/ui/switch";
 import { cancelPendingSidebarDataOpen, runSidebarDataOpenImmediately, type SidebarDataOpenRequest } from "@/lib/sidebar/sidebarDataOpenCoordinator";
 import CustomContextMenu, { type ContextMenuItem } from "@/components/ui/CustomContextMenu.vue";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { codeMirrorSqlDialect } from "@/lib/database/jdbcDialect";
 import { sqlFormatDialectForDbType } from "@/lib/sql/sqlFormatter";
