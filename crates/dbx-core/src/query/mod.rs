@@ -7,6 +7,7 @@ pub mod plugin_data;
 pub mod plugin_plan;
 pub mod query_cancel;
 pub mod redis_ops;
+pub mod sqlserver_manual_transaction;
 pub mod two_phase_commit;
 
 pub use dbx_drivers::execution::{
@@ -572,6 +573,10 @@ fn truncate_server_large_value_preview(
         ServerLargeValuePreviewKind::Text => text.char_indices().nth(preview_size).map(|(index, _)| index),
         ServerLargeValuePreviewKind::Binary => text
             .strip_prefix("0x")
+            .or_else(|| text.strip_prefix("0X"))
+            // PostgreSQL text-protocol queries (including rows with timestamps)
+            // return bytea as \x hex instead of the binary driver's 0x form.
+            .or_else(|| text.strip_prefix("\\x"))
             .filter(|hex| hex.len() > preview_size.saturating_mul(2))
             .map(|_| 2usize.saturating_add(preview_size.saturating_mul(2))),
         ServerLargeValuePreviewKind::Vector | ServerLargeValuePreviewKind::Deferred => unreachable!(),
@@ -5798,6 +5803,9 @@ async fn begin_transaction_session(
     catalog: Option<&str>,
     consistent_snapshot: bool,
 ) -> Result<String, String> {
+    if !consistent_snapshot && connection_database_type(state, connection_id).await == Some(DatabaseType::SqlServer) {
+        return sqlserver_manual_transaction::begin(state, connection_id, database, schema, catalog).await;
+    }
     let mysql_catalog_dialect = connection_mysql_catalog_dialect(state, connection_id).await;
     let pool_database = query_pool_database(database, catalog);
     // Probe the primary pool to learn the backend kind. Agent manual TX opens a
@@ -5956,6 +5964,7 @@ async fn begin_transaction_session(
 
     let txn_session_id = uuid::Uuid::new_v4().to_string();
     let session = TransactionSession {
+        sqlserver: None,
         connection: Arc::new(tokio::sync::Mutex::new(txn_conn)),
         pool_key: pool_key.clone(),
         last_activity: std::time::Instant::now(),
@@ -6059,6 +6068,8 @@ pub async fn execute_in_manual_transaction(
 pub struct ManualTransactionExecutionOptions {
     pub max_rows: Option<usize>,
     pub table_data_preview: bool,
+    pub execution_id: Option<String>,
+    pub timeout_secs: Option<u64>,
     pub page_size: Option<usize>,
     pub result_session_id: Option<String>,
     /// User-facing SQL to classify (Oracle-only). When present, the core
@@ -6077,6 +6088,9 @@ pub async fn execute_in_manual_transaction_with_options(
     schema: Option<&str>,
     options: ManualTransactionExecutionOptions,
 ) -> Result<Vec<ExecuteMultiResult>, String> {
+    if sqlserver_manual_transaction::is_session_id(txn_session_id) {
+        return sqlserver_manual_transaction::execute(state, txn_session_id, sql, database, schema, options).await;
+    }
     const TXN_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(MANUAL_TRANSACTION_IDLE_TIMEOUT_SECS);
 
     // Resolve statements and validate before taking the per-session connection
@@ -6176,6 +6190,9 @@ pub async fn execute_in_manual_transaction_with_options(
     let mut conn = connection.lock().await;
     for (i, statement) in statements.iter().enumerate() {
         let result = match &mut *conn {
+            TxnConnection::SqlServer { .. } => {
+                return Err("SQL Server transaction must use its batch executor".to_string())
+            }
             TxnConnection::Postgres(conn) => {
                 execute_manual_txn_postgres_statement(conn.as_ref(), statement, row_limit).await
             }
@@ -6423,6 +6440,7 @@ where
             .await
         }
         TxnConnection::Mysql(None) => Err(MANUAL_TRANSACTION_SESSION_NOT_FOUND_ERROR.to_string()),
+        TxnConnection::SqlServer { .. } => Err("Streaming SQL Server manual transactions is not supported".to_owned()),
         TxnConnection::Agent { .. } => {
             Err("Streaming rows inside an agent manual transaction is not supported".to_string())
         }
@@ -6524,6 +6542,28 @@ async fn rollback_manual_txn_connection_with_postgres_timeout(
     postgres_timeout: Option<Duration>,
 ) -> Result<(), String> {
     match conn {
+        TxnConnection::SqlServer { client, client_session_id: _client_session_id, .. } => {
+            if let Some(client) = client {
+                let mut client = client.lock().await;
+                let count = db::sqlserver::manual_transaction_status(&mut client).await?.count;
+                if count == 0 {
+                    return Err("The transaction has already ended; rollback cannot be confirmed".to_string());
+                }
+                #[cfg(feature = "test-support")]
+                sqlserver_manual_transaction::live_test_hooks::run(
+                    _client_session_id,
+                    sqlserver_manual_transaction::live_test_hooks::Phase::BeforeRollback,
+                );
+                db::sqlserver::execute_simple_batch_with_max_rows_metadata(
+                    &mut client,
+                    "ROLLBACK TRANSACTION",
+                    Some(1),
+                )
+                .await?;
+            } else {
+                return Err("The transaction connection was discarded; rollback cannot be confirmed".to_string());
+            }
+        }
         TxnConnection::Postgres(conn) => {
             if let Some(timeout) = postgres_timeout {
                 db::postgres::execute_postgres_infra_statement(conn, "ROLLBACK", timeout, "manual_txn.rollback")
@@ -6586,7 +6626,8 @@ async fn discard_mysql_manual_txn_connection(conn: &mut TxnConnection, timeout: 
 
 async fn release_manual_txn_session_pool(state: &AppState, connection_id: &str, conn: &mut TxnConnection) {
     let (client_session_id, database, cleanup_guard) = match conn {
-        TxnConnection::Agent { client_session_id, database, cleanup_guard, .. }
+        TxnConnection::SqlServer { client_session_id, database, cleanup_guard, .. }
+        | TxnConnection::Agent { client_session_id, database, cleanup_guard, .. }
         | TxnConnection::ExternalDriver { client_session_id, database, cleanup_guard, .. } => {
             (client_session_id, database, cleanup_guard)
         }
@@ -6873,6 +6914,9 @@ async fn execute_manual_txn_mysql_statement(
 
 /// Commit an existing manual transaction session.
 pub async fn commit_manual_transaction(state: &AppState, txn_session_id: &str) -> Result<db::QueryResult, String> {
+    if sqlserver_manual_transaction::is_session_id(txn_session_id) {
+        return sqlserver_manual_transaction::finish(state, txn_session_id, true).await;
+    }
     let session = {
         let mut sessions = state.transaction_sessions.write().await;
         sessions.remove(txn_session_id).ok_or("Transaction session not found")?
@@ -6880,6 +6924,7 @@ pub async fn commit_manual_transaction(state: &AppState, txn_session_id: &str) -
 
     let mut conn = session.connection.lock().await;
     match &mut *conn {
+        TxnConnection::SqlServer { .. } => return Err("SQL Server transaction must use its commit handler".to_string()),
         TxnConnection::Postgres(conn) => {
             conn.execute_typed("COMMIT", &[]).await.map_err(|e| format!("COMMIT failed: {e}"))?;
         }
@@ -6930,6 +6975,9 @@ pub async fn commit_manual_transaction(state: &AppState, txn_session_id: &str) -
 
 /// Rollback an existing manual transaction session.
 pub async fn rollback_manual_transaction(state: &AppState, txn_session_id: &str) -> Result<db::QueryResult, String> {
+    if sqlserver_manual_transaction::is_session_id(txn_session_id) {
+        return sqlserver_manual_transaction::finish(state, txn_session_id, false).await;
+    }
     let session = {
         let mut sessions = state.transaction_sessions.write().await;
         sessions.remove(txn_session_id).ok_or("Transaction session not found")?
@@ -7068,6 +7116,7 @@ mod tests {
             state.transaction_sessions.write().await.insert(
                 "snapshot".to_string(),
                 TransactionSession {
+                    sqlserver: None,
                     connection: Arc::new(tokio::sync::Mutex::new(TxnConnection::Postgres(Box::new(connection)))),
                     pool_key: "conn-1".to_string(),
                     last_activity: std::time::Instant::now(),
@@ -8115,6 +8164,7 @@ for line in sys.stdin:
             redis_scan_page_size: None,
             redis_database_aliases: Default::default(),
             redis_key_templates: Vec::new(),
+            redis_key_filter: None,
             redis_key_grouping: None,
             etcd_endpoints: String::new(),
             gbase_server: String::new(),
@@ -10306,6 +10356,7 @@ for line in sys.stdin:
         state.transaction_sessions.write().await.insert(
             "txn-test".to_string(),
             TransactionSession {
+                sqlserver: None,
                 connection: Arc::new(tokio::sync::Mutex::new(TxnConnection::ExternalDriver {
                     session,
                     config,
@@ -10965,6 +11016,7 @@ for line in sys.stdin:
             redis_scan_page_size: None,
             redis_database_aliases: Default::default(),
             redis_key_templates: Vec::new(),
+            redis_key_filter: None,
             redis_key_grouping: None,
             etcd_endpoints: String::new(),
             gbase_server: String::new(),
@@ -11519,6 +11571,7 @@ for line in sys.stdin:
         state.transaction_sessions.write().await.insert(
             txn_session_id.clone(),
             TransactionSession {
+                sqlserver: None,
                 connection: Arc::new(tokio::sync::Mutex::new(TxnConnection::Agent {
                     client: Arc::new(crate::db::agent_driver::PooledAgentClient::new(client)),
                     client_session_id,
@@ -12009,7 +12062,18 @@ for line in sys.stdin:
             column_sortables: vec![true, true],
             spatial_columns: Vec::new(),
             spatial_values: Vec::new(),
-            rows: vec![vec![serde_json::json!("0x0102030405"), serde_json::json!("B:4:5")]],
+            rows: ["0x", "0X", "\\x"]
+                .into_iter()
+                .flat_map(|prefix| {
+                    [0, 1, 4, 5].into_iter().map(move |bytes| {
+                        vec![
+                            serde_json::json!(format!("{prefix}{}", "ab".repeat(bytes))),
+                            serde_json::json!(format!("B:4:{bytes}")),
+                        ]
+                    })
+                })
+                .chain([vec![serde_json::Value::Null, serde_json::Value::Null]])
+                .collect(),
             affected_rows: 0,
             execution_time_ms: 0,
             server_execute_time_us: None,
@@ -12023,8 +12087,129 @@ for line in sys.stdin:
 
         let cells = extract_server_large_value_markers(&mut result);
 
-        assert_eq!(result.rows, vec![vec![serde_json::json!("0x01020304...")]]);
-        assert_eq!(cells, vec![db::LargeValueCell { row_index: 0, column_index: 0, original_bytes: 5 }]);
+        assert_eq!(result.columns, vec!["raw_value"]);
+        assert_eq!(result.column_types, vec!["bytea"]);
+        for (prefix_index, prefix) in ["0x", "0X", "\\x"].into_iter().enumerate() {
+            for (size_index, bytes) in [0, 1, 4, 5].into_iter().enumerate() {
+                let suffix = if bytes > 4 { "..." } else { "" };
+                assert_eq!(
+                    result.rows[prefix_index * 4 + size_index],
+                    vec![serde_json::json!(format!("{prefix}{}{suffix}", "ab".repeat(bytes.min(4))))]
+                );
+            }
+        }
+        assert_eq!(result.rows[12], vec![serde_json::Value::Null]);
+        assert_eq!(
+            cells,
+            [3, 7, 11]
+                .into_iter()
+                .map(|row_index| db::LargeValueCell { row_index, column_index: 0, original_bytes: 5 })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DBX_TEST_POSTGRES_URL pointing at PostgreSQL (read-only queries)"]
+    async fn live_postgres_bytea_preview_preserves_size_and_full_value() {
+        use crate::sql_dialect::{build_table_data_select_sql, TableDataSelectSqlOptions};
+        use sha2::{Digest, Sha256};
+
+        let url = std::env::var("DBX_TEST_POSTGRES_URL").expect("DBX_TEST_POSTGRES_URL");
+        let pool = db::postgres::connect(&url, Duration::from_secs(5)).await.expect("connect PostgreSQL");
+        let preview_size = 3276;
+        let sizes = [None, Some(0), Some(1), Some(3275), Some(3276), Some(3277), Some(9645), Some(261007)];
+        let pattern = db::hex_encode(&(0..=255).collect::<Vec<u8>>());
+        let inputs = sizes
+            .iter()
+            .enumerate()
+            .map(|(id, size)| {
+                format!("({id}, {})", size.map_or_else(|| "NULL::integer".to_string(), |n| n.to_string()))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        // A CTE supplies repeatable bytea data without creating database objects.
+        let fixture = format!(
+            "WITH payloads AS (SELECT id, substring(decode(repeat('{pattern}', (size + 255) / 256), 'hex') \
+             from 1 for size) AS content FROM (VALUES {inputs}) AS inputs(id, size)), \
+             bytea_preview AS (SELECT id, content, now() AS created_at, octet_length(content) AS bytes, \
+             encode(sha256(content), 'hex') AS checksum FROM payloads) "
+        );
+
+        for text_protocol in [false, true] {
+            let mut columns = vec!["id".to_string(), "content".to_string()];
+            let mut column_types = vec!["int4".to_string(), "bytea".to_string()];
+            if text_protocol {
+                // A temporal column makes the driver choose PostgreSQL's text protocol.
+                columns.push("created_at".to_string());
+                column_types.push("timestamptz".to_string());
+            }
+            let select = build_table_data_select_sql(TableDataSelectSqlOptions {
+                database_type: Some(DatabaseType::Postgres),
+                table_name: "bytea_preview".to_string(),
+                primary_keys: vec!["id".to_string()],
+                columns: columns.clone(),
+                column_types: column_types.clone(),
+                large_value_preview_size: Some(preview_size),
+                limit: Some(sizes.len()),
+                order_by: Some("id".to_string()),
+                ..Default::default()
+            });
+            let raw = db::postgres::execute_query(&pool, &format!("{fixture}{select}")).await.unwrap();
+            let result = ExecuteMultiResult::success_with_optional_server_large_values(raw, true);
+            assert_eq!(result.result.columns, columns);
+            assert_eq!(result.result.column_types, column_types);
+            assert_eq!(result.result.rows.len(), sizes.len());
+            let prefix = if text_protocol { "\\x" } else { "0x" };
+
+            for (row_index, size) in sizes.into_iter().enumerate() {
+                let Some(size) = size else {
+                    assert!(result.result.rows[row_index][1].is_null());
+                    continue;
+                };
+                let bytes = (0..size).map(|index| (index % 256) as u8).collect::<Vec<_>>();
+                let suffix = if size > preview_size { "..." } else { "" };
+                assert_eq!(
+                    result.result.rows[row_index][1],
+                    serde_json::json!(format!("{prefix}{}{suffix}", db::hex_encode(&bytes[..size.min(preview_size)])))
+                );
+                if size <= preview_size {
+                    continue;
+                }
+                // The download path fetches by primary key without preview options.
+                let full_select = build_table_data_select_sql(TableDataSelectSqlOptions {
+                    database_type: Some(DatabaseType::Postgres),
+                    table_name: "bytea_preview".to_string(),
+                    primary_keys: vec!["id".to_string()],
+                    columns: ["id", "content", "bytes", "checksum"].map(str::to_string).to_vec(),
+                    where_input: Some(format!("id = {row_index}")),
+                    limit: Some(1),
+                    ..Default::default()
+                });
+                let full = db::postgres::execute_query(&pool, &format!("{fixture}{full_select}")).await.unwrap();
+                assert_eq!(full.rows.len(), 1);
+                // The table-data builder can select *, so map columns by name like
+                // the grid does. A returned timestamp also makes this fetch use text.
+                let column = |name: &str| &full.rows[0][full.columns.iter().position(|c| c == name).unwrap()];
+                let value = column("content").as_str().unwrap();
+                let hex = value.strip_prefix("0x").or_else(|| value.strip_prefix("\\x")).unwrap();
+                assert_eq!(hex.len(), size * 2);
+                assert!(hex == db::hex_encode(&bytes), "full bytea differs for row {row_index}");
+                let actual_size =
+                    column("bytes").as_u64().or_else(|| column("bytes").as_str().and_then(|value| value.parse().ok()));
+                assert_eq!(actual_size, Some(size as u64));
+                assert_eq!(column("checksum"), &serde_json::json!(db::hex_encode(&Sha256::digest(&bytes))));
+            }
+            assert_eq!(
+                result.large_value_cells,
+                sizes
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(row_index, size)| size
+                        .filter(|size| *size > preview_size)
+                        .map(|original_bytes| { db::LargeValueCell { row_index, column_index: 1, original_bytes } }))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

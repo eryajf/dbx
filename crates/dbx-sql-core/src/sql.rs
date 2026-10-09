@@ -135,6 +135,31 @@ pub struct SqlFileImportStatement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SqlDialectProfile {
     supports_hash_line_comments: bool,
+    /// Whether `/* ... */` comments nest. PostgreSQL and SQL Server document
+    /// nesting (`/* /* */ */` needs both closers, so commenting out a block that
+    /// already contains a comment keeps the whole block commented); MySQL
+    /// documents the opposite ("Nested comments are not supported, and are
+    /// deprecated"). A non-nesting scan ends the comment at the inner `*/` and
+    /// then hands the commented-out statements to the executor.
+    supports_nested_block_comments: bool,
+    /// Whether a backslash inside an ordinary `'...'` string escapes the next
+    /// character, so `'it\'s'` stays one string.
+    ///
+    /// This defaults to the historical behaviour (escape) because several
+    /// engines — MySQL and ClickHouse among them — do escape there, and the ones
+    /// that do not are listed explicitly below. PostgreSQL and its forks are the
+    /// engines this repository has evidence for: `standard_conforming_strings` is
+    /// on by default, which is also why the generated PostgreSQL SQL writes
+    /// newlines as `E'\n'` instead of `'\n'`.
+    supports_backslash_escaped_quotes: bool,
+    /// PostgreSQL escape string literals (`E'...'`), which keep backslash escapes
+    /// even where ordinary `'...'` literals do not.
+    supports_postgres_escape_strings: bool,
+    /// Oracle alternative quoting: `q'[text]'`, `q'{text}'`, `q'(text)'`,
+    /// `q'<text>'` or `q'XtextX'`. The literal exists so that an apostrophe does
+    /// not end the string, so reading it as an ordinary `'...'` string ends the
+    /// text early and splits the statement at a semicolon inside it.
+    supports_oracle_q_quotes: bool,
     supports_oracle_plsql_blocks: bool,
     supports_oracle_style_routine_bodies: bool,
     supports_slash_line_block_delimiter: bool,
@@ -154,6 +179,10 @@ impl Default for SqlDialectProfile {
     fn default() -> Self {
         Self {
             supports_hash_line_comments: false,
+            supports_nested_block_comments: false,
+            supports_oracle_q_quotes: false,
+            supports_backslash_escaped_quotes: true,
+            supports_postgres_escape_strings: false,
             supports_oracle_plsql_blocks: false,
             supports_oracle_style_routine_bodies: false,
             supports_slash_line_block_delimiter: false,
@@ -198,6 +227,11 @@ impl SqlDialectProfile {
             return Self::sql_server();
         }
 
+        if matches!(db_type, DatabaseType::ClickHouse) {
+            // ClickHouse documents that C-style block comments nest.
+            return Self { supports_nested_block_comments: true, ..Self::default() };
+        }
+
         if Self::is_mysql_compatible_database(db_type) {
             return Self::mysql_compatible();
         }
@@ -206,12 +240,39 @@ impl SqlDialectProfile {
             return Self::sap_hana();
         }
 
+        if Self::is_postgres_string_lexer_database(db_type) {
+            return Self {
+                supports_backslash_escaped_quotes: false,
+                supports_nested_block_comments: true,
+                supports_postgres_escape_strings: true,
+                ..Self::default()
+            };
+        }
+
         Self::default()
+    }
+
+    /// PostgreSQL and the forks that inherit its string literal rules without
+    /// inheriting the routine/delimiter handling of [`Self::postgres_family`].
+    ///
+    /// Redshift is deliberately absent: it descends from PostgreSQL 8.0, which
+    /// predates `standard_conforming_strings` defaulting to `on`, so it keeps the
+    /// historical behaviour until its own evidence shows otherwise.
+    fn is_postgres_string_lexer_database(db_type: DatabaseType) -> bool {
+        matches!(
+            db_type,
+            DatabaseType::Vastbase
+                | DatabaseType::Kingbase
+                | DatabaseType::Highgo
+                | DatabaseType::Uxdb
+                | DatabaseType::Kwdb
+        )
     }
 
     fn mysql_compatible() -> Self {
         Self {
             supports_hash_line_comments: true,
+            supports_backslash_escaped_quotes: true,
             supports_mysql_routine_blocks: true,
             requires_whitespace_after_line_comment_dashes: true,
             ..Self::default()
@@ -219,7 +280,12 @@ impl SqlDialectProfile {
     }
 
     fn oracle_like() -> Self {
-        Self { supports_oracle_plsql_blocks: true, supports_slash_line_block_delimiter: true, ..Self::default() }
+        Self {
+            supports_oracle_plsql_blocks: true,
+            supports_oracle_q_quotes: true,
+            supports_slash_line_block_delimiter: true,
+            ..Self::default()
+        }
     }
 
     /// PostgreSQL and openGauss, which are also the connection types users pick for a
@@ -230,7 +296,10 @@ impl SqlDialectProfile {
     /// Oracle PL/SQL dialect.
     fn postgres_family() -> Self {
         Self {
+            supports_backslash_escaped_quotes: false,
+            supports_nested_block_comments: true,
             supports_oracle_style_routine_bodies: true,
+            supports_postgres_escape_strings: true,
             supports_slash_line_block_delimiter: true,
             supports_psql_control_commands: true,
             ..Self::default()
@@ -239,14 +308,22 @@ impl SqlDialectProfile {
 
     fn gaussdb() -> Self {
         Self {
+            supports_backslash_escaped_quotes: false,
+            supports_nested_block_comments: true,
             supports_postgres_dollar_quoted_routines: true,
+            supports_postgres_escape_strings: true,
             supports_psql_control_commands: true,
             ..Self::oracle_like()
         }
     }
 
     fn sql_server() -> Self {
-        Self { supports_go_batch_separator: true, keeps_sqlserver_module_batch_at_cursor: true, ..Self::default() }
+        Self {
+            supports_go_batch_separator: true,
+            keeps_sqlserver_module_batch_at_cursor: true,
+            supports_nested_block_comments: true,
+            ..Self::default()
+        }
     }
 
     fn sap_hana() -> Self {
@@ -377,6 +454,54 @@ pub fn decode_sql_file_bytes(bytes: &[u8]) -> Result<String, String> {
     decode_sql_file_with_encoding(bytes, encoding_rs::GBK)
 }
 
+/// Decode an SQL/text file using an explicit user-selected encoding.
+pub fn decode_sql_file_bytes_with_encoding(bytes: &[u8], encoding: &str) -> Result<String, String> {
+    match encoding {
+        "utf8" => {
+            decode_sql_file_with_encoding(bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes), encoding_rs::UTF_8)
+        }
+        "utf8Bom" => {
+            let payload = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+            decode_sql_file_with_encoding(payload, encoding_rs::UTF_8)
+        }
+        "utf16le" => {
+            decode_sql_file_with_encoding(bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes), encoding_rs::UTF_16LE)
+        }
+        "utf16be" => {
+            decode_sql_file_with_encoding(bytes.strip_prefix(&[0xFE, 0xFF]).unwrap_or(bytes), encoding_rs::UTF_16BE)
+        }
+        "gbk" => decode_sql_file_with_encoding(bytes, encoding_rs::GBK),
+        "auto" | "" => decode_sql_file_bytes(bytes),
+        _ => Err(format!("Unsupported SQL file encoding: {encoding}")),
+    }
+}
+
+/// Encode editor text for an explicit file encoding. The returned bytes include
+/// a BOM for UTF-8 BOM and UTF-16 variants.
+pub fn encode_sql_file_text(content: &str, encoding: &str) -> Result<Vec<u8>, String> {
+    if encoding == "utf16le" || encoding == "utf16be" {
+        let mut bytes = if encoding == "utf16le" { vec![0xFF, 0xFE] } else { vec![0xFE, 0xFF] };
+        for unit in content.encode_utf16() {
+            bytes.extend_from_slice(&if encoding == "utf16le" { unit.to_le_bytes() } else { unit.to_be_bytes() });
+        }
+        return Ok(bytes);
+    }
+    let (encoded, _, had_errors) = match encoding {
+        "utf8" | "auto" | "" => encoding_rs::UTF_8.encode(content),
+        "utf8Bom" => encoding_rs::UTF_8.encode(content),
+        "gbk" => encoding_rs::GBK.encode(content),
+        _ => return Err(format!("Unsupported SQL file encoding: {encoding}")),
+    };
+    if had_errors {
+        return Err(sql_file_encoding_error());
+    }
+    let mut bytes = encoded.into_owned();
+    if encoding == "utf8Bom" {
+        bytes.splice(0..0, [0xEF, 0xBB, 0xBF]);
+    }
+    Ok(bytes)
+}
+
 fn decode_sql_file_with_encoding(bytes: &[u8], encoding: &'static encoding_rs::Encoding) -> Result<String, String> {
     let (text, had_errors) = encoding.decode_without_bom_handling(bytes);
     if had_errors {
@@ -402,18 +527,56 @@ fn dash_dash_starts_line_comment(profile: SqlDialectProfile, char_after_dashes: 
     char_after_dashes.is_none_or(|ch| ch.is_whitespace() || ch.is_control())
 }
 
+/// Tracks an Oracle `q'...'` literal across characters, so a semicolon inside its
+/// text never splits the statement.
+#[derive(Default, Clone, Copy)]
+struct OracleQQuoteState {
+    /// 1 while the introducer's quote is expected, 2 while its delimiter is.
+    awaiting: u8,
+    closer: Option<char>,
+}
+
+impl OracleQQuoteState {
+    fn is_open(&self) -> bool {
+        self.awaiting > 0 || self.closer.is_some()
+    }
+
+    /// Consumes one character of an open literal; `previous` is the character
+    /// before it, as tracked by the caller.
+    fn consume(&mut self, ch: char, previous: Option<char>) {
+        if self.awaiting == 1 {
+            self.awaiting = if ch == '\'' { 2 } else { 0 };
+        } else if self.awaiting == 2 {
+            self.closer = oracle_q_quote_closer(ch);
+            self.awaiting = 0;
+        } else if let Some(closer) = self.closer {
+            if previous == Some(closer) && ch == '\'' {
+                self.closer = None;
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct SqlStatementSplitter {
     buffer: String,
     in_single_quote: bool,
+    /// Whether the open `'...'` literal reads a backslash as escaping the next
+    /// character: MySQL strings always do, PostgreSQL only inside `E'...'`.
+    single_quote_escape_string: bool,
     in_double_quote: bool,
     in_backtick: bool,
     in_line_comment: bool,
-    in_block_comment: bool,
+    /// Depth of the open `/* ... */` comment. Engines that nest block comments
+    /// increment it for every inner `/*`, so the inner `*/` does not end the
+    /// comment and hand commented-out statements to the executor.
+    block_comment_depth: usize,
     dollar_quote_tag: Option<String>,
     postgres_dollar_quoted_routine: bool,
     previous: Option<char>,
     pending_mysql_line_comment_dashes: bool,
+    /// Open Oracle `q'...'` literal, if any.
+    oracle_q_quote: OracleQQuoteState,
     custom_delimiter: Option<String>,
     stop_on_error: bool,
     pending_psql_command: Option<String>,
@@ -466,7 +629,7 @@ impl SqlStatementSplitter {
                 && !self.in_double_quote
                 && !self.in_backtick
                 && !self.in_line_comment
-                && !self.in_block_comment
+                && self.block_comment_depth == 0
                 && self.dollar_quote_tag.is_none()
                 && self.buffer.rsplit('\n').next().unwrap_or("").trim().is_empty()
             {
@@ -506,17 +669,42 @@ impl SqlStatementSplitter {
                 continue;
             }
 
-            if self.in_block_comment {
+            if self.block_comment_depth > 0 {
                 self.buffer.push(ch);
-                if self.previous == Some('*') && ch == '/' {
-                    self.in_block_comment = false;
+                if self.options.profile.supports_nested_block_comments && self.previous == Some('/') && ch == '*' {
+                    self.block_comment_depth += 1;
+                    // A nested opener's asterisk must not pair with a following slash as a close.
+                    self.previous = None;
+                    i += 1;
+                    continue;
+                } else if self.previous == Some('*') && ch == '/' {
+                    self.block_comment_depth -= 1;
                 }
                 self.previous = Some(ch);
                 i += 1;
                 continue;
             }
 
+            if self.oracle_q_quote.is_open() {
+                self.oracle_q_quote.consume(ch, self.previous);
+                self.buffer.push(ch);
+                self.previous = Some(ch);
+                i += 1;
+                continue;
+            }
+
             if !self.in_single_quote && !self.in_double_quote && !self.in_backtick {
+                if self.options.profile.supports_oracle_q_quotes
+                    && matches!(ch, 'q' | 'Q')
+                    && next == Some('\'')
+                    && !self.previous.is_some_and(is_identifier_continue_char)
+                {
+                    self.oracle_q_quote.awaiting = 1;
+                    self.buffer.push(ch);
+                    self.previous = Some(ch);
+                    i += 1;
+                    continue;
+                }
                 if self.previous == Some('-') && ch == '-' {
                     if self.options.profile.requires_whitespace_after_line_comment_dashes && next.is_none() {
                         self.pending_mysql_line_comment_dashes = true;
@@ -534,9 +722,10 @@ impl SqlStatementSplitter {
                     }
                 }
                 if self.previous == Some('/') && ch == '*' {
-                    self.in_block_comment = true;
+                    self.block_comment_depth = 1;
                     self.buffer.push(ch);
-                    self.previous = Some(ch);
+                    // The opener's own asterisk must not read as a nested opener.
+                    self.previous = None;
                     i += 1;
                     continue;
                 }
@@ -548,9 +737,10 @@ impl SqlStatementSplitter {
                     continue;
                 }
                 if ch == '/' && next == Some('*') {
-                    self.in_block_comment = true;
+                    self.block_comment_depth = 1;
                     self.buffer.push(ch);
-                    self.previous = Some(ch);
+                    // The opener's own asterisk must not read as a nested opener.
+                    self.previous = None;
                     i += 1;
                     continue;
                 }
@@ -579,11 +769,22 @@ impl SqlStatementSplitter {
             }
 
             match ch {
-                '\'' if !self.in_double_quote && !self.in_backtick && !has_odd_trailing_backslashes(&self.buffer) => {
+                '\'' if !self.in_double_quote
+                    && !self.in_backtick
+                    && !(self.single_quote_backslash_escapes() && has_odd_trailing_backslashes(&self.buffer)) =>
+                {
                     self.in_single_quote = !self.in_single_quote;
+                    self.single_quote_escape_string = self.in_single_quote
+                        && (self.options.profile.supports_backslash_escaped_quotes
+                            || (self.options.profile.supports_postgres_escape_strings
+                                && ends_with_escape_string_prefix(&self.buffer)));
                     self.buffer.push(ch);
                 }
-                '"' if !self.in_single_quote && !self.in_backtick && !has_odd_trailing_backslashes(&self.buffer) => {
+                '"' if !self.in_single_quote
+                    && !self.in_backtick
+                    && !(self.options.profile.supports_backslash_escaped_quotes
+                        && has_odd_trailing_backslashes(&self.buffer)) =>
+                {
                     self.in_double_quote = !self.in_double_quote;
                     self.buffer.push(ch);
                 }
@@ -758,6 +959,18 @@ impl SqlStatementSplitter {
         self.pending_mysql_line_comment_dashes = false;
     }
 
+    /// A backslash escapes a quote only where the dialect says so: MySQL for
+    /// ordinary strings, PostgreSQL for `E'...'` literals. Outside a string the
+    /// profile decides, which keeps the historical MySQL guard that a quote
+    /// preceded by an odd number of backslashes does not open a literal.
+    fn single_quote_backslash_escapes(&self) -> bool {
+        if self.in_single_quote {
+            self.single_quote_escape_string
+        } else {
+            self.options.profile.supports_backslash_escaped_quotes
+        }
+    }
+
     fn on_delimiter_line(&self) -> bool {
         let start = self.buffer.rfind('\n').map_or(0, |p| p + 1);
         let line = self.buffer[start..].trim_start().as_bytes();
@@ -769,6 +982,48 @@ impl SqlStatementSplitter {
 
 fn has_odd_trailing_backslashes(sql: &str) -> bool {
     sql.as_bytes().iter().rev().take_while(|byte| **byte == b'\\').count() % 2 == 1
+}
+
+/// True when `text` ends with a PostgreSQL `E'`/`e'` escape-string introducer.
+/// The `E` must start its own token: a type name that merely ends in `e`
+/// (`DATE'2020-01-01'`) or an identifier such as `x$e` is not an escape string.
+fn ends_with_escape_string_prefix(text: &str) -> bool {
+    let mut chars = text.chars().rev();
+    if !matches!(chars.next(), Some('E' | 'e')) {
+        return false;
+    }
+    !chars.next().is_some_and(is_identifier_continue_char)
+}
+
+/// Whether `ch` can continue an unquoted identifier, which decides whether a
+/// one-letter introducer (`E'...'`, `q'...'`) starts its own token.
+fn is_identifier_continue_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_' || ch == '$'
+}
+
+/// The closing character of an Oracle alternative-quoting delimiter: brackets
+/// pair up (`q'[a]'`) and every other character delimits itself (`q'!a!'`).
+/// A quote or whitespace cannot delimit the literal.
+fn oracle_q_quote_closer(opening: char) -> Option<char> {
+    match opening {
+        '[' => Some(']'),
+        '{' => Some('}'),
+        '(' => Some(')'),
+        '<' => Some('>'),
+        '\'' | ' ' | '\t' | '\n' | '\r' => None,
+        other => Some(other),
+    }
+}
+
+/// Byte index just past the closing quote of the `q'...'` literal whose opening
+/// quote sits at `quote_index`, or `None` when the literal is not well formed.
+fn oracle_q_quote_end(sql: &str, quote_index: usize) -> Option<usize> {
+    let opening = next_char_at(sql, quote_index + 1)?;
+    let closer = oracle_q_quote_closer(opening)?;
+    let content_start = quote_index + 1 + opening.len_utf8();
+    let closing = format!("{closer}'");
+    let offset = sql.get(content_start..)?.find(&closing)?;
+    Some(content_start + offset + closing.len())
 }
 
 pub fn split_sql_statements(sql: &str) -> Vec<String> {
@@ -1018,9 +1273,10 @@ fn split_sql_statement_ranges_with_options(sql: &str, options: SqlParsingOptions
     let mut in_double_quote = false;
     let mut in_backtick = false;
     let mut in_line_comment = false;
-    let mut in_block_comment = false;
+    let mut block_comment_depth = 0usize;
     let mut dollar_quote_tag: Option<String> = None;
     let mut custom_delimiter: Option<String> = None;
+    let mut single_quote_escape_string = false;
     let mut postgres_dollar_quoted_routine = false;
 
     while i < sql.len() {
@@ -1045,10 +1301,13 @@ fn split_sql_statement_ranges_with_options(sql: &str, options: SqlParsingOptions
             continue;
         }
 
-        if in_block_comment {
+        if block_comment_depth > 0 {
             if ch == '*' && next == Some('/') {
                 i += 2;
-                in_block_comment = false;
+                block_comment_depth -= 1;
+            } else if options.profile.supports_nested_block_comments && ch == '/' && next == Some('*') {
+                i += 2;
+                block_comment_depth += 1;
             } else {
                 i += ch.len_utf8();
             }
@@ -1056,6 +1315,16 @@ fn split_sql_statement_ranges_with_options(sql: &str, options: SqlParsingOptions
         }
 
         if !in_single_quote && !in_double_quote && !in_backtick {
+            if options.profile.supports_oracle_q_quotes
+                && matches!(ch, 'q' | 'Q')
+                && next == Some('\'')
+                && !sql[..i].chars().next_back().is_some_and(is_identifier_continue_char)
+            {
+                if let Some(end) = oracle_q_quote_end(sql, i + ch.len_utf8()) {
+                    i = end;
+                    continue;
+                }
+            }
             if ch == '-'
                 && next == Some('-')
                 && dash_dash_starts_line_comment(options.profile, next_char_at(sql, i + 2))
@@ -1070,7 +1339,7 @@ fn split_sql_statement_ranges_with_options(sql: &str, options: SqlParsingOptions
                 continue;
             }
             if ch == '/' && next == Some('*') {
-                in_block_comment = true;
+                block_comment_depth = 1;
                 i += 2;
                 continue;
             }
@@ -1120,12 +1389,29 @@ fn split_sql_statement_ranges_with_options(sql: &str, options: SqlParsingOptions
             }
         }
 
+        let single_quote_backslash_escapes = if in_single_quote {
+            single_quote_escape_string
+        } else {
+            options.profile.supports_backslash_escaped_quotes
+        };
+
         match ch {
-            '\'' if !in_double_quote && !in_backtick && !has_odd_trailing_backslashes(&sql[start..i]) => {
+            '\'' if !in_double_quote
+                && !in_backtick
+                && !(single_quote_backslash_escapes && has_odd_trailing_backslashes(&sql[start..i])) =>
+            {
                 in_single_quote = !in_single_quote;
+                single_quote_escape_string = in_single_quote
+                    && (options.profile.supports_backslash_escaped_quotes
+                        || (options.profile.supports_postgres_escape_strings
+                            && ends_with_escape_string_prefix(&sql[start..i])));
                 i += ch.len_utf8();
             }
-            '"' if !in_single_quote && !in_backtick && !has_odd_trailing_backslashes(&sql[start..i]) => {
+            '"' if !in_single_quote
+                && !in_backtick
+                && !(options.profile.supports_backslash_escaped_quotes
+                    && has_odd_trailing_backslashes(&sql[start..i])) =>
+            {
                 in_double_quote = !in_double_quote;
                 i += ch.len_utf8();
             }
@@ -1532,6 +1818,7 @@ fn mysql_routine_tokens(sql: &str) -> Vec<String> {
         }
 
         if in_block_comment {
+            // MySQL block comments do not nest, so a single flag is enough here.
             if ch == '*' && next == Some('/') {
                 in_block_comment = false;
                 i += 2;
@@ -2111,7 +2398,8 @@ struct SqlScanner {
     in_double_quote: bool,
     in_backtick: bool,
     in_line_comment: bool,
-    in_block_comment: bool,
+    block_comment_depth: usize,
+    oracle_q_quote: OracleQQuoteState,
     dollar_quote_tag: Option<String>,
     previous: Option<char>,
 }
@@ -2138,19 +2426,42 @@ impl SqlScanner {
             self.previous = Some(ch);
             return;
         }
-        if self.in_block_comment {
-            if self.previous == Some('*') && ch == '/' {
-                self.in_block_comment = false;
+        if self.block_comment_depth > 0 {
+            if self.profile.supports_nested_block_comments && self.previous == Some('/') && ch == '*' {
+                self.block_comment_depth += 1;
+                // A nested opener's asterisk must not pair with a following slash as a close.
+                self.previous = None;
+                return;
+            } else if self.previous == Some('*') && ch == '/' {
+                self.block_comment_depth -= 1;
             }
             self.previous = Some(ch);
             return;
         }
 
+        if self.oracle_q_quote.is_open() {
+            self.oracle_q_quote.consume(ch, self.previous);
+            self.previous = Some(ch);
+            return;
+        }
+
         if !self.in_single_quote && !self.in_double_quote && !self.in_backtick {
+            if self.profile.supports_oracle_q_quotes
+                && matches!(ch, 'q' | 'Q')
+                && next == Some('\'')
+                && !self.previous.is_some_and(is_identifier_continue_char)
+            {
+                self.oracle_q_quote.awaiting = 1;
+                self.previous = Some(ch);
+                return;
+            }
             if (ch == '-' && next == Some('-')) || (self.profile.supports_hash_line_comments && ch == '#') {
                 self.in_line_comment = true;
             } else if ch == '/' && next == Some('*') {
-                self.in_block_comment = true;
+                self.block_comment_depth = 1;
+                // The opener's own asterisk must not read as a nested opener.
+                self.previous = None;
+                return;
             } else if let Some(tag) =
                 self.profile.supports_dollar_quoted_strings.then(|| dollar_quote_tag_at_str(sql, idx)).flatten()
             {
@@ -2178,7 +2489,8 @@ impl SqlScanner {
             || self.in_double_quote
             || self.in_backtick
             || self.in_line_comment
-            || self.in_block_comment
+            || self.block_comment_depth > 0
+            || self.oracle_q_quote.is_open()
             || self.dollar_quote_tag.is_some()
     }
 }
@@ -2320,7 +2632,7 @@ fn mysql_executable_comment_body(statement: &str) -> Option<&str> {
         body_start += 1;
     }
 
-    let close = find_block_comment_close(bytes, body_start)?;
+    let close = find_block_comment_close(bytes, body_start, false)?;
     if has_executable_sql(&statement[close + 2..]) {
         return None;
     }
@@ -2358,7 +2670,7 @@ fn leading_mysql_executable_comment_start(statement: &str) -> Option<usize> {
                 return Some(i);
             }
 
-            let close = find_block_comment_close(bytes, i + 2)?;
+            let close = find_block_comment_close(bytes, i + 2, false)?;
             i = close + 2;
             continue;
         }
@@ -2369,10 +2681,21 @@ fn leading_mysql_executable_comment_start(statement: &str) -> Option<usize> {
     None
 }
 
-fn find_block_comment_close(bytes: &[u8], mut start: usize) -> Option<usize> {
+fn find_block_comment_close(bytes: &[u8], mut start: usize, nested: bool) -> Option<usize> {
+    let mut depth = 1usize;
     while start + 1 < bytes.len() {
         if bytes[start] == b'*' && bytes[start + 1] == b'/' {
-            return Some(start);
+            depth -= 1;
+            if depth == 0 {
+                return Some(start);
+            }
+            start += 2;
+            continue;
+        }
+        if nested && bytes[start] == b'/' && bytes[start + 1] == b'*' {
+            depth += 1;
+            start += 2;
+            continue;
         }
         start += 1;
     }
@@ -2446,7 +2769,8 @@ fn leading_executable_sql_with_options(sql: &str, options: SqlParsingOptions) ->
                 break;
             }
 
-            let Some(close) = find_block_comment_close(bytes, i + 2) else {
+            let Some(close) = find_block_comment_close(bytes, i + 2, options.profile.supports_nested_block_comments)
+            else {
                 return &sql[sql.len()..];
             };
             i = close + 2;
@@ -3015,7 +3339,7 @@ fn executable_sql_bounds(statement: &str, options: SqlParsingOptions) -> Option<
 fn has_executable_sql_with_options(statement: &str, options: SqlParsingOptions) -> bool {
     let chars = statement.chars().collect::<Vec<_>>();
     let mut in_line_comment = false;
-    let mut in_block_comment = false;
+    let mut block_comment_depth = 0usize;
     let mut previous = None;
     let mut i = 0;
 
@@ -3032,9 +3356,15 @@ fn has_executable_sql_with_options(statement: &str, options: SqlParsingOptions) 
             continue;
         }
 
-        if in_block_comment {
-            if previous == Some('*') && ch == '/' {
-                in_block_comment = false;
+        if block_comment_depth > 0 {
+            if options.profile.supports_nested_block_comments && previous == Some('/') && ch == '*' {
+                block_comment_depth += 1;
+                // A nested opener's asterisk must not pair with a following slash as a close.
+                previous = None;
+                i += 1;
+                continue;
+            } else if previous == Some('*') && ch == '/' {
+                block_comment_depth -= 1;
             }
             previous = Some(ch);
             i += 1;
@@ -3059,8 +3389,9 @@ fn has_executable_sql_with_options(statement: &str, options: SqlParsingOptions) 
             if is_mysql_executable_comment_start(&chars, i) {
                 return true;
             }
-            in_block_comment = true;
-            previous = Some(ch);
+            block_comment_depth = 1;
+            // The opener's own asterisk must not read as a nested opener.
+            previous = None;
             i += 1;
             continue;
         }
@@ -3393,6 +3724,184 @@ mod tests {
             vec![r#"CREATE TABLE paths (value varchar(100) COMMENT 'Windows path\\')"#, "DROP TABLE paths"]
         );
         assert!(splitter.finish().is_empty());
+    }
+
+    #[test]
+    fn postgres_plain_string_ends_before_a_trailing_backslash() {
+        let sql = r#"SELECT 'dir\'; DELETE FROM users;"#;
+
+        assert_eq!(
+            split_sql_statements_for_database(sql, DatabaseType::Postgres),
+            vec![r#"SELECT 'dir\'"#, "DELETE FROM users"]
+        );
+    }
+
+    #[test]
+    fn vastbase_plain_string_ends_before_a_trailing_backslash() {
+        let sql = r#"SELECT 'dir\'; DELETE FROM users;"#;
+
+        assert_eq!(
+            split_sql_statements_for_database(sql, DatabaseType::Vastbase),
+            vec![r#"SELECT 'dir\'"#, "DELETE FROM users"]
+        );
+    }
+
+    #[test]
+    fn vastbase_escape_string_keeps_a_backslash_escaped_quote() {
+        let sql = r#"COMMENT ON COLUMN "s"."t"."c" IS E'C:\\tmp\n\t\'';"#;
+
+        assert_eq!(
+            split_sql_statements_for_database(sql, DatabaseType::Vastbase),
+            vec![r#"COMMENT ON COLUMN "s"."t"."c" IS E'C:\\tmp\n\t\''"#]
+        );
+    }
+
+    #[test]
+    fn duckdb_escape_strings_match_the_existing_expectations() {
+        let sql = r#"SELECT E'it\'s;ok'; SELECT e'path\\;name'; SELECT 2"#;
+
+        assert_eq!(
+            split_sql_statements_for_database(sql, DatabaseType::DuckDb),
+            vec![r#"SELECT E'it\'s;ok'"#, r#"SELECT e'path\\;name'"#, "SELECT 2"]
+        );
+    }
+
+    #[test]
+    fn postgres_escape_string_keeps_a_backslash_escaped_quote() {
+        let sql = r#"SELECT E'it\'s; still one value'; SELECT 1;"#;
+
+        assert_eq!(
+            split_sql_statements_for_database(sql, DatabaseType::Postgres),
+            vec![r#"SELECT E'it\'s; still one value'"#, "SELECT 1"]
+        );
+    }
+
+    #[test]
+    fn cursor_statement_keeps_postgres_delete_after_a_trailing_backslash() {
+        let sql = "SELECT 'dir\\';\nDELETE FROM users;";
+        let cursor = sql.find("DELETE FROM users").unwrap() + 3;
+
+        assert_eq!(find_statement_at_cursor_for_database(sql, cursor, DatabaseType::Postgres), "DELETE FROM users");
+    }
+
+    #[test]
+    fn cursor_statement_keeps_postgres_escape_string_quote_together() {
+        let sql = "SELECT E'it\\'s; x';\nSELECT 2;";
+        let cursor = sql.find("SELECT 2").unwrap() + 3;
+
+        assert_eq!(find_statement_at_cursor_for_database(sql, cursor, DatabaseType::Postgres), "SELECT 2");
+        assert_eq!(find_statement_at_cursor_for_database(sql, 3, DatabaseType::Postgres), r#"SELECT E'it\'s; x'"#);
+    }
+
+    #[test]
+    fn postgres_nested_block_comments_keep_commented_out_statements_out() {
+        // The inner comment closes first, so without nesting the UPDATE behind the
+        // semicolon becomes a statement of its own and reaches the executor.
+        let sql = "/* a\n/* b */ ;\nUPDATE prod.orders SET paid = 0;\n*/\nSELECT 1;";
+        let statements = split_sql_statements_for_database(sql, DatabaseType::Postgres);
+
+        assert!(!statements.iter().any(|statement| statement.starts_with("UPDATE")), "{statements:?}");
+        assert!(statements.iter().any(|statement| statement.contains("SELECT 1")), "{statements:?}");
+    }
+
+    #[test]
+    fn sqlserver_nested_block_comments_keep_commented_out_statements_out() {
+        let sql = "/* a\n/* b */ ;\nUPDATE prod.orders SET paid = 0;\n*/\nSELECT 1;";
+        let statements = split_sql_statements_for_database(sql, DatabaseType::SqlServer);
+
+        assert!(!statements.iter().any(|statement| statement.starts_with("UPDATE")), "{statements:?}");
+        assert!(statements.iter().any(|statement| statement.contains("SELECT 1")), "{statements:?}");
+    }
+
+    #[test]
+    fn nested_opener_slash_asterisk_slash_does_not_close_the_comment() {
+        // The lexer consumes `/*` atomically, so the `/` right after a nested opener
+        // is literal text and must not pair with the preceding `*` to close it.
+        let sql = "/* /*/ */ SELECT 1;";
+        let statements = split_sql_statements_for_database(sql, DatabaseType::Postgres);
+
+        assert!(!statements.iter().any(|statement| statement.trim_start().starts_with("SELECT")), "{statements:?}");
+    }
+
+    #[test]
+    fn clickhouse_block_comments_nest() {
+        let sql = "/* a\n/* b */ ;\nUPDATE prod.orders SET paid = 0;\n*/\nSELECT 1;";
+        let statements = split_sql_statements_for_database(sql, DatabaseType::ClickHouse);
+
+        assert!(!statements.iter().any(|statement| statement.starts_with("UPDATE")), "{statements:?}");
+        assert!(statements.iter().any(|statement| statement.contains("SELECT 1")), "{statements:?}");
+    }
+
+    #[test]
+    fn mysql_block_comments_do_not_nest() {
+        let sql = "/* a /* b */ SELECT 1; SELECT 2;";
+
+        // MySQL documents that block comments do not nest, so the inner `*/` ends
+        // the comment and the statements behind it stay separate.
+        assert_eq!(
+            split_sql_statements_for_database(sql, DatabaseType::Mysql),
+            vec!["/* a /* b */ SELECT 1", "SELECT 2"]
+        );
+    }
+
+    #[test]
+    fn cursor_statement_ignores_statements_inside_a_nested_comment() {
+        let sql = "/* a\n/* b */ ;\nUPDATE prod.orders SET paid = 0;\n*/\nSELECT 1;";
+        let cursor = sql.find("UPDATE").unwrap() + 3;
+
+        let statement = find_statement_at_cursor_for_database(sql, cursor, DatabaseType::Postgres);
+        assert!(!statement.contains("UPDATE prod.orders"), "{statement}");
+    }
+
+    #[test]
+    fn oracle_alternative_quoting_keeps_apostrophes_and_semicolons_inside_the_literal() {
+        let sql = "SELECT q'[it's; still one value]' FROM dual; SELECT 1 FROM dual;";
+
+        assert_eq!(
+            split_sql_statements_for_database(sql, DatabaseType::Oracle),
+            vec!["SELECT q'[it's; still one value]' FROM dual", "SELECT 1 FROM dual"]
+        );
+    }
+
+    #[test]
+    fn oracle_alternative_quoting_supports_every_delimiter_form() {
+        for oracle_literal in ["q'{a;b}'", "q'(a;b)'", "q'<a;b>'", "q'!a;b!'", "q'Aa;bA'", "Q'[i's; x]'"] {
+            let sql = format!("SELECT {oracle_literal} FROM dual; SELECT 1 FROM dual;");
+
+            assert_eq!(
+                split_sql_statements_for_database(&sql, DatabaseType::Oracle),
+                vec![format!("SELECT {oracle_literal} FROM dual"), "SELECT 1 FROM dual".to_string()],
+                "{oracle_literal}"
+            );
+        }
+    }
+
+    #[test]
+    fn dameng_alternative_quoting_matches_oracle() {
+        let sql = "SELECT q'[it's; x]' FROM dual; SELECT 1 FROM dual;";
+
+        assert_eq!(
+            split_sql_statements_for_database(sql, DatabaseType::Dameng),
+            vec!["SELECT q'[it's; x]' FROM dual", "SELECT 1 FROM dual"]
+        );
+    }
+
+    #[test]
+    fn mysql_treats_q_quotes_as_plain_strings() {
+        let sql = "SELECT q'[a;b]' FROM t; SELECT 1;";
+
+        assert_eq!(
+            split_sql_statements_for_database(sql, DatabaseType::Mysql),
+            vec!["SELECT q'[a;b]' FROM t", "SELECT 1"]
+        );
+    }
+
+    #[test]
+    fn cursor_statement_keeps_oracle_alternative_quoting_together() {
+        let sql = "SELECT q'[it's; still one value]' FROM dual;\nSELECT 1 FROM dual;";
+        let cursor = sql.find("SELECT 1").unwrap() + 3;
+
+        assert_eq!(find_statement_at_cursor_for_database(sql, cursor, DatabaseType::Oracle), "SELECT 1 FROM dual");
     }
 
     #[test]
@@ -3998,6 +4507,12 @@ SELECT 2;";
         assert!(default.supports_custom_delimiter_commands);
         assert!(default.supports_dollar_quoted_strings);
         assert!(!default.supports_hash_line_comments);
+        assert!(default.supports_backslash_escaped_quotes);
+        assert!(!default.supports_postgres_escape_strings);
+        assert!(!default.supports_oracle_q_quotes);
+        assert!(SqlDialectProfile::for_database_type(DatabaseType::Oracle).supports_oracle_q_quotes);
+        assert!(SqlDialectProfile::for_database_type(DatabaseType::Dameng).supports_oracle_q_quotes);
+        assert!(!default.supports_nested_block_comments);
         assert!(!default.supports_mysql_routine_blocks);
         assert!(!default.supports_oracle_plsql_blocks);
         assert!(!default.supports_oracle_style_routine_bodies);
@@ -4012,11 +4527,16 @@ SELECT 2;";
             assert_eq!(profile, SqlDialectProfile::postgres_family());
             assert!(!profile.supports_oracle_plsql_blocks);
             assert!(profile.supports_oracle_style_routine_bodies);
+            assert!(profile.supports_postgres_escape_strings);
+            assert!(profile.supports_nested_block_comments);
+            assert!(!profile.supports_backslash_escaped_quotes);
             assert!(profile.supports_slash_line_block_delimiter);
         }
 
         let mysql = SqlDialectProfile::for_database_type(DatabaseType::Mysql);
         assert!(mysql.supports_hash_line_comments);
+        assert!(mysql.supports_backslash_escaped_quotes);
+        assert!(!mysql.supports_nested_block_comments);
         assert!(mysql.supports_mysql_routine_blocks);
         assert!(mysql.preserves_tdsql_leading_directives);
         assert!(SqlDialectProfile::for_database_type(DatabaseType::Doris).supports_hash_line_comments);
@@ -4024,6 +4544,25 @@ SELECT 2;";
         assert!(SqlDialectProfile::for_database_type(DatabaseType::StarRocks).supports_hash_line_comments);
         assert!(SqlDialectProfile::for_database_type(DatabaseType::ManticoreSearch).supports_hash_line_comments);
         assert!(SqlDialectProfile::for_database_type(DatabaseType::Goldendb).supports_hash_line_comments);
+        assert!(SqlDialectProfile::for_database_type(DatabaseType::Gaussdb).supports_postgres_escape_strings);
+        assert!(SqlDialectProfile::for_database_type(DatabaseType::SqlServer).supports_nested_block_comments);
+
+        for db_type in [
+            DatabaseType::Vastbase,
+            DatabaseType::Kingbase,
+            DatabaseType::Highgo,
+            DatabaseType::Uxdb,
+            DatabaseType::Kwdb,
+        ] {
+            let profile = SqlDialectProfile::for_database_type(db_type);
+            assert!(!profile.supports_backslash_escaped_quotes);
+            assert!(profile.supports_postgres_escape_strings);
+        }
+
+        // Engines without PostgreSQL string literals keep the historical escape
+        // rule until their own evidence is recorded.
+        assert!(SqlDialectProfile::for_database_type(DatabaseType::DuckDb).supports_backslash_escaped_quotes);
+        assert!(SqlDialectProfile::for_database_type(DatabaseType::ClickHouse).supports_backslash_escaped_quotes);
 
         for db_type in [
             DatabaseType::Oracle,
@@ -5615,5 +6154,21 @@ delimiter ;";
         let sql = "SELECT 1 # mysql comment";
         let cursor = sql.encode_utf16().count();
         assert_eq!(find_statement_at_cursor_for_database(sql, cursor, DatabaseType::Mysql), "SELECT 1 # mysql comment");
+    }
+}
+
+#[cfg(test)]
+mod editor_encoding_tests {
+    use super::*;
+    #[test]
+    fn utf16_bytes_and_round_trip() {
+        for (encoding, expected) in [
+            ("utf16le", vec![0xff, 0xfe, 0x41, 0, 0x2d, 0x4e, 0x3d, 0xd8, 0, 0xde]),
+            ("utf16be", vec![0xfe, 0xff, 0, 0x41, 0x4e, 0x2d, 0xd8, 0x3d, 0xde, 0]),
+        ] {
+            let bytes = encode_sql_file_text("A中😀", encoding).unwrap();
+            assert_eq!(bytes, expected);
+            assert_eq!(decode_sql_file_bytes_with_encoding(&bytes, encoding).unwrap(), "A中😀");
+        }
     }
 }

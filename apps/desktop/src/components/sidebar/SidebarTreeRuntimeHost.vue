@@ -11,6 +11,8 @@ import { useSidebarDatabaseSpecificMutationRuntime } from "@/composables/useSide
 import { useSidebarTableMutationRuntime } from "@/composables/useSidebarTableMutationRuntime";
 import { useSidebarTreeExportRuntime } from "@/composables/useSidebarTreeExportRuntime";
 import { useSidebarTreeToolRuntime } from "@/composables/useSidebarTreeToolRuntime";
+import { canDropDatabaseNode, notifyDatabaseBrowserMutation } from "@/lib/database/databaseBrowserActions";
+import { canDropDatabaseTables, canEmptyDatabaseTables, useDatabaseTableEmpty } from "@/composables/useDatabaseTableEmpty";
 import { useI18n } from "vue-i18n";
 import { translateBackendError } from "@/i18n/backend-errors";
 import {
@@ -123,7 +125,6 @@ import {
   canEditDatabaseProperties as canEditDatabasePropertiesForNode,
   connectionNamespaceCreationTarget,
   editableDatabasePropertyGroups,
-  supportsDatabaseCreation,
   supportsDatabaseSearch,
   supportsConnectionDatabaseBrowser,
   supportsConnectionQueryActions,
@@ -142,7 +143,18 @@ import {
   isSingleDatabase,
   schemaNodeHasLoadableName,
 } from "@/lib/database/databaseCapabilities";
-import { copyDisplayPathForTreeNode, copyNameForTreeNode, isDirectNavigationTreeNode, isDocumentBrowserTreeNode, isRepeatableNavigationTreeNode, objectSourceTargetForTreeNode, shouldRunTreeNodeRowAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/sidebar/treeNodeClick";
+import {
+  copyDisplayPathForTreeNode,
+  copyNameForTreeNode,
+  isDirectNavigationTreeNode,
+  isDocumentBrowserTreeNode,
+  isRepeatableNavigationTreeNode,
+  objectSourceTargetForTreeNode,
+  shouldOpenQueryOnTreeNodeActivation,
+  shouldRunTreeNodeRowAction,
+  treeNodeRowAction,
+  treeNodeRowDoubleClickAction,
+} from "@/lib/sidebar/treeNodeClick";
 import { customTypeCapabilities, supportsTypeObjectSource } from "@/lib/database/databaseObjectCapabilities";
 import { mongoCollectionTableTypeFromNode, mongoCreateDatabasePreview, mongoDropIndexFailureCount } from "@/lib/sidebar/mongoCollectionMutation";
 import { dataTabOpenModeFromTreeClick, type DataTabOpenMode } from "@/lib/sidebar/dataTabOpenPolicy";
@@ -519,6 +531,8 @@ const emit = defineEmits<{
   "open-extension-details": [node: TreeNode];
   "open-event-trigger-details": [node: TreeNode];
 }>();
+
+const { requestEmptyDatabaseTables, requestDropDatabaseTables } = useDatabaseTableEmpty((request) => emit("open-danger-dialog", request));
 
 const {
   setNodeAsDefaultDatabase,
@@ -1197,6 +1211,13 @@ function runRowClickAction(clickDetail: number) {
   // after that follow-up click has resolved to a real action, otherwise it
   // makes the first click's pending connection/expansion request look stale.
   const requestId = beginNavigationRequest();
+  // Activation preference: single-click activation also opens (or focuses)
+  // the connection's query page. It must stay behind the activation gate
+  // above so "double" activation keeps single clicks inert, and it must not
+  // return early: the native row action (expand, browse objects) still runs.
+  if (shouldOpenQueryOnActivation(node)) {
+    void newQuery({ reuseQueryTabByScope: true });
+  }
   if (action === "open-data") {
     scheduleOpenData(node);
   } else if (action === "locate-column") {
@@ -1615,6 +1636,14 @@ function requestDeleteSelectedNode(): boolean {
 }
 
 function onDoubleClick(event: MouseEvent) {
+  // In double-click activation mode the dblclick is the activation moment, so
+  // the query page opens here once. In single-click activation mode the first
+  // click of the sequence already opened it, and the trailing dblclick must
+  // keep its native gestures (for example the connection database browser).
+  if (settingsStore.editorSettings.sidebarActivation === "double" && shouldOpenQueryOnActivation(activeNode.value)) {
+    beginNavigationRequest();
+    void newQuery({ reuseQueryTabByScope: true });
+  }
   if (dataTabOpenModeFromTreeClick(activeNode.value.type, event, settingsStore.editorSettings.shortcuts.openDataInNewTab) === "new-tab") return;
   if (activeNode.value.type === "event") {
     beginNavigationRequest();
@@ -2050,9 +2079,18 @@ function openDataInNewTabImmediately(node: TreeNode = activeNode.value) {
   emit("open-data", node, false, "new-tab", (target, request) => openData(target, request, "new-tab"));
 }
 
-async function newQuery() {
+function shouldOpenQueryOnActivation(node: TreeNode): boolean {
+  // The db-type gate matches the context menu's "New Query" entry, so
+  // specialized workbench connections keep their dedicated surfaces.
+  return shouldOpenQueryOnTreeNodeActivation(node, currentDatabaseType(), settingsStore.editorSettings.openQueryOnConnectionOpen);
+}
+
+async function newQuery(options: { reuseQueryTabByScope?: boolean } = {}) {
   const node = activeNode.value;
   if (!node.connectionId) return;
+  // Activation opens (or focuses) "the" query page for the connection scope;
+  // the context-menu entry keeps creating a fresh tab per invocation.
+  const reuseOptions = options.reuseQueryTabByScope === true ? [{ reuseQueryTabByScope: true }] : [];
   try {
     await connectionStore.ensureConnected(node.connectionId);
     connectionStore.activeConnectionId = node.connectionId;
@@ -2075,13 +2113,13 @@ async function newQuery() {
         openSqlTemplateTab(node.connectionId, node.database, node.schema, node.catalog, sql);
         return;
       }
-      queryStore.createTab(node.connectionId, node.database, undefined, "query", node.schema, undefined, node.catalog);
+      queryStore.createTab(node.connectionId, node.database, undefined, "query", node.schema, undefined, node.catalog, ...reuseOptions);
       return;
     }
     const connection = connectionStore.getConfig(node.connectionId);
     if (!connection) return;
-    const options = await getDatabaseOptions(node.connectionId);
-    queryStore.createTab(node.connectionId, resolveDefaultDatabase(connection, options), undefined, "query", connection.default_schema);
+    const databaseOptions = await getDatabaseOptions(node.connectionId);
+    queryStore.createTab(node.connectionId, resolveDefaultDatabase(connection, databaseOptions), undefined, "query", connection.default_schema, undefined, undefined, ...reuseOptions);
   } catch (e: any) {
     toast(t("connection.connectFailed", { message: translateBackendError(t, e) }), 5000);
     openDriverStoreForInstallError(e?.message || String(e));
@@ -3880,7 +3918,7 @@ const canSetCreateDatabaseLocale = computed(() => {
 
 const canDropDatabase = computed(() => {
   const config = activeNode.value.connectionId ? connectionStore.getConfig(activeNode.value.connectionId) : undefined;
-  return activeNode.value.type === "database" && !isSqlServerLinkedNode(activeNode.value) && (supportsDatabaseCreation(config?.db_type) || supportsCreateDatabaseLocale(config?.db_type, config?.driver_profile));
+  return canDropDatabaseNode(activeNode.value, config);
 });
 
 const databasePropertyGroups = computed(() => {
@@ -4588,7 +4626,7 @@ async function confirmDropDatabase() {
   }
 
   const connectionId = node.connectionId;
-  if (!connectionId || dropDatabaseLoading.value) return;
+  if (!connectionId || dropDatabaseLoading.value || !canDropDatabaseNode(node, connectionStore.getConfig(connectionId))) return false;
   dropDatabaseLoading.value = true;
   try {
     await connectionStore.ensureConnected(connectionId);
@@ -4610,6 +4648,8 @@ async function confirmDropDatabase() {
       connectionStore.removeTreeNode(node.id);
     }
     showDropDatabaseConfirm.value = false;
+    notifyDatabaseBrowserMutation({ connectionId, database: node.database || node.label, operation: "drop-database" });
+    queryStore.closeDatabaseTabs(connectionId, node.database || node.label);
   } catch (e: any) {
     toast(t("contextMenu.tableOperationFailed", { message: e?.message || String(e) }), 5000);
   } finally {
@@ -6187,6 +6227,12 @@ function buildDatabaseSidebarMenu(context: SidebarMenuFactoryContext): boolean {
       items.push({ label: t("dataDictionary.title"), action: openDataDictionary, icon: FileText });
     }
     const destructiveActions: ContextMenuItem[] = [];
+    if (canEmptyDatabaseTables(node, node.connectionId ? connectionStore.getConfig(node.connectionId) : undefined)) {
+      destructiveActions.push({ label: t("databaseEmpty.menu"), action: () => void requestEmptyDatabaseTables(node), icon: Eraser, variant: "destructive" as const });
+    }
+    if (canDropDatabaseTables(node, node.connectionId ? connectionStore.getConfig(node.connectionId) : undefined)) {
+      destructiveActions.push({ label: t("databaseDrop.menu"), action: () => void requestDropDatabaseTables(node), icon: Trash2, variant: "destructive" as const });
+    }
     if (canDropDatabase.value) {
       destructiveActions.push({
         label: t("contextMenu.dropDatabase"),
@@ -6397,7 +6443,7 @@ function buildSpecialSidebarMenu(context: SidebarMenuFactoryContext): boolean {
   if (node.type === "mongo-collection") {
     items.push({ label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
     items.push({ label: "", separator: true });
-    items.push({ label: t("contextMenu.viewData"), action: toggle, icon: TableProperties });
+    items.push({ label: t("contextMenu.viewData"), action: () => openMongoTreeData(node), icon: TableProperties });
     items.push({ label: t("contextMenu.newQuery"), action: newQuery, icon: TerminalSquare });
     // Creating and dropping indexes stay on the Indexes group node; the collection
     // only opens the manager panel, which offers creation from inside itself.

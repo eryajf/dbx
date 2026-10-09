@@ -233,6 +233,7 @@ export const listIndexes = forward("listIndexes");
 export const listReferenceKeyColumns = forward("listReferenceKeyColumns");
 export const listReferenceKeys = forward("listReferenceKeys");
 export const listForeignKeys = forward("listForeignKeys");
+export const listForeignKeysForDatabase = forward("listForeignKeysForDatabase");
 export const listTriggers = forward("listTriggers");
 export const listConstraints = forward("listConstraints");
 export const listPartitions = forward("listPartitions");
@@ -277,6 +278,7 @@ export const executeInManualTransaction = forward("executeInManualTransaction");
 export const commitManualTransaction = forward("commitManualTransaction");
 export const rollbackManualTransaction = forward("rollbackManualTransaction");
 export const cancelQuery = forward("cancelQuery");
+export const cancelQueryAndWait = forward("cancelQueryAndWait");
 export const cancelConditionalUpdate = forward("cancelConditionalUpdate");
 export const closeQuerySession = forward("closeQuerySession");
 export const closeClientConnectionSession = forward("closeClientConnectionSession");
@@ -929,6 +931,9 @@ export const saveHistory = forward("saveHistory");
 export const loadHistory = forward("loadHistory");
 export const searchHistory = forward("searchHistory");
 export const loadHistoryConnectionOptions = forward("loadHistoryConnectionOptions");
+export const loadTaskRuns = forward("loadTaskRuns");
+export const loadTaskRun = forward("loadTaskRun");
+export const loadTaskRunItems = forward("loadTaskRunItems");
 export const loadRedisHistory = forward("loadRedisHistory");
 export const clearHistory = forward("clearHistory");
 export const clearHistoryBySource = forward("clearHistoryBySource");
@@ -976,6 +981,7 @@ export type { AiConfigItem };
 export type {
   AppSupportInfo,
   AiMessage,
+  AiToolCallRef,
   AiCompletionRequest,
   AiTaskContract,
   AiStreamChunk,
@@ -1109,6 +1115,8 @@ export type {
   TransferObjectSelection,
   TransferTableNameCase,
   TransferOwnershipPolicy,
+  TransferStructureOperation,
+  TransferStructureOperationKind,
   TransferOwnershipPreview,
   TableImportMode,
   TableImportConflictPolicy,
