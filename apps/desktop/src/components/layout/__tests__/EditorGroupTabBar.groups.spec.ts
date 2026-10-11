@@ -259,6 +259,30 @@ describe("EditorGroupTabBar group behavior", () => {
     }
   });
 
+  it.each(["left", "right"] as const)("keeps the active %s special-page tab on the neutral active wash", async (placement) => {
+    const store = useQueryStore();
+    const settings = useSettingsStore();
+    settings.editorSettings.tabPlacement = placement;
+    settings.editorSettings.tabGroupMode = "none";
+    settings.editorSettings.colorizeConnectionTabs = true;
+    store.createTab("pg-1", "app", "Query", "query");
+    const { app, host } = mountBar(store.focusedGroupId, store.tabs.slice(), store.activeTabId, pinia, {
+      specialPageTabs: { settingsOpen: true, settingsActive: true, driverStoreOpen: false, driverStoreActive: false, pluginCenterOpen: false, pluginCenterActive: false, driverUpdateCount: 0 },
+    });
+
+    try {
+      await settle();
+      const specialTab = host.querySelector<HTMLElement>("[data-settings-page-tab]")!;
+      expect(specialTab.getAttribute("data-active-tab")).toBe("true");
+      // Special pages have no connection color: the active vertical wash must
+      // come from the appTabBar.css fallback, not an inline solid override.
+      expect(specialTab.style.getPropertyValue("--app-tab-background")).toBe("");
+    } finally {
+      app.unmount();
+      host.remove();
+    }
+  });
+
   it("only reveals a right-edge group when expansion leaves every member offscreen", async () => {
     const store = useQueryStore();
     const settings = useSettingsStore();

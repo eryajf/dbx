@@ -176,7 +176,9 @@ function specialPageTabClass(active: boolean): string[] {
 
 function specialPageTabStyle(active: boolean) {
   if (!active) return undefined;
-  if (isVerticalLayout.value) return { "--app-tab-background": "var(--accent)" };
+  // Vertical active pills take the neutral wash from appTabBar.css; an inline
+  // --app-tab-background here would repaint the special pages in solid accent.
+  if (isVerticalLayout.value) return undefined;
   if (!isClassicLayout.value) return { "--app-tab-background": appTabActiveBackground(), borderColor: "var(--ring)" };
   return { "--app-tab-background": appTabActiveBackground(), boxShadow: appTabActiveIndicator() };
 }
