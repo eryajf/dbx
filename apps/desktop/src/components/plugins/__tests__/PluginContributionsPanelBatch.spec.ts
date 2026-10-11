@@ -7,6 +7,10 @@ import { formatMarketplaceReleasedDate, type MarketplacePluginListing } from "@/
 import { COMPONENT_PLUGINS_UPDATED_EVENT, COMPONENT_UPDATES_CHANGED_EVENT } from "@/lib/updates/componentUpdateEvents";
 
 const mocks = vi.hoisted(() => ({
+  connections: [] as import("@/types/database").ConnectionConfig[],
+  newConnection: vi.fn(),
+  openPluginConnection: vi.fn(),
+  openPluginWorkbench: vi.fn(),
   listPlugins: vi.fn(),
   listPluginTrustedKeys: vi.fn(),
   listPluginRepositories: vi.fn(),
@@ -28,8 +32,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/backend/api", () => mocks);
 vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: mocks.toast }) }));
-vi.mock("@/stores/connectionStore", () => ({ useConnectionStore: () => ({ connections: [] }) }));
-vi.mock("@/stores/queryStore", () => ({ useQueryStore: () => ({}) }));
+vi.mock("@/stores/connectionStore", () => ({ useConnectionStore: () => ({ connections: mocks.connections }) }));
+vi.mock("@/stores/queryStore", () => ({ useQueryStore: () => ({ openPluginWorkbench: mocks.openPluginWorkbench, openPluginConnection: mocks.openPluginConnection }) }));
 vi.mock("@/stores/settingsStore", () => ({
   useSettingsStore: () => ({ editorSettings: { pluginGraphicsEngineIds: [] }, updateEditorSettings: vi.fn() }),
 }));
@@ -72,11 +76,23 @@ import PluginContributionsPanel from "@/components/plugins/PluginContributionsPa
 
 type PanelState = {
   activeSection: "marketplace" | "installed" | "settings";
+  detailCanOpen: boolean;
+  detailChooseEntry: boolean;
+  detailChooseConnection: boolean;
+  detailOpenLabel: string;
+  marketplaceDetailOpen: boolean;
+  detailShortcuts: import("@/lib/plugins/pluginShortcuts").PluginShortcutEntry[];
+  openMarketplaceDetails: (listing: MarketplacePluginListing) => void;
+  openDetailPlugin: () => void;
   batchRunning: boolean;
   batchMode: boolean;
   marketplaceViewMode: "grid" | "list";
   marketplaceSortMode: string;
   marketplaceRepositoryId: string;
+  marketplaceQuery: string;
+  marketplacePublisher: string;
+  filteredMarketplaceListings: MarketplacePluginListing[];
+  filterByPublisher: (publisher: string) => void;
   marketplaceListings: MarketplacePluginListing[];
   catalogResults: PluginRepositoryCatalogResult[];
   installedPlugins: InstalledPlugin[];
@@ -208,6 +224,7 @@ async function expectBusyControls() {
 
 beforeEach(async () => {
   vi.resetAllMocks();
+  mocks.connections.length = 0;
   mocks.isTauriRuntime.mockReturnValue(false);
   localStorage.clear();
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({}));
@@ -224,7 +241,7 @@ beforeEach(async () => {
   mocks.removePluginTrustedKey.mockResolvedValue([]);
   host = document.createElement("div");
   document.body.append(host);
-  app = createApp(PluginContributionsPanel, { onPluginRuntimeReplaced: mocks.refreshPluginWorkbenches });
+  app = createApp(PluginContributionsPanel, { onPluginRuntimeReplaced: mocks.refreshPluginWorkbenches, onNewConnection: mocks.newConnection });
   const instance = app.mount(host) as ComponentPublicInstance & { $: { setupState: PanelState } };
   state = instance.$.setupState;
   await flushUi();
@@ -1300,25 +1317,25 @@ describe("PluginContributionsPanel narrow-pane layout contracts", () => {
   // overflowed its scroller and 批量管理 / 刷新 left the visible area (measured 155px overflow at a 650px
   // pane). happy-dom cannot measure layout, so this guards the class contract the measurement rig
   // validates — same style as the #10444 grid guard above.
-  it("keys the marketplace toolbar off the panel width instead of the viewport", () => {
+  it("keeps the marketplace toolbar compact and wraps within the panel", () => {
     const toolbar = host.querySelector<HTMLElement>("[data-plugin-marketplace-toolbar]");
     expect(toolbar, "marketplace toolbar").not.toBeNull();
     expect(toolbar!.classList.contains("sm:flex-row"), "row switch must not use the viewport breakpoint (#10582)").toBe(false);
     expect(toolbar!.classList.contains("sm:items-center"), "row switch must not use the viewport breakpoint (#10582)").toBe(false);
-    expect(toolbar!.classList.contains("@min-[54rem]:flex-row"), "row switch tracks the panel width").toBe(true);
+    expect(toolbar!.classList.contains("items-center"), "search and controls align in one row").toBe(true);
     expect(toolbar!.classList.contains("flex-wrap"), "an overflowing control set must wrap, never leave the pane").toBe(true);
 
     const controls = host.querySelector<HTMLElement>("[data-plugin-marketplace-controls]");
     expect(controls, "marketplace control cluster").not.toBeNull();
     expect(controls!.classList.contains("flex-wrap"), "control cluster wraps").toBe(true);
     expect(controls!.classList.contains("sm:ml-auto"), "auto margin must not use the viewport breakpoint").toBe(false);
-    expect(controls!.classList.contains("@min-[54rem]:ml-auto"), "auto margin tracks the panel width").toBe(true);
+    expect(controls!.classList.contains("justify-end"), "controls stay aligned to the toolbar edge").toBe(true);
 
     // App.vue focuses this input by attribute for Mod+F, so the hook has to survive layout changes.
     const search = host.querySelector<HTMLInputElement>("[data-plugin-marketplace-search]");
     expect(search, "marketplace search input hook").not.toBeNull();
     expect(search!.classList.contains("sm:w-[min(100%,28rem)]")).toBe(false);
-    expect(search!.classList.contains("@min-[54rem]:w-[min(100%,28rem)]")).toBe(true);
+    expect(search!.classList.contains("@min-[54rem]:w-[min(100%,28rem)]")).toBe(false);
 
     // The Select family shares one passthrough stub here, so the triggers are located by their own
     // data hooks (same convention as data-plugin-marketplace-search) instead of by a layout class.
@@ -1364,5 +1381,205 @@ describe("PluginContributionsPanel narrow-pane layout contracts", () => {
     const trustRow = gridFor("repositoryPublicKeyPlaceholder");
     expect(trustRow.classList.contains("md:grid-cols-[180px_minmax(260px,1fr)_auto]"), "trusted-key grid must not switch on the viewport").toBe(false);
     expect(trustRow.className, "trusted-key grid tracks the panel width").toContain("@min-[42rem]:grid-cols-[180px_minmax(260px,1fr)_auto]");
+  });
+});
+
+describe("marketplace detail launch", () => {
+  it("prioritizes the independent workbench when saved connections also exist", async () => {
+    const plugin = installed("a");
+    plugin.manifest.contributions = [
+      { type: "connection-provider", id: "server", label: "Server", database_type: "test", fields: [], workbench: "remote" },
+      { type: "workbench", id: "remote", label: "Remote" },
+      { type: "workbench", id: "local", label: "Local" },
+    ];
+    mocks.connections.push({ id: "saved", name: "Saved", db_type: "plugin", plugin_id: "a", plugin_connection_provider: "server" } as import("@/types/database").ConnectionConfig);
+    state.installedPlugins = [plugin];
+    state.openMarketplaceDetails(state.marketplaceListings[0]);
+    expect(state.detailOpenLabel).toBe("openWorkbench");
+    state.openDetailPlugin();
+    await flushUi();
+    expect(mocks.openPluginWorkbench).toHaveBeenCalledWith("a", "local", { title: "Local" });
+    expect(mocks.openPluginConnection).not.toHaveBeenCalled();
+  });
+
+  it("keeps multiple saved connections in their own chooser", () => {
+    const plugin = installed("a");
+    plugin.manifest.contributions = [
+      { type: "connection-provider", id: "server", label: "Server", database_type: "test", fields: [], workbench: "remote" },
+      { type: "workbench", id: "remote", label: "Remote" },
+    ];
+    for (const id of ["one", "two"]) mocks.connections.push({ id, name: id, db_type: "plugin", plugin_id: "a", plugin_connection_provider: "server" } as import("@/types/database").ConnectionConfig);
+    state.installedPlugins = [plugin];
+    state.openMarketplaceDetails(state.marketplaceListings[0]);
+    expect(state.detailOpenLabel).toBe("chooseConnection");
+    state.openDetailPlugin();
+    expect(state.detailChooseConnection).toBe(true);
+    expect(state.detailChooseEntry).toBe(false);
+    expect(mocks.openPluginConnection).not.toHaveBeenCalled();
+  });
+
+  it("offers creation for a connection plugin with no saved connection", () => {
+    const plugin = installed("a");
+    plugin.manifest.contributions = [
+      { type: "connection-provider", id: "server", label: "Server", database_type: "test", fields: [], workbench: "ui" },
+      { type: "workbench", id: "ui", label: "UI" },
+    ];
+    state.installedPlugins = [plugin];
+    state.openMarketplaceDetails(state.marketplaceListings[0]);
+    state.openDetailPlugin();
+    expect(mocks.newConnection).toHaveBeenCalledWith("a", "server");
+    expect(mocks.openPluginConnection).not.toHaveBeenCalled();
+    expect(state.marketplaceDetailOpen).toBe(false);
+  });
+
+  it("opens a saved plugin connection through the standard connection flow", async () => {
+    const plugin = installed("a");
+    plugin.manifest.contributions = [
+      { type: "connection-provider", id: "server", label: "Server", database_type: "test", fields: [], workbench: "ui" },
+      { type: "workbench", id: "ui", label: "UI" },
+    ];
+    mocks.connections.push({ id: "saved", name: "Saved server", db_type: "plugin", plugin_id: "a", plugin_connection_provider: "server" } as import("@/types/database").ConnectionConfig);
+    state.installedPlugins = [plugin];
+    state.openMarketplaceDetails(state.marketplaceListings[0]);
+    state.openDetailPlugin();
+    await flushUi();
+    expect(mocks.openPluginConnection).toHaveBeenCalledWith("saved");
+    expect(mocks.openPluginWorkbench).not.toHaveBeenCalled();
+    expect(state.marketplaceDetailOpen).toBe(false);
+  });
+
+  it("restores detail after an opening failure", async () => {
+    const plugin = installed("a");
+    plugin.manifest.contributions = [{ type: "workbench", id: "todo", label: "Todo" }];
+    state.installedPlugins = [plugin];
+    mocks.openPluginWorkbench.mockImplementation(() => {
+      throw new Error("Cannot open");
+    });
+    state.openMarketplaceDetails(state.marketplaceListings[0]);
+    state.openDetailPlugin();
+    await flushUi();
+    expect(state.marketplaceDetailOpen).toBe(true);
+    expect(mocks.toast).toHaveBeenCalled();
+  });
+
+  it("opens a single standalone workbench and closes details", async () => {
+    const plugin = installed("a");
+    plugin.manifest.contributions = [{ type: "workbench", id: "todo", label: "Todo" }];
+    state.installedPlugins = [plugin];
+    state.openMarketplaceDetails(state.marketplaceListings[0]);
+    expect(state.detailCanOpen).toBe(true);
+    state.openDetailPlugin();
+    await flushUi();
+    expect(mocks.openPluginWorkbench).toHaveBeenCalledWith("a", "todo", { title: "Todo" });
+    expect(state.marketplaceDetailOpen).toBe(false);
+  });
+
+  it("asks users to choose when the plugin has several workbenches", () => {
+    const plugin = installed("a");
+    plugin.manifest.contributions = [
+      { type: "workbench", id: "one", label: "One" },
+      { type: "workbench", id: "two", label: "Two" },
+    ];
+    state.installedPlugins = [plugin];
+    state.openMarketplaceDetails(state.marketplaceListings[0]);
+    state.openDetailPlugin();
+    expect(state.detailChooseEntry).toBe(true);
+    expect(mocks.openPluginWorkbench).not.toHaveBeenCalled();
+  });
+
+  it("does not offer launch for incompatible or non-UI plugins", () => {
+    state.openMarketplaceDetails(state.marketplaceListings[0]);
+    expect(state.detailCanOpen).toBe(false);
+    const plugin = installed("a");
+    plugin.compatibility.compatible = false;
+    plugin.manifest.contributions = [{ type: "workbench", id: "todo", label: "Todo" }];
+    state.installedPlugins = [plugin];
+    expect(state.detailCanOpen).toBe(false);
+  });
+});
+
+describe("marketplace author filtering", () => {
+  it("shows exact author matches across repositories and clears prior filters", async () => {
+    const first = catalog("first", ["a", "b", "c"]);
+    const second = catalog("second", ["d"]);
+    first.catalog!.plugins[0].publisher = "Alice";
+    first.catalog!.plugins[1].publisher = "Alice Tools";
+    first.catalog!.plugins[2].description = "By Alice fans";
+    second.catalog!.plugins[0].publisher = "Alice";
+    state.catalogResults = [first, second];
+    state.marketplaceQuery = "unrelated search";
+    state.marketplaceRepositoryId = "first";
+    state.openMarketplaceDetails(state.marketplaceListings[0]);
+    await flushUi();
+    const author = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find((button) => button.textContent === "Alice");
+    expect(author).toBeDefined();
+    author!.click();
+    await flushUi();
+    expect(state.marketplaceDetailOpen).toBe(false);
+    expect(state.marketplaceQuery).toBe("");
+    expect(state.marketplaceRepositoryId).toBe("all");
+    expect(state.filteredMarketplaceListings.map((listing) => listing.plugin.id)).toEqual(["a", "d"]);
+    expect(state.marketplaceListings).toHaveLength(4);
+    const clear = host.querySelector<HTMLButtonElement>('button[aria-label="common.clear:{}: Alice"]');
+    expect(clear).not.toBeNull();
+    clear!.click();
+    await flushUi();
+    expect(state.filteredMarketplaceListings).toHaveLength(4);
+  });
+
+  it.each(["grid", "list"] as const)("filters from a %s card without opening details", async (mode) => {
+    state.marketplaceViewMode = mode;
+    await flushUi();
+    const author = Array.from(host.querySelectorAll<HTMLButtonElement>("article button")).find((button) => button.textContent === "DBX");
+    expect(author).toBeDefined();
+    author!.click();
+    await flushUi();
+    expect(state.marketplacePublisher).toBe("DBX");
+    expect(state.marketplaceDetailOpen).toBe(false);
+  });
+});
+
+describe("marketplace detail focus", () => {
+  async function settleDialog() {
+    await flushUi();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await flushUi();
+  }
+
+  it.each(["Enter", " "])("returns focus to the card after %s then Escape", async (key) => {
+    const card = host.querySelector<HTMLElement>('article[role="button"]')!;
+    card.focus();
+    card.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    await settleDialog();
+    expect(state.marketplaceDetailOpen).toBe(true);
+    expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true);
+    document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await settleDialog();
+    expect(state.marketplaceDetailOpen).toBe(false);
+    expect(document.activeElement).toBe(card);
+  });
+
+  it("focuses search after author filtering closes details", async () => {
+    const card = host.querySelector<HTMLElement>('article[role="button"]')!;
+    card.click();
+    await settleDialog();
+    const author = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find((item) => item.textContent === "DBX")!;
+    author.click();
+    await settleDialog();
+    expect(document.activeElement).toBe(host.querySelector("[data-plugin-marketplace-search]"));
+  });
+
+  it("does not steal focus from the opened workbench", async () => {
+    const plugin = installed("a");
+    plugin.manifest.contributions = [{ type: "workbench", id: "todo", label: "Todo" }];
+    state.installedPlugins = [plugin];
+    const destination = document.createElement("button");
+    host.append(destination);
+    mocks.openPluginWorkbench.mockImplementation(() => destination.focus());
+    state.openMarketplaceDetails(state.marketplaceListings[0]);
+    await settleDialog();
+    state.openDetailPlugin();
+    await settleDialog();
+    expect(document.activeElement).toBe(destination);
   });
 });
