@@ -80,9 +80,13 @@ type PanelState = {
   detailChooseEntry: boolean;
   detailChooseConnection: boolean;
   detailOpenLabel: string;
+  detailOpening: boolean;
   marketplaceDetailOpen: boolean;
+  selectedMarketplaceListing: MarketplacePluginListing | null;
   detailShortcuts: import("@/lib/plugins/pluginShortcuts").PluginShortcutEntry[];
   openMarketplaceDetails: (listing: MarketplacePluginListing) => void;
+  closeMarketplaceDetails: (focus?: "trigger" | "search" | "none") => void;
+  launchDetailEntry: (entry: string) => Promise<void>;
   openDetailPlugin: () => void;
   batchRunning: boolean;
   batchMode: boolean;
@@ -1384,6 +1388,35 @@ describe("PluginContributionsPanel narrow-pane layout contracts", () => {
   });
 });
 
+describe("marketplace verification badges", () => {
+  it.each(["official", "enterprise", "custom"] as const)("uses canonical verification for %s repository entries", async (kind) => {
+    for (const verified of [false, true]) {
+      const result = catalog("first", ["a"]);
+      result.repository.kind = kind;
+      result.catalog!.plugins[0].verified = verified;
+      state.catalogResults = [result];
+      const expectedVerified = verified && kind !== "custom";
+      expect(state.marketplaceListings[0].verified).toBe(expectedVerified);
+
+      for (const view of ["grid", "list"] as const) {
+        state.marketplaceViewMode = view;
+        await flushUi();
+        const card = host.querySelector("article")!;
+        expect(card.querySelector('svg[title="pluginPlatform.verified:{}"]') !== null, `${view}, verified=${verified}`).toBe(expectedVerified);
+      }
+
+      state.openMarketplaceDetails(state.marketplaceListings[0]);
+      await flushUi();
+      const dialog = document.querySelector('[role="dialog"]')!;
+      expect(dialog.querySelector('svg[title="pluginPlatform.verified:{}"]') !== null, `detail, verified=${verified}`).toBe(expectedVerified);
+      const verificationRow = [...dialog.querySelectorAll("dl > div")].find((row) => row.querySelector("dt")?.textContent === "pluginPlatform.verified:{}");
+      expect(verificationRow?.querySelector("dd")?.textContent).toBe(`pluginPlatform.${expectedVerified ? "verified" : "unverified"}:{}`);
+      state.closeMarketplaceDetails();
+      await flushUi();
+    }
+  });
+});
+
 describe("marketplace detail launch", () => {
   it("prioritizes the independent workbench when saved connections also exist", async () => {
     const plugin = installed("a");
@@ -1460,6 +1493,106 @@ describe("marketplace detail launch", () => {
     await flushUi();
     expect(state.marketplaceDetailOpen).toBe(true);
     expect(mocks.toast).toHaveBeenCalled();
+  });
+
+  async function startDelayedConnectionLaunch() {
+    const plugin = installed("a");
+    plugin.manifest.contributions = [
+      { type: "connection-provider", id: "server", label: "Server", database_type: "test", fields: [], workbench: "ui" },
+      { type: "workbench", id: "ui", label: "UI" },
+    ];
+    mocks.connections.push({ id: "saved", name: "Saved", db_type: "plugin", plugin_id: "a", plugin_connection_provider: "server" } as import("@/types/database").ConnectionConfig);
+    state.installedPlugins = [plugin];
+    const pending = deferred<void>();
+    mocks.openPluginConnection.mockReturnValue(pending.promise);
+    state.openMarketplaceDetails(state.marketplaceListings.find((listing) => listing.plugin.id === "a")!);
+    await flushUi();
+    const opening = state.launchDetailEntry("saved");
+    await flushUi();
+    expect(mocks.openPluginConnection).toHaveBeenCalledExactlyOnceWith("saved");
+    expect(state.marketplaceDetailOpen).toBe(false);
+    expect(state.detailOpening).toBe(true);
+    return { pending, opening };
+  }
+
+  it("restores the originating detail after a delayed launch failure", async () => {
+    const { pending, opening } = await startDelayedConnectionLaunch();
+    pending.reject(new Error("Connection failed"));
+    await opening;
+    await flushUi();
+    expect(state.marketplaceDetailOpen).toBe(true);
+    expect(state.selectedMarketplaceListing?.plugin.id).toBe("a");
+    expect(state.detailOpening).toBe(false);
+    expect(mocks.toast).toHaveBeenCalledWith("Connection failed", 8000);
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+
+  it.each(["a", "b"])("does not reopen dismissed %s details after an earlier launch rejects", async (pluginId) => {
+    const { pending, opening } = await startDelayedConnectionLaunch();
+    state.openMarketplaceDetails(state.marketplaceListings.find((listing) => listing.plugin.id === pluginId)!);
+    await flushUi();
+    state.closeMarketplaceDetails();
+    await flushUi();
+    expect(state.marketplaceDetailOpen).toBe(false);
+    pending.reject(new Error("Connection failed"));
+    await opening;
+    await flushUi();
+    expect(state.marketplaceDetailOpen).toBe(false);
+    expect(state.selectedMarketplaceListing?.plugin.id).toBe(pluginId);
+    expect(state.detailOpening).toBe(false);
+    expect(mocks.toast).toHaveBeenCalledWith("Connection failed", 8000);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it.each(["a", "b"])("keeps the newer %s detail session open after an earlier launch rejects", async (pluginId) => {
+    const { pending, opening } = await startDelayedConnectionLaunch();
+    state.openMarketplaceDetails(state.marketplaceListings.find((listing) => listing.plugin.id === pluginId)!);
+    await flushUi();
+    const dialog = document.querySelector('[role="dialog"]');
+    pending.reject(new Error("Connection failed"));
+    await opening;
+    await flushUi();
+    expect(state.marketplaceDetailOpen).toBe(true);
+    expect(state.selectedMarketplaceListing?.plugin.id).toBe(pluginId);
+    expect(state.detailOpening).toBe(false);
+    expect(mocks.toast).toHaveBeenCalledWith("Connection failed", 8000);
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+  });
+
+  it("does not restore details after an explicit close during a delayed launch", async () => {
+    const { pending, opening } = await startDelayedConnectionLaunch();
+    state.closeMarketplaceDetails();
+    pending.reject(new Error("Connection failed"));
+    await opening;
+    await flushUi();
+    expect(state.marketplaceDetailOpen).toBe(false);
+    expect(state.detailOpening).toBe(false);
+    expect(mocks.toast).toHaveBeenCalledWith("Connection failed", 8000);
+  });
+
+  it("does not restore details after unmount during a delayed launch", async () => {
+    const { pending, opening } = await startDelayedConnectionLaunch();
+    app.unmount();
+    pending.reject(new Error("Connection failed"));
+    await opening;
+    await flushUi();
+    expect(state.marketplaceDetailOpen).toBe(false);
+    expect(state.detailOpening).toBe(false);
+    expect(mocks.toast).toHaveBeenCalledWith("Connection failed", 8000);
+  });
+
+  it("does not restore details after navigating away and back during a delayed launch", async () => {
+    const { pending, opening } = await startDelayedConnectionLaunch();
+    state.activeSection = "installed";
+    await flushUi();
+    state.activeSection = "marketplace";
+    await flushUi();
+    pending.reject(new Error("Connection failed"));
+    await opening;
+    await flushUi();
+    expect(state.marketplaceDetailOpen).toBe(false);
+    expect(state.detailOpening).toBe(false);
+    expect(mocks.toast).toHaveBeenCalledWith("Connection failed", 8000);
   });
 
   it("opens a single standalone workbench and closes details", async () => {
