@@ -4294,12 +4294,39 @@ export const useQueryStore = defineStore("query", () => {
     refreshExternalSqlFileTitles();
   }
 
+  function relocateExternalSqlFolderPath(previousPath: string, nextPath: string) {
+    const previous = normalizeExternalSqlPath(previousPath);
+    const next = normalizeExternalSqlPath(nextPath);
+    if (!previous || !next || previous === next) return;
+    const prefix = `${previous}/`;
+    for (const tab of tabs.value) {
+      if (tab.mode !== "query" || !tab.externalSqlPath) continue;
+      const path = normalizeExternalSqlPath(tab.externalSqlPath);
+      if (path === previous || path.startsWith(prefix)) {
+        tab.externalSqlPath = `${next}${path.slice(previous.length)}`;
+      }
+    }
+    refreshExternalSqlFileTitles();
+  }
+
   function markExternalSqlFileMissingForPath(path: string) {
     const normalizedPath = normalizeExternalSqlPath(path);
     if (!normalizedPath) return;
     for (const tab of tabs.value) {
       if (tab.mode === "query" && tab.externalSqlPath && normalizeExternalSqlPath(tab.externalSqlPath) === normalizedPath) {
         tab.externalSqlFileMissing = true;
+      }
+    }
+  }
+
+  function markExternalSqlFolderMissingForPath(path: string) {
+    const normalized = normalizeExternalSqlPath(path);
+    if (!normalized) return;
+    const prefix = `${normalized}/`;
+    for (const tab of tabs.value) {
+      if (tab.mode === "query" && tab.externalSqlPath) {
+        const tabPath = normalizeExternalSqlPath(tab.externalSqlPath);
+        if (tabPath === normalized || tabPath.startsWith(prefix)) tab.externalSqlFileMissing = true;
       }
     }
   }
@@ -10105,7 +10132,9 @@ export const useQueryStore = defineStore("query", () => {
     ignoreExternalSqlFileVersion,
     acknowledgeExternalSqlFileMissing,
     relocateExternalSqlFilePath,
+    relocateExternalSqlFolderPath,
     markExternalSqlFileMissingForPath,
+    markExternalSqlFolderMissingForPath,
     discardTabChanges,
     requestAppCloseConfirmation,
     closeOtherTabs,
