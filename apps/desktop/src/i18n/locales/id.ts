@@ -7394,7 +7394,7 @@ export default withEnglishFallback({
   },
   sqlFileTree: {
     title: "File SQL",
-    storageHelp: "Ini adalah file .sql asli di disk yang dibuka melalui Buka Folder; perubahan disimpan langsung kembali ke file aslinya.",
+    storageHelp: "Ini adalah file di disk yang dibuka melalui Buka Folder. Secara default, file .sql dan .ddl ditampilkan; Anda dapat menyesuaikan filter file. Perubahan disimpan langsung kembali ke file aslinya.",
     openFolder: "Buka Folder",
     closePanel: "Tutup",
     loading: "Memuat...",

@@ -9822,7 +9822,7 @@ export default withEnglishFallback({
   },
   sqlFileTree: {
     title: "Archivos SQL",
-    storageHelp: "Son los archivos .sql reales del disco abiertos con Abrir carpeta; las ediciones se guardan directamente en el archivo original.",
+    storageHelp: "Son archivos del disco abiertos con Abrir carpeta. De forma predeterminada se muestran archivos .sql y .ddl; puede personalizar el filtro. Las ediciones se guardan directamente en el archivo original.",
     openFolder: "Abrir carpeta",
     closePanel: "Cerrar",
     loading: "Cargando...",
