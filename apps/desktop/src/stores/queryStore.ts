@@ -108,7 +108,7 @@ import { elasticsearchRestRequestRanges, executableStatementRanges, splitSqlStat
 import type { SqlParameterOptions } from "@/lib/sql/sqlParameters";
 import { replaceSqlServerLeadingUseQuery, sqlServerLeadingUseScript, switchesDatabaseWithUseStatement, useDatabaseFromStatement } from "@/lib/sql/sqlCompletionLookupTarget";
 import { classifySqlRisk } from "@/lib/sql/sqlRisk";
-import { externalSqlFileDisplayTitles, normalizeExternalSqlPath } from "@/lib/sql/sqlFileOpen";
+import { externalSqlFileDisplayTitles, normalizeExternalSqlPath, relocateExternalSqlPathWithinFolder } from "@/lib/sql/sqlFileOpen";
 import { clearDataGridPendingSnapshot, clearDataGridPendingSnapshotsForTab } from "@/composables/useDataGridEditor";
 import { combineDataGridOrderByInputs, copyDataGridSortBuilderStatesForTab } from "@/composables/useDataGridSortBuilder";
 import { beginClosingDataGridViewSnapshotsForTab, clearDataGridViewSnapshot, clearDataGridViewSnapshotsForTab } from "@/lib/dataGrid/dataGridViewStateCache";
@@ -4298,13 +4298,10 @@ export const useQueryStore = defineStore("query", () => {
     const previous = normalizeExternalSqlPath(previousPath);
     const next = normalizeExternalSqlPath(nextPath);
     if (!previous || !next || previous === next) return;
-    const prefix = `${previous}/`;
     for (const tab of tabs.value) {
       if (tab.mode !== "query" || !tab.externalSqlPath) continue;
-      const path = normalizeExternalSqlPath(tab.externalSqlPath);
-      if (path === previous || path.startsWith(prefix)) {
-        tab.externalSqlPath = `${next}${path.slice(previous.length)}`;
-      }
+      const relocated = relocateExternalSqlPathWithinFolder(tab.externalSqlPath, previousPath, nextPath);
+      if (relocated) tab.externalSqlPath = relocated;
     }
     refreshExternalSqlFileTitles();
   }

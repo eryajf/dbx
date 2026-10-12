@@ -17,7 +17,7 @@ import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { translateBackendError } from "@/i18n/backend-errors";
 import { copyToClipboard } from "@/lib/common/clipboard";
 import { forgetExternalSqlFileTarget, forgetExternalSqlFolderTargets, moveExternalSqlFileTarget, moveExternalSqlFolderTargets, resolveExternalSqlFileTargetForActiveTab } from "@/lib/sql/externalSqlFileTarget";
-import { externalSqlFileOpenErrorMessage, externalSqlEditorMaxBytes, formatSqlFileSize, isExternalSqlFileTooLargeError, isSqlFilePath, normalizeExternalSqlPath } from "@/lib/sql/sqlFileOpen";
+import { externalSqlFileOpenErrorMessage, externalSqlEditorMaxBytes, formatSqlFileSize, isExternalSqlFileTooLargeError, isSqlFilePath, normalizeExternalSqlPath, relocateExternalSqlPathWithinFolder } from "@/lib/sql/sqlFileOpen";
 import * as api from "@/lib/backend/api";
 import type { SqlFileEntry } from "@/lib/backend/api";
 import { getSqlFileFilter, getSqlFileFolderPaths, saveSqlFileFilter, saveSqlFileFolderPaths, notifySqlFileFoldersChanged } from "@/lib/sqlFile/sqlFileFolders";
@@ -456,7 +456,7 @@ function updateFolderPaths(previousPath: string, nextPath?: string) {
   const previous = normalizeExternalSqlPath(previousPath);
   const mapPath = (path: string) => {
     if (!isWithinFolder(path, previous)) return path;
-    return nextPath ? `${normalizeExternalSqlPath(nextPath)}${normalizeExternalSqlPath(path).slice(previous.length)}` : null;
+    return nextPath ? (relocateExternalSqlPathWithinFolder(path, previousPath, nextPath) ?? path) : null;
   };
   const mapSet = (paths: Set<string>) => new Set([...paths].map(mapPath).filter((path): path is string => path !== null));
   folders.value = folders.value.filter((folder) => {
@@ -601,6 +601,9 @@ async function deleteSqlFolder() {
   } catch (e: any) {
     // Recursive deletion can fail after removing some children. Inspect actual
     // disk state, including tabs hidden by the file-name filter.
+    // Closed files can also have persisted targets, so the entire subtree is
+    // untrusted after a non-atomic delete attempt.
+    forgetExternalSqlFolderTargets(target.entry.path);
     await Promise.all(
       queryStore.tabs
         .filter((tab) => tab.externalSqlPath && isWithinFolder(tab.externalSqlPath, target.entry.path))
