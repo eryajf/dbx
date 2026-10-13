@@ -24,7 +24,7 @@ self.onmessage = ({ data }: MessageEvent<RedisContentSearchRequest>) => {
               if (ref === "$") return "$";
               if (ref === "&") return match[0];
               const index = Number(ref);
-              return index > 0 && index < match.length ? match[index] ?? "" : token;
+              return index > 0 && index < match.length ? (match[index] ?? "") : token;
             })
           : data.replacement;
         changes.push({ from: match.index, to: match.index + match[0].length, insert });

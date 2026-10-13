@@ -42,9 +42,5 @@ export const rawSourceField = StateField.define<string>({
 });
 
 export function preserveSourceHistory(source: string) {
-  return [
-    rawSourceField.init(() => source),
-    invertedEffects.of((transaction) => transaction.docChanged || transaction.effects.some((effect) => effect.is(restoreRawSource))
-      ? [restoreRawSource.of(transaction.startState.field(rawSourceField))] : []),
-  ];
+  return [rawSourceField.init(() => source), invertedEffects.of((transaction) => (transaction.docChanged || transaction.effects.some((effect) => effect.is(restoreRawSource)) ? [restoreRawSource.of(transaction.startState.field(rawSourceField))] : []))];
 }

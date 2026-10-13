@@ -196,8 +196,13 @@ defineExpose({ focusInput, inputEl: inputRef });
             :title="t('editor.search.caseSensitive')"
             :aria-label="t('editor.search.caseSensitive')"
             :aria-pressed="caseSensitive"
-            @click="emit('update:caseSensitive', !caseSensitive); focusInput(false)"
-          >Aa</button>
+            @click="
+              emit('update:caseSensitive', !caseSensitive);
+              focusInput(false);
+            "
+          >
+            Aa
+          </button>
           <button
             type="button"
             class="mr-1 flex h-6 min-w-7 shrink-0 items-center justify-center rounded px-1.5 font-mono text-xs transition-colors hover:bg-accent hover:text-foreground"
@@ -205,8 +210,13 @@ defineExpose({ focusInput, inputEl: inputRef });
             :title="t('editor.search.regex')"
             :aria-label="t('editor.search.regex')"
             :aria-pressed="useRegex"
-            @click="emit('update:useRegex', !useRegex); focusInput(false)"
-          >.*</button>
+            @click="
+              emit('update:useRegex', !useRegex);
+              focusInput(false);
+            "
+          >
+            .*
+          </button>
         </template>
       </div>
 
@@ -244,9 +254,17 @@ defineExpose({ focusInput, inputEl: inputRef });
       </button>
     </div>
     <div v-if="allowReplace && showReplace" class="flex items-center gap-1 pl-8" data-no-drag @pointerdown.stop>
-      <input :value="replaceText" class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm outline-none focus:border-ring" :placeholder="t('editor.search.replace')" :aria-label="t('editor.search.replace')" @input="emit('update:replaceText', ($event.target as HTMLInputElement).value)" @keydown.enter.prevent="!busy && !error && matchCount > 0 && emit('replace')" @keydown.escape.prevent.stop="emit('close')" />
-      <button type="button" class="h-7 shrink-0 rounded-md border border-border px-2 text-xs hover:bg-accent disabled:opacity-40" :disabled="busy || Boolean(error) || matchCount === 0" @click="emit('replace')">{{ t('editor.search.replace') }}</button>
-      <button type="button" class="h-7 shrink-0 rounded-md border border-border px-2 text-xs hover:bg-accent disabled:opacity-40" :disabled="busy || Boolean(error) || matchCount === 0" @click="emit('replaceAll')">{{ t('editor.search.replaceAll') }}</button>
+      <input
+        :value="replaceText"
+        class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm outline-none focus:border-ring"
+        :placeholder="t('editor.search.replace')"
+        :aria-label="t('editor.search.replace')"
+        @input="emit('update:replaceText', ($event.target as HTMLInputElement).value)"
+        @keydown.enter.prevent="!busy && !error && matchCount > 0 && emit('replace')"
+        @keydown.escape.prevent.stop="emit('close')"
+      />
+      <button type="button" class="h-7 shrink-0 rounded-md border border-border px-2 text-xs hover:bg-accent disabled:opacity-40" :disabled="busy || Boolean(error) || matchCount === 0" @click="emit('replace')">{{ t("editor.search.replace") }}</button>
+      <button type="button" class="h-7 shrink-0 rounded-md border border-border px-2 text-xs hover:bg-accent disabled:opacity-40" :disabled="busy || Boolean(error) || matchCount === 0" @click="emit('replaceAll')">{{ t("editor.search.replaceAll") }}</button>
     </div>
     <p v-if="error" role="alert" class="px-2 text-xs text-destructive">{{ error }}</p>
   </div>
