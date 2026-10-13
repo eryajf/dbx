@@ -1963,6 +1963,7 @@ export default {
       find: "Find",
       replace: "Replace",
       replaceAll: "Replace All",
+      searchFailed: "Search failed or timed out. Simplify the expression and try again.",
       caseSensitive: "Case sensitive",
       regex: "Regular expression",
       collapseReplace: "Collapse replace",
