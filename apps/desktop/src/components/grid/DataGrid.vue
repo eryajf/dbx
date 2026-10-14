@@ -346,7 +346,7 @@ import { useDataGridColumnLayout, useDataGridColumnLayoutState, type ColumnHeade
 import { createColumnReferencePayload, createTableReferenceDragEndEvent, createTableReferenceDropEvent, createTableReferenceHoverEvent } from "@/lib/editor/queryEditorTableDrop";
 import { beginTableReferenceDragFeedback, isOverSqlEditorTarget, type TableReferenceDragFeedback } from "@/lib/editor/tableReferenceDragFeedback";
 import { dataGridCanvasDevicePixelSize, useDataGridCanvasRuntime, type DataGridCanvasRuntime } from "@/composables/useDataGridCanvasRuntime";
-import { deferUntilPanelResizeEnd, isPanelResizing } from "@/lib/app/panelResizeState";
+import { beginPanelResize, deferUntilPanelResizeEnd, endPanelResize, isPanelResizing } from "@/lib/app/panelResizeState";
 import { uiTuning } from "@/lib/app/uiTuning";
 import { useDataGridScrollbars, type DataGridScrollbarsRuntime } from "@/composables/useDataGridScrollbars";
 import { useDataGridSelection } from "@/composables/useDataGridSelection";
@@ -4542,6 +4542,47 @@ const batchAppendPasteRowId = ref<number | null>(null);
 
 const showSqlPreview = ref(false);
 const previewSqlText = ref("");
+const SQL_PREVIEW_DEFAULT_HEIGHT = 208;
+const SQL_PREVIEW_MIN_HEIGHT = 120;
+const SQL_PREVIEW_RESERVED_GRID_HEIGHT = 120;
+const sqlPreviewHeight = ref(SQL_PREVIEW_DEFAULT_HEIGHT);
+const isResizingSqlPreview = ref(false);
+let sqlPreviewResizeStartY = 0;
+let sqlPreviewResizeStartHeight = SQL_PREVIEW_DEFAULT_HEIGHT;
+let sqlPreviewResizeObserver: ResizeObserver | null = null;
+
+function clampSqlPreviewHeight(height: number) {
+  const availableHeight = gridRef.value?.clientHeight;
+  const maxHeight = availableHeight ? Math.max(SQL_PREVIEW_MIN_HEIGHT, availableHeight - SQL_PREVIEW_RESERVED_GRID_HEIGHT) : height;
+  return Math.min(Math.max(height, SQL_PREVIEW_MIN_HEIGHT), maxHeight);
+}
+
+function onSqlPreviewResizeStart(event: PointerEvent) {
+  if (event.button !== 0) return;
+  isResizingSqlPreview.value = true;
+  sqlPreviewResizeStartY = event.clientY;
+  sqlPreviewResizeStartHeight = sqlPreviewHeight.value;
+  beginPanelResize();
+  document.body.classList.add("select-none", "cursor-row-resize");
+  window.addEventListener("pointermove", onSqlPreviewResizeMove);
+  window.addEventListener("pointerup", onSqlPreviewResizeEnd);
+  window.addEventListener("pointercancel", onSqlPreviewResizeEnd);
+}
+
+function onSqlPreviewResizeMove(event: PointerEvent) {
+  if (!isResizingSqlPreview.value) return;
+  sqlPreviewHeight.value = clampSqlPreviewHeight(sqlPreviewResizeStartHeight + sqlPreviewResizeStartY - event.clientY);
+}
+
+function onSqlPreviewResizeEnd() {
+  if (!isResizingSqlPreview.value) return;
+  isResizingSqlPreview.value = false;
+  document.body.classList.remove("select-none", "cursor-row-resize");
+  window.removeEventListener("pointermove", onSqlPreviewResizeMove);
+  window.removeEventListener("pointerup", onSqlPreviewResizeEnd);
+  window.removeEventListener("pointercancel", onSqlPreviewResizeEnd);
+  endPanelResize();
+}
 
 let previewRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -4576,6 +4617,7 @@ async function openSqlPreview() {
 }
 
 function closeSqlPreview() {
+  onSqlPreviewResizeEnd();
   showSqlPreview.value = false;
   if (previewRefreshTimer) {
     clearTimeout(previewRefreshTimer);
@@ -8599,8 +8641,17 @@ onMounted(() => {
   window.addEventListener(TABLE_DATA_GRID_COLUMN_ORDER_CHANGED_EVENT, onSynchronizedTableDataGridColumnOrderChanged);
   window.addEventListener("dbx:before-tab-switch", captureTabSwitchViewSnapshot);
   window.addEventListener("blur", clearInternalClipboardCopy);
+  window.addEventListener("blur", onSqlPreviewResizeEnd);
   document.addEventListener("visibilitychange", clearInternalClipboardCopy);
   nextTick(restoreTabSwitchViewSnapshot);
+  nextTick(() => {
+    if (gridRef.value && typeof ResizeObserver !== "undefined") {
+      sqlPreviewResizeObserver = new ResizeObserver(() => {
+        if (showSqlPreview.value) sqlPreviewHeight.value = clampSqlPreviewHeight(sqlPreviewHeight.value);
+      });
+      sqlPreviewResizeObserver.observe(gridRef.value);
+    }
+  });
 });
 onDeactivated(pauseCanvasGridWork);
 onUnmounted(() => {
@@ -8612,6 +8663,9 @@ onUnmounted(() => {
   captureTabSwitchViewSnapshot();
   cancelViewSnapshotRestoreFrame();
   onLocalFilterResizeEnd();
+  onSqlPreviewResizeEnd();
+  sqlPreviewResizeObserver?.disconnect();
+  sqlPreviewResizeObserver = null;
   dataGridRuntimeScope.dispose();
   foreignKeyDisplayRequests.dispose();
   clearCellFormatCache();
@@ -8634,6 +8688,7 @@ onUnmounted(() => {
   window.removeEventListener(TABLE_DATA_GRID_COLUMN_ORDER_CHANGED_EVENT, onSynchronizedTableDataGridColumnOrderChanged);
   window.removeEventListener("dbx:before-tab-switch", captureTabSwitchViewSnapshot);
   window.removeEventListener("blur", clearInternalClipboardCopy);
+  window.removeEventListener("blur", onSqlPreviewResizeEnd);
   document.removeEventListener("visibilitychange", clearInternalClipboardCopy);
 });
 
@@ -12965,6 +13020,7 @@ onUnmounted(() => {
   onDdlResizeEnd();
   onDetailResizeEnd();
   onMongoJsonPreviewResizeEnd();
+  onSqlPreviewResizeEnd();
   finishCellSelection();
   loadAllRowsLoopActive = false;
   clearTimeout(highlightedColumnTimer);
@@ -16041,7 +16097,15 @@ useUpdateBlocker(() => (hasPendingChanges.value || hasPendingDataEditorDraft.val
     </Dialog>
 
     <!-- SQL Preview panel for pending data changes -->
-    <div v-if="showSqlPreview" class="h-52 shrink-0 border-t">
+    <div v-if="showSqlPreview" class="relative shrink-0 border-t" :style="{ height: `${sqlPreviewHeight}px` }">
+      <div
+        class="absolute inset-x-0 top-0 z-10 h-2 -translate-y-1/2 cursor-row-resize touch-none hover:bg-primary/30 active:bg-primary/50"
+        role="separator"
+        aria-orientation="horizontal"
+        :aria-label="t('grid.resizeSqlPreview')"
+        :title="t('grid.resizeSqlPreview')"
+        @pointerdown.prevent="onSqlPreviewResizeStart"
+      />
       <SqlPreviewPanel :sql="previewSqlText" :loading="isPreviewLoading" :can-undo="canUndoPendingChange" :can-redo="canRedoPendingChange" @undo="undoGridChange" @redo="redoGridChange" @close="closeSqlPreview" />
     </div>
 
