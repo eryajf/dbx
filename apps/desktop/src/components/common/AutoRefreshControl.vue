@@ -46,7 +46,7 @@ function selectInterval(seconds: number) {
 <template>
   <div class="flex h-7 shrink-0 overflow-hidden rounded-md border" :aria-label="label">
     <Button variant="ghost" size="icon" class="h-7 w-7 rounded-none px-0" :disabled="disabled || loading || manualDisabled" :title="refreshLabel" :aria-label="refreshLabel" v-bind="refreshButtonAttrs" @click="emit('refresh')">
-      <Loader2 v-if="loading" class="h-3.5 w-3.5 animate-spin" />
+      <Loader2 v-if="loading" class="auto-refresh-spinner h-3.5 w-3.5" />
       <RefreshCw v-else class="h-3.5 w-3.5" />
     </Button>
     <DropdownMenu>
@@ -81,3 +81,19 @@ function selectInterval(seconds: number) {
     </DropdownMenu>
   </div>
 </template>
+
+<style scoped>
+.auto-refresh-spinner {
+  animation: auto-refresh-spin 1.5s linear infinite;
+}
+
+@keyframes auto-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+</style>
