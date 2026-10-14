@@ -3701,7 +3701,7 @@ async function changeCopySourceScope(level: "connection" | "catalog" | "database
       if (!current()) return;
       copySourceDatabases.value = databases;
       const preferred = prefill ? props.database : namespaceOptionsAreSchemas(config) ? config.username : config.database;
-      copySourceDatabase.value = databases.includes(preferred || "") ? preferred || "" : databases[0] ?? "";
+      copySourceDatabase.value = databases.includes(preferred || "") ? preferred || "" : (databases[0] ?? "");
     }
     if (!copySourceDatabases.value.includes(copySourceDatabase.value)) return;
     if (copySourceRootSchemaMode.value) {
@@ -3713,7 +3713,7 @@ async function changeCopySourceScope(level: "connection" | "catalog" | "database
       if (!current()) return;
       copySourceSchemas.value = schemaOptionsForConnection(schemas, config, database);
       const preferred = prefill ? metadataSchema.value : "";
-      copySourceSchema.value = copySourceSchemas.value.includes(preferred) ? preferred : copySourceSchemas.value[0] ?? "";
+      copySourceSchema.value = copySourceSchemas.value.includes(preferred) ? preferred : (copySourceSchemas.value[0] ?? "");
     }
     if (copySourceHasSchema.value && !copySourceSchemas.value.includes(copySourceSchema.value)) return;
     // Preserve explicit metadata scope for an unknown JDBC driver on the current connection.
@@ -3762,7 +3762,8 @@ function clearCopySourceTableSearchTimer() {
 
 function isCopySourceTable(table: TableInfo): boolean {
   const databaseInfo = connection.value?.database_info;
-  const sameNamespace = copySourceConnectionId.value === props.connectionId && copySourceDatabase.value === props.database && copySourceMetadataSchema.value === metadataSchema.value && (copySourceTargetCatalog.value || "") === (normalizedQueryTabCatalog(copySourceCatalogs.value, props.catalog || "") || "");
+  const sameNamespace =
+    copySourceConnectionId.value === props.connectionId && copySourceDatabase.value === props.database && copySourceMetadataSchema.value === metadataSchema.value && (copySourceTargetCatalog.value || "") === (normalizedQueryTabCatalog(copySourceCatalogs.value, props.catalog || "") || "");
   return isCreateMode.value || !sameNamespace || tableStructureIdentifierComparisonKey(table.name, databaseType.value, databaseInfo) !== tableStructureIdentifierComparisonKey(props.tableName, databaseType.value, databaseInfo);
 }
 
@@ -3801,7 +3802,10 @@ async function loadCopySourceTables(offset = 0) {
 
 function updateCopySourceTableSearch(value: string | number) {
   copySourceTableSearch.value = String(value);
-  resetCopySourceTables();
+  // Invalidate any in-flight load and restart the debounce, but keep the
+  // current list visible until the new results land to avoid a blank flicker.
+  clearCopySourceTableSearchTimer();
+  ++copySourceTablesRequestId;
   copySourceTableSearchTimer = setTimeout(() => {
     copySourceTableSearchTimer = undefined;
     void loadCopySourceTables();
