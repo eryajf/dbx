@@ -15457,7 +15457,7 @@ useUpdateBlocker(() => (hasPendingChanges.value || hasPendingDataEditorDraft.val
                     <ChevronDown class="h-3 w-3" />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" class="w-32">
+                <DropdownMenuContent align="end" class="!w-auto !min-w-0 whitespace-nowrap">
                   <DropdownMenuItem class="justify-between gap-2 text-xs" @select="goToColumnMatchMode = 'fuzzy'">
                     {{ t("grid.fuzzyColumnSearch") }}
                     <Check v-if="goToColumnMatchMode === 'fuzzy'" class="h-3 w-3" />
