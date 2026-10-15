@@ -100,7 +100,7 @@ fn build_create_table_sql_impl(
                 !column.marked_for_drop && column.extra.as_ref().is_some_and(|extra| extra.auto_increment == Some(true))
             })
         {
-            warnings.push("AUTO_INCREMENT requires a native MySQL auto-increment column.".to_string());
+            warnings.push("AUTO_INCREMENT requires an auto-increment column.".to_string());
         }
     }
     // Fail closed: a concurrent-index request on a partitioned parent (or on an
@@ -365,6 +365,7 @@ fn build_create_table_sql_impl(
                     | StructureDialect::Dameng
                     | StructureDialect::Oscar
                     | StructureDialect::H2
+                    | StructureDialect::SapHana
             ) {
                 statements.push(format!("COMMENT ON TABLE {table} IS {};", quote_string(&table_comment)));
             } else if dialect == StructureDialect::ClickHouse {
@@ -389,6 +390,7 @@ fn build_create_table_sql_impl(
                 | StructureDialect::Dameng
                 | StructureDialect::Oscar
                 | StructureDialect::H2
+                | StructureDialect::SapHana
         )
     {
         for column in &active_columns {
