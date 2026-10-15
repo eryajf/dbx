@@ -190,7 +190,7 @@ export function serializeOpenTabs(tabs: QueryTab[]): SavedOpenTab[] {
     // Clean file-backed tabs omit it so startup can hydrate the current file content.
     ...(tab.originalSql !== undefined && ((!tab.savedSqlId && !tab.externalSqlPath) || tab.sql !== tab.originalSql) ? { originalSql: tab.originalSql } : {}),
     savedSqlId: tab.savedSqlId,
-    isDefaultQuery: tab.isDefaultQuery === true,
+    ...(tab.isDefaultQuery ? { isDefaultQuery: true } : {}),
     externalSqlPath: tab.externalSqlPath,
     ...(tab.externalSqlFileVersion ? { externalSqlFileVersion: tab.externalSqlFileVersion } : {}),
     ...(tab.externalSqlIgnoredFileVersion ? { externalSqlIgnoredFileVersion: tab.externalSqlIgnoredFileVersion } : {}),

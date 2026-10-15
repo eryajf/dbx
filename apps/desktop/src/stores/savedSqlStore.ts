@@ -529,7 +529,7 @@ export const useSavedSqlStore = defineStore("savedSql", () => {
     }
     const { useQueryStore } = await import("@/stores/queryStore");
     const queryStore = useQueryStore();
-    for (const tab of [...queryStore.tabs]) {
+    for (const tab of queryStore.tabs) {
       if (removedFiles.some((file) => file.id === tab.savedSqlId) && tab.isDefaultQuery) {
         tab.isDefaultQuery = false;
         queryStore.closeTab(tab.id, { force: true });

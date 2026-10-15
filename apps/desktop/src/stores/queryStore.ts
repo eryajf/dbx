@@ -6076,11 +6076,12 @@ export const useQueryStore = defineStore("query", () => {
   async function hydrateSavedSqlTabs() {
     await initSavedSqlEditorPositions();
     const savedSqlStore = useSavedSqlStore();
-    await savedSqlStore.initFromStorage();
+    const linkedTabs = tabs.value.filter((tab) => tab.savedSqlId && tab.sql === "" && tab.originalSql === undefined);
+    const hasUnindexedSavedSqlTab = tabs.value.some((tab) => tab.savedSqlId && !savedSqlStore.getFile(tab.savedSqlId));
+    if (linkedTabs.length > 0 && hasUnindexedSavedSqlTab) await savedSqlStore.initFromStorage();
     for (const tab of tabs.value) {
       if (tab.savedSqlId) tab.isDefaultQuery = savedSqlStore.getFile(tab.savedSqlId)?.isDefaultQuery === true;
     }
-    const linkedTabs = tabs.value.filter((tab) => tab.savedSqlId && tab.sql === "" && tab.originalSql === undefined);
     for (const tab of linkedTabs) {
       const file = await savedSqlStore.ensureFileContent(tab.savedSqlId!);
       if (!file) continue;
