@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, ref, watch } from "vue";
 import { ArrowDown, ArrowUp, Check, Copy, Database, GripVertical, Grid3X3, LayoutGrid, List, Loader2, RefreshCw, Search, Settings2, TerminalSquare, X } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { Button } from "@/components/ui/button";
@@ -56,6 +56,8 @@ interface DatabaseBrowserTabUiState {
   sortKey?: DatabaseBrowserSortKey;
   sortDirection?: SortDirection;
   columnWidths?: Partial<Record<DatabaseBrowserColumnKey, number>>;
+  scrollTop?: number;
+  scrollLeft?: number;
 }
 
 const props = defineProps<{
@@ -83,13 +85,27 @@ const columnWidths = ref<Record<DatabaseBrowserColumnKey, number>>(
     }),
   ) as Record<DatabaseBrowserColumnKey, number>,
 );
+const scrollTop = ref(typeof restoredUiState.scrollTop === "number" && Number.isFinite(restoredUiState.scrollTop) ? Math.max(0, restoredUiState.scrollTop) : 0);
+const scrollLeft = ref(typeof restoredUiState.scrollLeft === "number" && Number.isFinite(restoredUiState.scrollLeft) ? Math.max(0, restoredUiState.scrollLeft) : 0);
+const listScrollerRef = ref<HTMLElement | null>(null);
+const listOuterRef = ref<HTMLElement | null>(null);
+const gridScrollerRef = ref<HTMLElement | null>(null);
 let stopColumnResize: (() => void) | null = null;
 let refreshGeneration = 0;
+let restoreScrollFrame = 0;
+let isRestoringScroll = false;
 const sidebarRuntimeHost = ref<InstanceType<typeof SidebarTreeRuntimeHost> | null>(null);
 const sidebarRuntimeNode: TreeNode = { id: "__database-browser-runtime__", label: "", type: "connection-group" };
 const sidebarDialogController = ref<Record<string, any> | null>(null);
 
-trackUiState(() => ({ search: search.value, sortKey: sortKey.value, sortDirection: sortDirection.value, columnWidths: columnWidths.value }));
+trackUiState(() => ({
+  search: search.value,
+  sortKey: sortKey.value,
+  sortDirection: sortDirection.value,
+  columnWidths: columnWidths.value,
+  scrollTop: scrollTop.value,
+  scrollLeft: scrollLeft.value,
+}));
 
 const hasSize = computed(() => rows.value.some((row) => row.sizeBytes != null));
 const hasCreatedAt = computed(() => rows.value.some((row) => !!row.createdAt?.trim()));
@@ -258,6 +274,7 @@ function toggleSort(key: DatabaseBrowserSortKey) {
 
 function setViewMode(mode: "list" | "grid" | "compact") {
   settingsStore.updateEditorSettings({ objectBrowserViewMode: mode });
+  scrollToTop();
 }
 
 function minimumColumnWidth(key: DatabaseBrowserColumnKey): number {
@@ -292,6 +309,88 @@ function resetColumnWidth(key: DatabaseBrowserColumnKey, width: number, event: M
   columnWidths.value = { ...columnWidths.value, [key]: width };
 }
 
+function onListVerticalScroll(event: Event) {
+  if (isRestoringScroll) return;
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) return;
+  scrollTop.value = Math.max(0, Math.round(target.scrollTop));
+  if (target.scrollLeft > 0) {
+    scrollLeft.value = Math.max(0, Math.round(target.scrollLeft));
+  }
+}
+
+function onListHorizontalScroll(event: Event) {
+  if (isRestoringScroll) return;
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) return;
+  scrollLeft.value = Math.max(0, Math.round(target.scrollLeft));
+}
+
+function onGridScroll(event: Event) {
+  if (isRestoringScroll) return;
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) return;
+  scrollTop.value = Math.max(0, Math.round(target.scrollTop));
+  scrollLeft.value = Math.max(0, Math.round(target.scrollLeft));
+}
+
+function applyScrollPosition() {
+  const targetTop = scrollTop.value;
+  const targetLeft = scrollLeft.value;
+  if (!targetTop && !targetLeft) return;
+  if (isListView.value) {
+    if (listScrollerRef.value) {
+      if (targetTop) listScrollerRef.value.scrollTop = targetTop;
+      if (targetLeft) listScrollerRef.value.scrollLeft = targetLeft;
+    }
+    if (listOuterRef.value && targetLeft) {
+      listOuterRef.value.scrollLeft = targetLeft;
+    }
+  } else if (gridScrollerRef.value) {
+    if (targetTop) gridScrollerRef.value.scrollTop = targetTop;
+    if (targetLeft) gridScrollerRef.value.scrollLeft = targetLeft;
+  }
+}
+
+function restoreScrollPosition() {
+  const targetTop = scrollTop.value;
+  const targetLeft = scrollLeft.value;
+  if (!targetTop && !targetLeft) return;
+  if (restoreScrollFrame) window.cancelAnimationFrame(restoreScrollFrame);
+  isRestoringScroll = true;
+  void nextTick(() => {
+    applyScrollPosition();
+    restoreScrollFrame = window.requestAnimationFrame(() => {
+      restoreScrollFrame = 0;
+      applyScrollPosition();
+      window.requestAnimationFrame(() => {
+        isRestoringScroll = false;
+      });
+    });
+  });
+}
+
+function scrollToTop() {
+  if (restoreScrollFrame) {
+    window.cancelAnimationFrame(restoreScrollFrame);
+    restoreScrollFrame = 0;
+  }
+  isRestoringScroll = false;
+  scrollTop.value = 0;
+  scrollLeft.value = 0;
+  if (listScrollerRef.value) {
+    listScrollerRef.value.scrollTop = 0;
+    listScrollerRef.value.scrollLeft = 0;
+  }
+  if (listOuterRef.value) {
+    listOuterRef.value.scrollLeft = 0;
+  }
+  if (gridScrollerRef.value) {
+    gridScrollerRef.value.scrollTop = 0;
+    gridScrollerRef.value.scrollLeft = 0;
+  }
+}
+
 async function refresh(): Promise<boolean> {
   const generation = ++refreshGeneration;
   loading.value = true;
@@ -316,6 +415,7 @@ async function refresh(): Promise<boolean> {
         defaultCollation: database.default_collation ?? null,
       }));
     loading.value = false;
+    restoreScrollPosition();
 
     // Name enumeration is cheap and should render immediately. Enrich the
     // rows separately because MySQL metadata calculates sizes by aggregating
@@ -358,6 +458,7 @@ function focusSearch(): boolean {
 
 function clearDatabaseSearch() {
   search.value = "";
+  scrollToTop();
   searchInput.value?.$el?.focus();
 }
 
@@ -368,12 +469,33 @@ watch(sortKeyOptions, (options) => {
   }
 });
 
+watch(
+  [listScrollerRef, gridScrollerRef, isListView],
+  () => {
+    restoreScrollPosition();
+  },
+  { flush: "post" },
+);
+
+watch(search, (next, prev) => {
+  if (next !== prev) {
+    scrollToTop();
+  }
+});
+
+watch([sortKey, sortDirection], () => {
+  scrollToTop();
+});
+
 let initialConnectionWatch = true;
 watch(
   () => props.connection.id,
   () => {
     if (initialConnectionWatch) initialConnectionWatch = false;
-    else search.value = "";
+    else {
+      search.value = "";
+      scrollToTop();
+    }
     void refresh();
   },
   { immediate: true },
@@ -383,7 +505,14 @@ useDatabaseBrowserMutation(({ connectionId }) => {
   if (connectionId === props.connection.id) void refresh();
 });
 
-onBeforeUnmount(() => stopColumnResize?.());
+onActivated(() => {
+  restoreScrollPosition();
+});
+
+onBeforeUnmount(() => {
+  stopColumnResize?.();
+  if (restoreScrollFrame) window.cancelAnimationFrame(restoreScrollFrame);
+});
 
 defineExpose({ focusSearch, refresh });
 </script>
@@ -467,7 +596,7 @@ defineExpose({ focusSearch, refresh });
     <div v-else-if="error" class="flex flex-1 items-center justify-center px-6 text-center text-sm text-destructive">{{ t("databaseBrowser.loadFailed", { message: error }) }}</div>
     <div v-else-if="visibleRows.length === 0" class="flex flex-1 items-center justify-center text-sm text-muted-foreground">{{ t("databaseBrowser.empty") }}</div>
     <div v-else class="flex min-h-0 min-w-0 flex-1">
-      <div v-if="isListView" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-hidden">
+      <div v-if="isListView" ref="listOuterRef" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-hidden" @scroll.passive="onListHorizontalScroll">
         <div class="relative grid h-7 shrink-0 items-center gap-3 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground" :style="{ gridTemplateColumns, minWidth: `${gridMinWidth}px` }">
           <div v-for="key in visibleColumns" :key="key" class="relative flex min-w-0 items-center">
             <button class="flex min-w-0 items-center gap-1 truncate pr-4 text-left" type="button" @click="toggleSort(key)">
@@ -499,7 +628,7 @@ defineExpose({ focusSearch, refresh });
             </PopoverContent>
           </Popover>
         </div>
-        <div class="min-h-0 flex-1 overflow-auto">
+        <div ref="listScrollerRef" class="min-h-0 flex-1 overflow-auto" @scroll.passive="onListVerticalScroll">
           <div
             v-for="row in visibleRows"
             :key="row.name"
@@ -526,7 +655,7 @@ defineExpose({ focusSearch, refresh });
           </div>
         </div>
       </div>
-      <div v-else class="grid min-h-0 flex-1 content-start overflow-auto" :class="isCompactView ? 'grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-1 p-1' : 'grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3 p-3'">
+      <div v-else ref="gridScrollerRef" class="grid min-h-0 flex-1 content-start overflow-auto" :class="isCompactView ? 'grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-1 p-1' : 'grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3 p-3'" @scroll.passive="onGridScroll">
         <div
           v-for="row in visibleRows"
           :key="row.name"
