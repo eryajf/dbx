@@ -174,6 +174,16 @@ describe.each(["list", "grid", "compact"] as const)("ObjectBrowser locate in sid
     await vi.waitFor(() => expect(table()?.textContent).toContain("objects.comment"));
   });
 
+  it("keeps the column picker clear of the trailing resize handle", async () => {
+    if (viewMode !== "list") return;
+    localStorage.setItem("dbx-object-browser-columns:v1:locate-connection:browser_database:browser_schema", JSON.stringify({ type: false }));
+
+    const host = await mountBrowser({ schema: "browser_schema" });
+    expect(host.querySelector('[title="objects.configureColumns"]')).not.toBeNull();
+    expect(host.querySelector('[data-object-column-resize="name"]')).not.toBeNull();
+    expect(host.querySelector('[data-object-column-resize="comment"]')).toBeNull();
+  });
+
   it("keeps the compact card icon and full-name tooltip", async () => {
     if (viewMode !== "compact") return;
     const host = await mountBrowser();

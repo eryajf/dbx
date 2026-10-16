@@ -475,6 +475,8 @@ defineExpose({ focusSearch, refresh });
               ><component :is="sortIconFor(key)" v-if="sortIconFor(key)" class="h-3 w-3 shrink-0" />
             </button>
             <div
+              v-if="visibleColumns[visibleColumns.length - 1] !== key"
+              :data-database-column-resize="key"
               class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
               @mousedown="onColumnResizeStart(key, $event)"
               @dblclick="resetColumnWidth(key, key === 'name' || key === 'comment' ? 260 : key === 'defaultCollation' ? 170 : key === 'defaultCharset' ? 130 : key === 'sizeBytes' ? 100 : 150, $event)"

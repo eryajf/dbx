@@ -740,6 +740,10 @@ const objectBrowserColumns = computed<ObjectBrowserColumnKey[]>(() => {
   for (const definition of objectColumnDefinitions.value) if (isObjectColumnVisible(definition.key)) columns.push(definition.key);
   return columns;
 });
+function isLastVisibleObjectColumn(key: ObjectBrowserColumnKey) {
+  const visibleColumns = objectBrowserColumns.value.filter((column) => column !== "select");
+  return visibleColumns[visibleColumns.length - 1] === key;
+}
 const gridTemplateColumns = computed(() => {
   return objectBrowserColumns.value
     .map((key, index, columns) => {
@@ -4781,7 +4785,13 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <span class="truncate">{{ t("objects.name") }}</span>
                   <component :is="sortIconFor('name')" v-if="sortIconFor('name')" class="h-3 w-3 shrink-0" />
                 </button>
-                <div class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary" @mousedown="onObjectColumnResizeStart('name', $event)" @dblclick="resetObjectColumnWidth('name', 260, $event)">
+                <div
+                  v-if="!isLastVisibleObjectColumn('name')"
+                  data-object-column-resize="name"
+                  class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
+                  @mousedown="onObjectColumnResizeStart('name', $event)"
+                  @dblclick="resetObjectColumnWidth('name', 260, $event)"
+                >
                   <GripVertical class="h-3 w-3" />
                 </div>
               </div>
@@ -4790,7 +4800,13 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <span class="truncate">{{ t("objects.type") }}</span>
                   <component :is="sortIconFor('type')" v-if="sortIconFor('type')" class="h-3 w-3 shrink-0" />
                 </button>
-                <div class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary" @mousedown="onObjectColumnResizeStart('type', $event)" @dblclick="resetObjectColumnWidth('type', 110, $event)">
+                <div
+                  v-if="!isLastVisibleObjectColumn('type')"
+                  data-object-column-resize="type"
+                  class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
+                  @mousedown="onObjectColumnResizeStart('type', $event)"
+                  @dblclick="resetObjectColumnWidth('type', 110, $event)"
+                >
                   <GripVertical class="h-3 w-3" />
                 </div>
               </div>
@@ -4800,6 +4816,8 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <component :is="sortIconFor('estimatedRows')" v-if="sortIconFor('estimatedRows')" class="h-3 w-3 shrink-0" />
                 </button>
                 <div
+                  v-if="!isLastVisibleObjectColumn('estimatedRows')"
+                  data-object-column-resize="estimatedRows"
                   class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
                   @mousedown="onObjectColumnResizeStart('estimatedRows', $event)"
                   @dblclick="resetObjectColumnWidth('estimatedRows', 110, $event)"
@@ -4813,6 +4831,8 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <component :is="sortIconFor('totalBytes')" v-if="sortIconFor('totalBytes')" class="h-3 w-3 shrink-0" />
                 </button>
                 <div
+                  v-if="!isLastVisibleObjectColumn('totalBytes')"
+                  data-object-column-resize="totalBytes"
                   class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
                   @mousedown="onObjectColumnResizeStart('totalBytes', $event)"
                   @dblclick="resetObjectColumnWidth('totalBytes', 100, $event)"
@@ -4826,6 +4846,8 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <component :is="sortIconFor('created_at')" v-if="sortIconFor('created_at')" class="h-3 w-3 shrink-0" />
                 </button>
                 <div
+                  v-if="!isLastVisibleObjectColumn('created_at')"
+                  data-object-column-resize="created_at"
                   class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
                   @mousedown="onObjectColumnResizeStart('created_at', $event)"
                   @dblclick="resetObjectColumnWidth('created_at', 150, $event)"
@@ -4839,6 +4861,8 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <component :is="sortIconFor('updated_at')" v-if="sortIconFor('updated_at')" class="h-3 w-3 shrink-0" />
                 </button>
                 <div
+                  v-if="!isLastVisibleObjectColumn('updated_at')"
+                  data-object-column-resize="updated_at"
                   class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
                   @mousedown="onObjectColumnResizeStart('updated_at', $event)"
                   @dblclick="resetObjectColumnWidth('updated_at', 150, $event)"
@@ -4852,6 +4876,8 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <component :is="sortIconFor('comment')" v-if="sortIconFor('comment')" class="h-3 w-3 shrink-0" />
                 </button>
                 <div
+                  v-if="!isLastVisibleObjectColumn('comment')"
+                  data-object-column-resize="comment"
                   class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
                   @mousedown="onObjectColumnResizeStart('comment', $event)"
                   @dblclick="resetObjectColumnWidth('comment', 260, $event)"
