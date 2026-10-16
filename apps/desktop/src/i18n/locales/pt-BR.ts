@@ -4902,6 +4902,8 @@ export default withEnglishFallback({
     valid: "Válido",
     invalid: "Inválido",
     refreshDiscardConfirm: "Atualizar descartará as modificações não salvas no código-fonte. Deseja continuar?",
+    viewCompact: "Visualização compacta em grade",
+    configureColumns: "Configurar colunas de exibição",
   },
   structureEditor: {
     mysqlDataTypeHelp: {
