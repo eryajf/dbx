@@ -5772,6 +5772,8 @@ export default {
     toggleCheckbox: "Toggle multi-select",
     viewList: "List view",
     viewGrid: "Grid view",
+    viewCompact: "Compact grid view",
+    configureColumns: "Configure columns",
     sortAsc: "Ascending",
     sortDesc: "Descending",
     sortBy: "Sort by",
