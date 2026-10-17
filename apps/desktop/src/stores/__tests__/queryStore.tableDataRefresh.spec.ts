@@ -98,16 +98,26 @@ describe("queryStore table data refresh", () => {
     const sql = `${baseSql} LIMIT 55${offset ? ` OFFSET ${offset}` : ""};`;
     const probeSql = `${baseSql} LIMIT 56 OFFSET ${offset};`;
     mocks.prepareQueryPaginationExecutionPlan.mockResolvedValue({ pageProbeSql: probeSql, useAgentResultSession: false });
-    mocks.executeMulti.mockResolvedValue([{
-      columns: ["id"], rows: Array.from({ length: returnedRows }, (_, index) => [offset + index + 1]),
-      affected_rows: 0, execution_time_ms: 1, has_more: false,
-    }]);
+    mocks.executeMulti.mockResolvedValue([
+      {
+        columns: ["id"],
+        rows: Array.from({ length: returnedRows }, (_, index) => [offset + index + 1]),
+        affected_rows: 0,
+        execution_time_ms: 1,
+        has_more: false,
+      },
+    ]);
 
     await store.executeTabSql(id, sql, { pagination: { limit: 55, offset } });
 
-    expect(mocks.prepareQueryPaginationExecutionPlan).toHaveBeenCalledWith(expect.objectContaining({
-      sql: baseSql, queryBaseSql: sql, pagination: { limit: 55, offset }, useAgentCursor: false,
-    }));
+    expect(mocks.prepareQueryPaginationExecutionPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sql: baseSql,
+        queryBaseSql: sql,
+        pagination: { limit: 55, offset },
+        useAgentCursor: false,
+      }),
+    );
     expect(mocks.executeMulti.mock.calls[0]?.[2]).toBe(probeSql);
     const tab = store.tabs.find((candidate) => candidate.id === id)!;
     expect(tab.result?.rows).toHaveLength(55);

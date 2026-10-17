@@ -13,13 +13,7 @@ describe("MySQL table data page probe", () => {
     expect(mysqlTablePageBaseSql(`${base} LIMIT 55;`, 55, 0)).toBe(base);
   });
 
-  it.each([
-    "SELECT * FROM apis LIMIT 54;",
-    "SELECT * FROM apis LIMIT 55 OFFSET 55;",
-    "SELECT * FROM apis LIMIT 55 FOR UPDATE;",
-    "SELECT * FROM apis LIMIT 55; SELECT 1;",
-    "SELECT * FROM apis WHERE note = 'LIMIT 55';",
-  ])("leaves unmatched bounds or unsupported suffixes unchanged: %s", (sql) => {
+  it.each(["SELECT * FROM apis LIMIT 54;", "SELECT * FROM apis LIMIT 55 OFFSET 55;", "SELECT * FROM apis LIMIT 55 FOR UPDATE;", "SELECT * FROM apis LIMIT 55; SELECT 1;", "SELECT * FROM apis WHERE note = 'LIMIT 55';"])("leaves unmatched bounds or unsupported suffixes unchanged: %s", (sql) => {
     expect(mysqlTablePageBaseSql(sql, 55, 0)).toBeUndefined();
   });
 });
