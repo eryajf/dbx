@@ -8579,7 +8579,7 @@ export const useQueryStore = defineStore("query", () => {
         }
         if (!plan.pageSql && !plan.useAgentResultSession && !sqlServerUseScript) {
           batchPagination = await prepareBatchQueryPagination(
-            { sql: sqlBeforePagination, queryBaseSql, databaseType: effectiveDbType, pagination, useAgentCursor },
+            { sql: sqlBeforePagination, queryBaseSql, databaseType: effectiveDbType, pagination, useAgentCursor, executionHint: effectiveDbType === "gaussdb" ? gaussdbCountQueryDopHint(conn) : undefined },
             api.prepareQueryPaginationExecutionPlan,
             sqlStatementParameterOptions,
             () => tab.executionId !== executionId || tab.isCancelling === true,
