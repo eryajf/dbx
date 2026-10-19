@@ -1,7 +1,8 @@
+import { sqlBlockCommentEnd } from "./sqlBlockComments";
 import { RangeSet, RangeValue, type ChangeSet, type Text } from "@codemirror/state";
 import type { DatabaseType } from "@/types/database";
-import { readSqlBracedParameterAt, type SqlParameterOptions } from "@/lib/sql/sqlParameters";
-import { executableStatementRanges, type SqlTextRange } from "@/lib/sql/sqlStatementRanges";
+import type { SqlParameterOptions } from "@/lib/sql/sqlParameters";
+import { executableStatementRanges, startsLineComment, type SqlTextRange } from "@/lib/sql/sqlStatementRanges";
 import { cursorBelongsToTrailingStatementDelimiter } from "@/lib/sql/statementDelimiter";
 
 export interface ExecutableStatementRangeCache {
@@ -102,21 +103,14 @@ function executableStartAfterLeadingDirective(sql: string, range: SqlTextRange, 
     while (/\s/.test(text[offset] ?? "")) offset += 1;
 
     if (text.startsWith("/*", offset)) {
-      const close = text.indexOf("*/", offset + 2);
+      const close = sqlBlockCommentEnd(text, offset, databaseType);
       if (close < 0) return null;
       offset = close + 2;
       continue;
     }
 
-    if (text.startsWith("--", offset)) {
-      const newline = text.indexOf("\n", offset + 2);
-      if (newline < 0) return null;
-      offset = newline + 1;
-      continue;
-    }
-
-    if (databaseType !== "sqlserver" && text[offset] === "#" && readSqlBracedParameterAt(sql, range.from + offset, parameterOptions)?.syntax !== "mybatis") {
-      const newline = text.indexOf("\n", offset + 1);
+    if (startsLineComment(sql, range.from + offset, databaseType, parameterOptions)) {
+      const newline = text.indexOf("\n", offset);
       if (newline < 0) return null;
       offset = newline + 1;
       continue;
@@ -137,8 +131,12 @@ export function executableStatementRangeAtCursor(cache: ExecutableStatementRange
   const line = cache.doc.lineAt(pos);
   const lineText = line.text.trim();
   const lineContentStart = line.from + line.text.search(/\S|$/);
-  const startsHashComment = lineText.startsWith("#") && readSqlBracedParameterAt(cache.doc.toString(), lineContentStart, cache.parameterOptions)?.syntax !== "mybatis";
-  if (!lineText || lineText.startsWith("--") || startsHashComment || isCursorOnLeadingBlockComment(line.text, pos - line.from)) return null;
+  // Only a potentially multiline MyBatis placeholder needs the whole document.
+  // Ordinary cursor movement must not flatten a large document on every lookup.
+  const needsDocument = lineText.startsWith("#{");
+  const commentSource = needsDocument ? cache.doc.toString() : line.text;
+  const commentOffset = needsDocument ? lineContentStart : lineContentStart - line.from;
+  if (!lineText || startsLineComment(commentSource, commentOffset, cache.databaseType, cache.parameterOptions) || isCursorOnLeadingBlockComment(line.text, pos - line.from, cache.databaseType)) return null;
 
   for (let index = 0; index < cache.ranges.length; index += 1) {
     const range = cache.ranges[index];
@@ -158,11 +156,11 @@ export function executableStatementRangeAtCursor(cache: ExecutableStatementRange
   return null;
 }
 
-function isCursorOnLeadingBlockComment(lineText: string, lineOffset: number): boolean {
+function isCursorOnLeadingBlockComment(lineText: string, lineOffset: number, databaseType?: DatabaseType): boolean {
   const commentStart = lineText.search(/\S/);
   if (commentStart < 0 || !lineText.startsWith("/*", commentStart)) return false;
 
-  const commentEnd = lineText.indexOf("*/", commentStart + 2);
+  const commentEnd = sqlBlockCommentEnd(lineText, commentStart, databaseType);
   if (commentEnd < 0) return true;
   const afterComment = lineText.slice(commentEnd + 2);
   if (!afterComment.trim()) return true;

@@ -13,7 +13,8 @@ import { createStatementGutterMarkerDom } from "@/lib/editor/codemirrorStatement
 import { compareSqlCompletions } from "@/lib/editor/sqlCompletionPresentation";
 import { currentStatementFrameLayer } from "@/lib/editor/codemirrorCurrentStatementFrameLayer";
 import { createSqlAliasHighlights } from "@/lib/editor/codemirrorSqlAliasHighlights";
-import { createDbxCodeMirrorSqlDialect, supportsQueryEditorSqlLanguage } from "@/lib/editor/codemirrorSqlDialect";
+import { createDbxCodeMirrorSqlDialect, sqlRegionDialectSpec, supportsQueryEditorSqlLanguage } from "@/lib/editor/codemirrorSqlDialect";
+import { sqlRegionDialect } from "@/lib/editor/sqlRegionFoldRanges";
 import { sqlSemanticTableNameSpansForSyntaxTree } from "@/lib/editor/codemirrorSqlSemanticHighlight";
 import { queryEditorCommentTokens, queryEditorLineCommentToken, queryEditorWordLanguageData } from "@/lib/editor/queryEditorLineComment";
 import { createShellLineCommentHighlight } from "@/lib/editor/codemirrorShellLineCommentHighlight";
@@ -331,19 +332,19 @@ export function configureQueryEditorSqlExtensions(options: QueryEditorSqlExtensi
 
   const shellLineCommentHighlightPlugin = createShellLineCommentHighlight({ ViewPlugin, Decoration, highlightingFor, syntaxTree });
 
-  codeMirrorRuntime.buildSqlLanguageExtension = () => [
-    supportsQueryEditorSqlLanguage(props.databaseType)
-      ? langSql.sql({
-          dialect: createDbxCodeMirrorSqlDialect(langSql, props.syntaxDialect ?? props.dialect, props.databaseType, sqlDriverProfile.value),
-        })
-      : [],
-    // Non-SQL editors (MongoDB shell) keep the SQL grammar for highlighting, so override the
-    // comment marker that toggleLineComment reads from language data.
-    Prec.highest(EditorState.languageData.of(() => [{ commentTokens: queryEditorCommentTokens(props.databaseType) }])),
-    Prec.highest(EditorState.languageData.of(() => queryEditorWordLanguageData(props.databaseType))),
-    // The SQL grammar does not tokenize `//`, so those comments are highlighted by hand.
-    queryEditorLineCommentToken(props.databaseType) === "//" ? shellLineCommentHighlightPlugin : [],
-  ];
+  codeMirrorRuntime.buildSqlLanguageExtension = () => {
+    const dialect = createDbxCodeMirrorSqlDialect(langSql, props.syntaxDialect ?? props.dialect, props.databaseType, sqlDriverProfile.value);
+    return [
+      sqlRegionDialect.of(sqlRegionDialectSpec(dialect, props.syntaxDialect ?? props.dialect, props.databaseType)),
+      supportsQueryEditorSqlLanguage(props.databaseType) ? langSql.sql({ dialect }) : [],
+      // Non-SQL editors (MongoDB shell) keep the SQL grammar for highlighting, so override the
+      // comment marker that toggleLineComment reads from language data.
+      Prec.highest(EditorState.languageData.of(() => [{ commentTokens: queryEditorCommentTokens(props.databaseType) }])),
+      Prec.highest(EditorState.languageData.of(() => queryEditorWordLanguageData(props.databaseType))),
+      // The SQL grammar does not tokenize `//`, so those comments are highlighted by hand.
+      queryEditorLineCommentToken(props.databaseType) === "//" ? shellLineCommentHighlightPlugin : [],
+    ];
+  };
 
   const MAX_SQL_SEMANTIC_HIGHLIGHT_WINDOWS = 32;
 
