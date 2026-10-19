@@ -5190,6 +5190,7 @@ export default withEnglishFallback({
     invalid: "inválido",
     refreshDiscardConfirm: "Actualizar descartará los cambios sin guardar en el código fuente, ¿deseas continuar?",
     viewCompact: "Vista de cuadrícula compacta",
+    compactCardWidth: "Ancho mínimo de tarjeta compacta",
     configureColumns: "Configurar columnas de visualización",
   },
   structureEditor: {
