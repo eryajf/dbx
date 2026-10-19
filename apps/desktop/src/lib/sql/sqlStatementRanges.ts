@@ -2103,7 +2103,15 @@ const MYSQL_ROUTINE_WORD_RE = /[A-Za-z_][\w$]*/y;
  * rely on this being resumable so they only re-scan the newly typed suffix instead
  * of the whole prefix from scratch every time.
  */
-function mysqlRoutineTokens(sql: string, parameterOptions?: SqlParameterOptions, fromIndex = 0, toIndex = sql.length, initialState: MysqlRoutineLexState = "none", databaseType?: DatabaseType, initialBlockDepth = 0): { tokens: MysqlRoutineToken[]; endState: MysqlRoutineLexState; blockDepth: number } {
+function mysqlRoutineTokens(
+  sql: string,
+  parameterOptions?: SqlParameterOptions,
+  fromIndex = 0,
+  toIndex = sql.length,
+  initialState: MysqlRoutineLexState = "none",
+  databaseType?: DatabaseType,
+  initialBlockDepth = 0,
+): { tokens: MysqlRoutineToken[]; endState: MysqlRoutineLexState; blockDepth: number } {
   const tokens: MysqlRoutineToken[] = [];
   let state: MysqlRoutineLexState = initialState;
   let blockDepth = initialBlockDepth;

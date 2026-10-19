@@ -80,7 +80,7 @@ export function sqlRegionFoldRanges(state: EditorState): Map<number, FoldRange> 
       continue;
     }
 
-    for (let index = 0; index < line.length; ) {
+    for (let index = 0; index < line.length;) {
       const ch = line[index];
       const next = line[index + 1];
       if (literalEnd) {
