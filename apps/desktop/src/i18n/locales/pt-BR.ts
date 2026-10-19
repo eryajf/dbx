@@ -11501,7 +11501,8 @@ export default withEnglishFallback({
     recheckKey: "Verificar a chave novamente",
     resetEntry: "Não consegue recuperar a chave original? Manter configurações e redefinir credenciais",
     resetTitle: "Manter configurações e redefinir credenciais",
-    resetImpact: "Serão excluídos {count} registros criptografados, que podem incluir senhas de bancos de dados, credenciais SSH/proxy, tokens de plugins, chaves de IA, credenciais de sincronização e outros dados de autenticação local. Alguns parâmetros de conexão também podem estar criptografados.",
+    resetImpact:
+      "Serão excluídos {count} registros criptografados, que podem incluir senhas de bancos de dados, credenciais SSH/proxy, tokens de plugins, chaves de IA, credenciais de sincronização e outros dados de autenticação local. Alguns parâmetros de conexão também podem estar criptografados.",
     resetPreserves: "Conexões, grupos, SQL, histórico e outras configurações não sensíveis serão mantidos. As credenciais precisarão ser inseridas novamente; alguns dados de autenticação local poderão ser regenerados automaticamente.",
     resetBackupWarning: "Primeiro será feito um backup do banco de dados atual; se o backup falhar, a redefinição será interrompida. O backup preserva os dados antigos, mas não substitui a chave perdida nem recupera as senhas originais.",
     resetAcknowledgement: "Confirmo que não consigo recuperar a chave original e entendo que as credenciais salvas precisam ser configuradas novamente.",

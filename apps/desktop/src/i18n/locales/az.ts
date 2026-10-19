@@ -10841,7 +10841,8 @@ export default withEnglishFallback({
     recheckKey: "Açarı yenidən yoxla",
     resetEntry: "İlkin açarı bərpa edə bilmirsiniz? Parametrləri saxla və kimlik məlumatlarını sıfırla",
     resetTitle: "Parametrləri saxla və kimlik məlumatlarını sıfırla",
-    resetImpact: "{count} şifrəli qeyd silinəcək. Bunlara verilənlər bazası parolları, SSH/proksi kimlik məlumatları, plagin tokenləri, süni intellekt açarları, sinxronizasiya kimlik məlumatları və digər yerli autentifikasiya məlumatları daxil ola bilər. Bəzi bağlantı parametrləri də şifrələnmiş ola bilər.",
+    resetImpact:
+      "{count} şifrəli qeyd silinəcək. Bunlara verilənlər bazası parolları, SSH/proksi kimlik məlumatları, plagin tokenləri, süni intellekt açarları, sinxronizasiya kimlik məlumatları və digər yerli autentifikasiya məlumatları daxil ola bilər. Bəzi bağlantı parametrləri də şifrələnmiş ola bilər.",
     resetPreserves: "Bağlantılar, qruplar, SQL, tarixçə və digər həssas olmayan parametrlər saxlanılacaq. Kimlik məlumatları yenidən daxil edilməlidir; bəzi yerli autentifikasiya məlumatları avtomatik yenidən yaradıla bilər.",
     resetBackupWarning: "Əvvəlcə cari verilənlər bazasının ehtiyat nüsxəsi yaradılacaq; bu uğursuz olarsa, sıfırlama dayandırılacaq. Ehtiyat nüsxə köhnə məlumatları saxlayır, lakin itirilmiş açarı əvəz edə və ya ilkin parolları bərpa edə bilməz.",
     resetAcknowledgement: "İlkin açarı bərpa edə bilmədiyimi təsdiqləyirəm və saxlanmış kimlik məlumatlarının yenidən konfiqurasiya edilməli olduğunu anlayıram.",

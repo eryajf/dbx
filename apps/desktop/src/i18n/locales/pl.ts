@@ -11751,7 +11751,8 @@ export default withEnglishFallback({
     recheckKey: "Sprawdź klucz ponownie",
     resetEntry: "Nie możesz odzyskać oryginalnego klucza? Zachowaj ustawienia i zresetuj dane uwierzytelniające",
     resetTitle: "Zachowaj ustawienia i zresetuj dane uwierzytelniające",
-    resetImpact: "Liczba zaszyfrowanych rekordów do usunięcia: {count}. Mogą one zawierać hasła baz danych, dane uwierzytelniające SSH/proxy, tokeny wtyczek, klucze AI, dane uwierzytelniające synchronizacji i inne lokalne dane uwierzytelniające. Niektóre parametry połączeń również mogą być zaszyfrowane.",
+    resetImpact:
+      "Liczba zaszyfrowanych rekordów do usunięcia: {count}. Mogą one zawierać hasła baz danych, dane uwierzytelniające SSH/proxy, tokeny wtyczek, klucze AI, dane uwierzytelniające synchronizacji i inne lokalne dane uwierzytelniające. Niektóre parametry połączeń również mogą być zaszyfrowane.",
     resetPreserves: "Połączenia, grupy, SQL, historia i inne ustawienia niebędące danymi poufnymi zostaną zachowane. Dane uwierzytelniające trzeba będzie wprowadzić ponownie; część lokalnych danych uwierzytelniających może zostać wygenerowana automatycznie.",
     resetBackupWarning: "Najpierw zostanie utworzona kopia zapasowa bieżącej bazy danych; niepowodzenie zatrzyma resetowanie. Kopia zachowuje stare dane, ale nie zastępuje utraconego klucza ani nie odzyskuje oryginalnych haseł.",
     resetAcknowledgement: "Potwierdzam, że nie mogę odzyskać oryginalnego klucza i rozumiem, że zapisane dane uwierzytelniające wymagają ponownej konfiguracji.",

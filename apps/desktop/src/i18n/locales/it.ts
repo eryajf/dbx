@@ -11505,7 +11505,8 @@ export default withEnglishFallback({
     recheckKey: "Verifica di nuovo la chiave",
     resetEntry: "Non riesci a recuperare la chiave originale? Mantieni le impostazioni e reimposta le credenziali",
     resetTitle: "Mantieni le impostazioni e reimposta le credenziali",
-    resetImpact: "Verranno eliminati {count} record crittografati, che potrebbero includere password dei database, credenziali SSH/proxy, token dei plugin, chiavi IA, credenziali di sincronizzazione e altri dati di autenticazione locale. Anche alcuni parametri di connessione potrebbero essere crittografati.",
+    resetImpact:
+      "Verranno eliminati {count} record crittografati, che potrebbero includere password dei database, credenziali SSH/proxy, token dei plugin, chiavi IA, credenziali di sincronizzazione e altri dati di autenticazione locale. Anche alcuni parametri di connessione potrebbero essere crittografati.",
     resetPreserves: "Connessioni, gruppi, SQL, cronologia e altre impostazioni non sensibili verranno mantenuti. Le credenziali dovranno essere inserite di nuovo; alcuni dati di autenticazione locale potrebbero essere rigenerati automaticamente.",
     resetBackupWarning: "Verrà prima eseguito il backup del database corrente; se il backup fallisce, la reimpostazione si interrompe. Il backup conserva i vecchi dati ma non può sostituire la chiave persa né recuperare le password originali.",
     resetAcknowledgement: "Confermo di non poter recuperare la chiave originale e comprendo che le credenziali salvate devono essere configurate di nuovo.",

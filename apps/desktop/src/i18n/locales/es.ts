@@ -11941,7 +11941,8 @@ export default withEnglishFallback({
     recheckKey: "Comprobar la clave de nuevo",
     resetEntry: "¿No puede recuperar la clave original? Conservar la configuración y restablecer las credenciales",
     resetTitle: "Conservar la configuración y restablecer las credenciales",
-    resetImpact: "Se eliminarán {count} registros cifrados, que pueden incluir contraseñas de bases de datos, credenciales SSH/proxy, tokens de complementos, claves de IA, credenciales de sincronización y otros datos de autenticación local. Algunos parámetros de conexión también pueden estar cifrados.",
+    resetImpact:
+      "Se eliminarán {count} registros cifrados, que pueden incluir contraseñas de bases de datos, credenciales SSH/proxy, tokens de complementos, claves de IA, credenciales de sincronización y otros datos de autenticación local. Algunos parámetros de conexión también pueden estar cifrados.",
     resetPreserves: "Se conservarán las conexiones, los grupos, el SQL, el historial y otros ajustes no sensibles. Deberá volver a introducir las credenciales; algunos datos de autenticación local pueden regenerarse automáticamente.",
     resetBackupWarning: "Primero se creará una copia de seguridad de la base de datos actual; si falla, se detendrá el restablecimiento. La copia conserva los datos antiguos, pero no puede sustituir la clave perdida ni recuperar las contraseñas originales.",
     resetAcknowledgement: "Confirmo que no puedo recuperar la clave original y entiendo que debo volver a configurar las credenciales guardadas.",
