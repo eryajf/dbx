@@ -31,6 +31,8 @@ import {
   FileText,
   Info,
   GripVertical,
+  Grid3X3,
+  Settings2,
   KeyRound,
   LayoutGrid,
   Link2,
@@ -44,6 +46,7 @@ import {
   PencilRuler,
   Play,
   Package,
+  PanelRight,
   RefreshCw,
   RotateCcw,
   Scissors,
@@ -99,9 +102,21 @@ import {
   supportsTruncateTableCascade,
   type TableAdminSqlOptions,
 } from "@/lib/database/dbAdminSql";
+import type { DuplicateTableStructurePlan } from "@/lib/database/dbAdminSql";
+import { executeOceanbaseTableClone, executeOceanbaseTableCloneData, oceanbaseCloneDataPreparationError, OceanbaseTableCloneError, type OceanbaseTableClone } from "@/lib/database/oceanbaseTableClone";
+import { useOceanbaseCloneDialog } from "@/composables/useOceanbaseCloneDialog";
 import { useToast } from "@/composables/useToast";
 import { buildExecutableObjectSourceStatements, buildRoutineRenameObjectSourceStatements, executeObjectSourceSave, formatObjectSourceSaveError, supportsSourceBackedRoutineRename } from "@/lib/table/objectSourceEditor";
+import { assertSourceIdentity, beginSourceSave, captureSourceIdentity, freezeSourceIdentities, renewSourceIdentity, type SourceIdentitySnapshot } from "@/lib/table/objectSourceIdentity";
 import { buildRenameObjectSql, supportsObjectRename } from "@/lib/table/objectRenameSql";
+import { prepareOracleViewRename, executeOracleViewRename, OracleViewRenameFailure, type OracleViewRenamePlan } from "@/lib/table/oracleViewRename";
+import OracleViewRenamePreview from "@/components/objects/OracleViewRenamePreview.vue";
+import { prepareOracleRoutineRename, executeOracleRoutineRename, OracleRoutineRenameFailure, type OracleRoutineRenamePlan } from "@/lib/table/oracleRoutineRename";
+import { prepareOracleTableRename, executeOracleTableRename, OracleTableRenameFailure, type OracleTableRenamePlan } from "@/lib/table/oracleTableRename";
+import OracleTableRenamePreview from "@/components/objects/OracleTableRenamePreview.vue";
+import OracleRoutineRenamePreview from "@/components/objects/OracleRoutineRenamePreview.vue";
+import OraclePackageSaveAsDialog from "@/components/objects/OraclePackageSaveAsDialog.vue";
+import { executeOraclePackageSaveAs, OraclePackageSaveAsFailure, prepareOraclePackageSaveAs, type OraclePackageSaveAsPlan } from "@/lib/table/oraclePackageSaveAs";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { autoRevealExportedPathIfConfigured, promptExportSavePath } from "@/lib/export/exportPath";
 import { generateDatabaseExportId } from "@/lib/export/databaseExport";
@@ -185,6 +200,7 @@ import { invalidateObjectDdl } from "@/lib/metadata/objectDdlCache";
 import { invalidateObjectBrowserRowsCache } from "@/lib/table/objectBrowserRowsCache";
 import { eventEditorInstanceKey, resolveInitialEventEditorRequest } from "@/lib/table/eventEditorRequest";
 import { createLocateTabMenuItem } from "@/lib/tabs/tabMenu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type ObjectFilter = ObjectBrowserFilter;
 type ObjectBrowserColumnKey = "select" | "name" | "type" | "estimatedRows" | "totalBytes" | "created_at" | "updated_at" | "comment";
@@ -216,6 +232,8 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+const cloneDialog = useOceanbaseCloneDialog(t);
+const { state: cloneDialogState, open: cloneDialogOpen } = cloneDialog;
 const { toast } = useToast();
 const { highlight } = useSqlHighlighter();
 const connectionStore = useConnectionStore();
@@ -259,6 +277,7 @@ const compileErrorMessage = ref("");
 const sidePanelRow = ref<ObjectBrowserRow | null>(null);
 const openedInitialEvent = ref("");
 const isEventEditor = computed(() => sidePanelMode.value === "event-editor");
+const isSidePanelOpen = computed(() => !!sidePanelRow.value || isEventEditor.value);
 const sidePanelMode = ref<"table-info" | "source" | "type-info" | "event-editor">("source");
 const eventEditorKey = computed(() =>
   eventEditorInstanceKey({
@@ -368,6 +387,25 @@ const renameTarget = ref<ObjectBrowserRow | null>(null);
 const renameInput = ref("");
 const renameError = ref("");
 const renamePreviewSqlText = ref("");
+const viewRenamePlan = ref<OracleViewRenamePlan>();
+const viewRenameDrafts = ref<Record<string, string>>({});
+const routineRenamePlan = ref<OracleRoutineRenamePlan>();
+const routineRenameDrafts = ref<Record<string, string>>({});
+const tableRenamePlan = ref<OracleTableRenamePlan>();
+const tableRenameDrafts = ref<Record<string, string>>({});
+const packageSaveAsOpen = ref(false);
+const packageSaveAsTarget = ref<ObjectBrowserRow | null>(null);
+const packageSaveAsName = ref("");
+const packageSaveAsPlan = ref<OraclePackageSaveAsPlan>();
+const packageSaveAsDrafts = ref<{ spec?: string; body?: string }>({});
+const packageSaveAsLoading = ref(false);
+const packageSaveAsValidating = ref(false);
+const packageSaveAsExecuting = ref(false);
+const packageSaveAsError = ref("");
+const packageSaveAsDiagnostic = ref("");
+const viewRenameLoading = ref(false);
+const viewRenameValidating = ref(false);
+const viewRenameExecuting = ref(false);
 const showTruncateConfirm = ref(false);
 const truncateTarget = ref<ObjectBrowserRow | null>(null);
 const truncatePreviewSql = ref("");
@@ -388,6 +426,7 @@ const showProcedureExecutionConfirm = ref(false);
 const procedureExecutionTarget = ref<ObjectBrowserRow | null>(null);
 const selectedTableIds = ref<Set<string>>(new Set());
 const tableSelectionAnchorId = ref<string | null>(null);
+const selectedRowId = ref<string | null>(null);
 const expandedPartitionParentIds = ref<Set<string>>(new Set());
 const showBatchDropConfirm = ref(false);
 const batchDropExecuting = ref(false);
@@ -403,6 +442,7 @@ const batchEmptyPlan = ref<BatchTableEmptyPlanItem<ObjectBrowserRow>[]>([]);
 const showPasteDialog = ref(false);
 const pasteTableMode = ref<PasteTableMode>("structure-and-data");
 const pasteTableEntries = ref<{ sourceName: string; targetName: string; schema?: string; tableComment?: string | null }[]>([]);
+const pasteTableFromClipboard = ref(false);
 const pasteTableDataCopySupported = computed(() => supportsWholeRowTableDataCopy(effectiveDatabaseType.value));
 const objectColumnWidths = ref<Record<ObjectBrowserColumnKey, number>>({
   select: 34,
@@ -414,6 +454,35 @@ const objectColumnWidths = ref<Record<ObjectBrowserColumnKey, number>>({
   updated_at: 150,
   comment: 260,
 });
+const objectColumnVisibility = ref<Partial<Record<ObjectBrowserColumnKey, boolean>>>({});
+const objectColumnVisibilityStorageKey = computed(() => `dbx-object-browser-columns:v1:${props.connection.id}:${props.database}:${selectedSchema.value ?? ""}`);
+const objectColumnDefinitions = computed(() => [
+  { key: "name" as const, label: t("objects.name") },
+  { key: "type" as const, label: t("objects.type") },
+  ...(showObjectRowStats.value ? [{ key: "estimatedRows" as const, label: objectRowsLabel.value }] : []),
+  ...(showObjectSizeStats.value ? [{ key: "totalBytes" as const, label: t("objects.size") }] : []),
+  ...(hasCreatedAt.value ? [{ key: "created_at" as const, label: t("objects.createdAt") }] : []),
+  ...(hasUpdatedAt.value ? [{ key: "updated_at" as const, label: t("objects.updatedAt") }] : []),
+  { key: "comment" as const, label: t("objects.comment") },
+]);
+function isObjectColumnVisible(key: ObjectBrowserColumnKey) {
+  return key === "name" || objectColumnVisibility.value[key] !== false;
+}
+function toggleObjectColumnVisibility(key: ObjectBrowserColumnKey) {
+  if (key === "name") return;
+  objectColumnVisibility.value = { ...objectColumnVisibility.value, [key]: !isObjectColumnVisible(key) };
+  localStorage.setItem(objectColumnVisibilityStorageKey.value, JSON.stringify(objectColumnVisibility.value));
+  nextTick(() => syncObjectListHeaderScroll());
+}
+function loadObjectColumnVisibility() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(objectColumnVisibilityStorageKey.value) || "{}");
+    if (saved && typeof saved === "object") objectColumnVisibility.value = saved;
+  } catch {
+    objectColumnVisibility.value = {};
+  }
+}
+watch(objectColumnVisibilityStorageKey, loadObjectColumnVisibility, { immediate: true });
 const objectBrowserRowsLoadGuard = createObjectBrowserRowsLoadGuard();
 // schema 列表的失效只跟随上下文（连接/库/schema 变化、卸载），不跟随对象列表加载：
 // loadObjects() 会推进 objectBrowserRowsLoadGuard 的 epoch，若两者共用一个 epoch，
@@ -477,12 +546,16 @@ const { tier: toolbarTier } = useToolbarOverflow(toolbarRef, [() => props.databa
 const showToolbarOverflow = computed(() => toolbarTier.value >= 1);
 const showInlineSortAndView = computed(() => toolbarTier.value < 1);
 const showInlineCheckboxToggle = computed(() => toolbarTier.value < 1);
+const showInlineSidePanelToggle = computed(() => toolbarTier.value < 1);
 const showInlineObjectFilter = computed(() => toolbarTier.value < 2);
 const showDatabaseChip = computed(() => toolbarTier.value < 2);
 const hasCreatedAt = computed(() => rows.value.some((row) => row.created_at?.trim()));
 const hasUpdatedAt = computed(() => rows.value.some((row) => row.updated_at?.trim()));
 const hasAnyComment = computed(() => rows.value.some((row) => row.comment?.trim()));
-const isListView = computed(() => settingsStore.editorSettings.objectBrowserViewMode !== "grid");
+const viewMode = computed<ObjectBrowserViewMode>(() => settingsStore.editorSettings.objectBrowserViewMode);
+const isListView = computed(() => viewMode.value === "list");
+const isGridView = computed(() => viewMode.value === "grid");
+const isCompactView = computed(() => viewMode.value === "compact");
 
 type ObjectBrowserScroller =
   | HTMLElement
@@ -502,7 +575,7 @@ let viewportFrame = 0;
 let restoreViewportFrame = 0;
 
 function objectBrowserViewMode(): ObjectBrowserViewMode {
-  return isListView.value ? "list" : "grid";
+  return viewMode.value;
 }
 
 function activeScroller() {
@@ -609,7 +682,7 @@ onActivated(() => {
   restoreObjectBrowserViewport();
 });
 
-function setViewMode(mode: "list" | "grid") {
+function setViewMode(mode: ObjectBrowserViewMode) {
   settingsStore.updateEditorSettings({ objectBrowserViewMode: mode });
   scrollObjectsToTop();
 }
@@ -668,14 +741,13 @@ function toggleCheckboxColumn() {
 const objectBrowserColumns = computed<ObjectBrowserColumnKey[]>(() => {
   const columns: ObjectBrowserColumnKey[] = [];
   if (showCheckboxColumn.value) columns.push("select");
-  columns.push("name", "type");
-  if (showObjectRowStats.value) columns.push("estimatedRows");
-  if (showObjectSizeStats.value) columns.push("totalBytes");
-  if (hasCreatedAt.value) columns.push("created_at");
-  if (hasUpdatedAt.value) columns.push("updated_at");
-  columns.push("comment");
+  for (const definition of objectColumnDefinitions.value) if (isObjectColumnVisible(definition.key)) columns.push(definition.key);
   return columns;
 });
+function isLastVisibleObjectColumn(key: ObjectBrowserColumnKey) {
+  const visibleColumns = objectBrowserColumns.value.filter((column) => column !== "select");
+  return visibleColumns[visibleColumns.length - 1] === key;
+}
 const gridTemplateColumns = computed(() => {
   return objectBrowserColumns.value
     .map((key, index, columns) => {
@@ -697,7 +769,7 @@ const filteredRows = computed(() => groupedRows.value.rows);
 function partitionRowDepth(row: ObjectBrowserRow): number {
   return groupedRows.value.depths.get(row.id) ?? 0;
 }
-const selectableRows = computed(() => rows.value.filter((row) => row.type === "TABLE"));
+const selectableRows = computed(() => rows.value);
 
 // ---- Grid (tile) view virtualization ----
 // The grid view chunks filteredRows into fixed-height rows and hands them to
@@ -705,7 +777,9 @@ const selectableRows = computed(() => rows.value.filter((row) => row.type === "T
 // The previous flat `v-for` rendered every card (plus its CustomContextMenu)
 // at once, which stalls the UI on schemas with thousands of objects.
 const OBJECT_GRID_MIN_CARD_WIDTH = 160; // former `minmax(160px, 1fr)` floor
+const OBJECT_COMPACT_MIN_CARD_WIDTH = 128;
 const OBJECT_GRID_GAP = 12; // 0.75rem, former grid gap (both axes)
+const OBJECT_COMPACT_GAP = 4;
 // Card height is dataset-stable: if any object has timestamps/comments, every card
 // reserves those slots (even when empty) so borders stay level across a row.
 // objectGridRowHeight adapts to the dataset instead of always using the worst case.
@@ -719,6 +793,7 @@ const OBJECT_GRID_CARD_COMMENT_H = 19;
 const OBJECT_GRID_CARD_SAFETY = 6; // buffer for sub-pixel font differences
 
 const objectGridRowHeight = computed(() => {
+  if (isCompactView.value) return 28 + OBJECT_COMPACT_GAP;
   let cardH = OBJECT_GRID_CARD_BASE_H;
   if (hasCreatedAt.value || hasUpdatedAt.value) cardH += OBJECT_GRID_CARD_TIMESTAMP_H;
   if (hasAnyComment.value) cardH += OBJECT_GRID_CARD_COMMENT_H;
@@ -729,7 +804,9 @@ const gridColumns = ref(1);
 let gridResizeObserver: ResizeObserver | null = null;
 
 function recomputeGridColumns(width: number) {
-  gridColumns.value = Math.max(1, Math.floor((width + OBJECT_GRID_GAP) / (OBJECT_GRID_MIN_CARD_WIDTH + OBJECT_GRID_GAP)));
+  const minWidth = isCompactView.value ? OBJECT_COMPACT_MIN_CARD_WIDTH : OBJECT_GRID_MIN_CARD_WIDTH;
+  const gap = isCompactView.value ? OBJECT_COMPACT_GAP : OBJECT_GRID_GAP;
+  gridColumns.value = Math.max(1, Math.floor((width + gap) / (minWidth + gap)));
 }
 
 // The grid container lives inside a v-else, so it mounts/unmounts when the user
@@ -755,6 +832,12 @@ watch(
   },
   { flush: "post" },
 );
+watch(viewMode, () =>
+  nextTick(() => {
+    const el = gridContainerRef.value;
+    if (el) recomputeGridColumns(el.clientWidth - parseFloat(getComputedStyle(el).paddingLeft) - parseFloat(getComputedStyle(el).paddingRight));
+  }),
+);
 
 onBeforeUnmount(() => {
   gridResizeObserver?.disconnect();
@@ -778,12 +861,15 @@ const gridRows = computed(() => {
   }
   return rows;
 });
-const visibleSelectableRows = computed(() => filteredRows.value.filter((row) => row.type === "TABLE"));
+const visibleSelectableRows = computed(() => filteredRows.value);
 const selectedTableRows = computed(() => {
   const ids = selectedTableIds.value;
   return selectableRows.value.filter((row) => ids.has(row.id));
 });
 const selectedTableCount = computed(() => selectedTableRows.value.length);
+const hasSelectedTablesOnly = computed(() => selectedTableRows.value.length > 0 && selectedTableRows.value.every((row) => row.type === "TABLE"));
+const batchDropConfirmTitle = computed(() => (hasSelectedTablesOnly.value ? t("objects.confirmBatchDropTitle") : t("contextMenu.confirmBatchDropTitle")));
+const batchDropConfirmMessage = computed(() => (hasSelectedTablesOnly.value ? t("objects.confirmBatchDropMessage", { count: selectedTableCount.value }) : t("contextMenu.confirmBatchDropMessage", { count: selectedTableCount.value })));
 const canBatchDropCascade = computed(() => selectedTableCount.value > 0 && supportsDropTableCascade(effectiveDatabaseType.value));
 const canBatchTruncateCascade = computed(() => selectedTableCount.value > 0 && supportsTruncateTableCascade(effectiveDatabaseType.value));
 
@@ -1036,7 +1122,11 @@ function togglePartitionParent(row: ObjectBrowserRow) {
 }
 
 function canRename(row: ObjectBrowserRow) {
-  return supportsObjectRename(effectiveDatabaseType.value, row.type) || supportsSourceBackedRoutineRename(effectiveDatabaseType.value, row.type as ObjectSourceKind);
+  return (
+    supportsObjectRename(effectiveDatabaseType.value, row.type) ||
+    ((effectiveDatabaseType.value === "oracle" || effectiveDatabaseType.value === "oceanbase-oracle") && (row.type === "PROCEDURE" || row.type === "FUNCTION")) ||
+    supportsSourceBackedRoutineRename(effectiveDatabaseType.value, row.type as ObjectSourceKind)
+  );
 }
 
 function sourceTitle(row: ObjectBrowserRow | null) {
@@ -1079,15 +1169,16 @@ function selectTableRangeFromAnchor(row: ObjectBrowserRow) {
 }
 
 function onRowClick(row: ObjectBrowserRow, event: MouseEvent) {
-  if (row.type === "TABLE" && event.shiftKey) {
+  selectedRowId.value = row.id;
+  if (event.shiftKey) {
     selectTableRangeFromAnchor(row);
     return;
   }
-  if (row.type === "TABLE" && (event.metaKey || event.ctrlKey)) {
+  if (event.metaKey || event.ctrlKey) {
     toggleTableSelectionWithAnchor(row);
     return;
   }
-  if (row.type === "TABLE") tableSelectionAnchorId.value = row.id;
+  tableSelectionAnchorId.value = row.id;
   const activation = settingsStore.editorSettings.sidebarActivation;
   const { action, isDouble } = resolveRowClickAction(row, event.detail, activation, effectiveDatabaseType.value);
   // Double click: cancel any pending single-click and fire immediately. When
@@ -1099,9 +1190,13 @@ function onRowClick(row: ObjectBrowserRow, event: MouseEvent) {
       clearTimeout(singleClickTimer);
       singleClickTimer = null;
     }
-    if (action !== singleClickRowAction(row, effectiveDatabaseType.value)) {
+    const firstClickRan = settingsStore.editorSettings.objectBrowserAutoOpenDetailPanel !== false || isSidePanelOpen.value;
+    if (!firstClickRan || action !== singleClickRowAction(row, effectiveDatabaseType.value)) {
       executeRowAction(row, action);
     }
+    return;
+  }
+  if (settingsStore.editorSettings.objectBrowserAutoOpenDetailPanel === false && !isSidePanelOpen.value) {
     return;
   }
   // Single click: defer when the row has a distinct double-click action so a
@@ -1217,13 +1312,18 @@ const filteredTableDdlContent = computed(() => {
 });
 
 async function openTableInfo(row: ObjectBrowserRow, initialTab?: TableInfoTab) {
+  selectedRowId.value = row.id;
   // Toggle off if clicking the same table
   if (sidePanelRow.value?.id === row.id && sidePanelMode.value === "table-info" && !initialTab) {
+    if (settingsStore.editorSettings.objectBrowserAutoOpenDetailPanel === false) {
+      return;
+    }
     closeSidePanel();
     return;
   }
   sidePanelRow.value = row;
   sidePanelMode.value = "table-info";
+  sourceRow.value = null;
   const epoch = sidePanelGuard.start();
   // Reset state
   tableColumns.value = [];
@@ -1611,23 +1711,56 @@ function onSidePanelResizeEnd() {
 
 function closeSidePanel() {
   sidePanelRow.value = null;
+  sourceRow.value = null;
   sidePanelMode.value = "source";
   sidePanelGuard.bump();
 }
 
+function toggleSidePanel() {
+  if (isSidePanelOpen.value) {
+    if (selectedRowId.value && sidePanelRow.value && sidePanelRow.value.id !== selectedRowId.value) {
+      const targetRow = filteredRows.value.find((r) => r.id === selectedRowId.value);
+      if (targetRow) {
+        executeRowAction(targetRow, singleClickRowAction(targetRow, effectiveDatabaseType.value));
+        return;
+      }
+    }
+    closeSidePanel();
+  } else {
+    const targetRow = (selectedRowId.value ? filteredRows.value.find((r) => r.id === selectedRowId.value) : null) ?? filteredRows.value[0];
+    if (targetRow) {
+      selectedRowId.value = targetRow.id;
+      executeRowAction(targetRow, singleClickRowAction(targetRow, effectiveDatabaseType.value));
+    }
+  }
+}
+
+function toggleAutoOpenDetailPanel() {
+  settingsStore.updateEditorSettings({
+    objectBrowserAutoOpenDetailPanel: settingsStore.editorSettings.objectBrowserAutoOpenDetailPanel === false,
+  });
+}
+
 async function openTypeInfo(row: ObjectBrowserRow) {
+  selectedRowId.value = row.id;
   if (sidePanelRow.value?.id === row.id && sidePanelMode.value === "type-info") {
+    if (settingsStore.editorSettings.objectBrowserAutoOpenDetailPanel === false) {
+      return;
+    }
     closeSidePanel();
     return;
   }
   sidePanelRow.value = row;
   sidePanelMode.value = "type-info";
+  sourceRow.value = null;
   sidePanelGuard.bump();
 }
 
 function openTypeDdl(row: ObjectBrowserRow) {
+  selectedRowId.value = row.id;
   sidePanelRow.value = row;
   sidePanelMode.value = "type-info";
+  sourceRow.value = null;
   sidePanelGuard.bump();
   // DDL tab is selected by the panel once details load; switching the tab is
   // deferred via a dedicated request so the panel can focus it.
@@ -1666,13 +1799,19 @@ function openSourceTab(row: ObjectBrowserRow) {
 async function openSource(row: ObjectBrowserRow) {
   // Toggle off if clicking the same source row
   if (sidePanelRow.value?.id === row.id && sidePanelMode.value === "source") {
+    if (settingsStore.editorSettings.objectBrowserAutoOpenDetailPanel === false) {
+      return;
+    }
     closeSidePanel();
     return;
   }
   await loadSourcePanel(row);
 }
 
+let sourceIdentity: SourceIdentitySnapshot | undefined;
+
 async function loadSourcePanel(row: ObjectBrowserRow, options?: { preserveEditing?: boolean }) {
+  selectedRowId.value = row.id;
   // Starting a different object must invalidate slower source requests before
   // any state is reset, otherwise an old response can populate the new row.
   const epoch = sidePanelGuard.start();
@@ -1696,6 +1835,8 @@ async function loadSourcePanel(row: ObjectBrowserRow, options?: { preserveEditin
   const connectionId = props.connection.id;
   const database = props.database;
   const schema = row.schema || selectedSchema.value || database;
+  const identity = captureSourceIdentity({ connectionId, database, schema, objectType: row.type, name: row.name });
+  sourceIdentity = undefined;
   try {
     const result = await sidePanelGuard.wait(epoch, api.getObjectSource(connectionId, database, schema, row.name, row.type as ObjectSourceKind, row.signature ?? undefined), metadataLoadBudgetMs(props.connection.query_timeout_secs));
     if (sidePanelGuard.isStale(epoch)) return;
@@ -1716,6 +1857,7 @@ async function loadSourcePanel(row: ObjectBrowserRow, options?: { preserveEditin
     if (sidePanelGuard.isStale(epoch)) return;
     // Viewing database source must preserve its original whitespace and comments;
     // formatting remains an explicit editor action instead of altering it on open.
+    sourceIdentity = renewSourceIdentity(identity);
     sourceEditableText.value = editable;
     sourceContent.value = row.type === "SEQUENCE" ? result.source : editable;
     sourceDraft.value = editable;
@@ -1741,6 +1883,7 @@ async function refreshActiveSource() {
 }
 
 function openEventEditor(row: ObjectBrowserRow) {
+  selectedRowId.value = row.id;
   sidePanelGuard.start();
   sidePanelRow.value = row;
   sourceRow.value = null;
@@ -1816,14 +1959,189 @@ function requestDrop(row: ObjectBrowserRow) {
 }
 
 function requestRename(row: ObjectBrowserRow) {
+  const nextTargetKey = JSON.stringify([props.connection.id, props.database, effectiveDatabaseType.value, row.schema || selectedSchema.value || props.database, row.type, row.name]);
+  const sameTarget = nextTargetKey === currentViewRenameTargetKey;
   renameTarget.value = row;
-  renameInput.value = row.name;
+  if (!sameTarget) renameInput.value = row.name;
   renameError.value = "";
   renamePreviewSqlText.value = "";
+  viewRenamePlan.value = undefined;
+  routineRenamePlan.value = undefined;
+  tableRenamePlan.value = undefined;
+  if (!sameTarget) {
+    viewRenameDrafts.value = {};
+    routineRenameDrafts.value = {};
+    tableRenameDrafts.value = {};
+  }
   showRenameDialog.value = true;
 }
 
+function requestPackageSaveAs(row: ObjectBrowserRow) {
+  if ((effectiveDatabaseType.value !== "oracle" && effectiveDatabaseType.value !== "oceanbase-oracle") || (row.type !== "PACKAGE" && row.type !== "PACKAGE_BODY")) return;
+  const sourceKey = JSON.stringify([props.connection.id, props.database, effectiveDatabaseType.value, row.schema || selectedSchema.value || props.database, row.name]);
+  const sameTarget = sourceKey === currentPackageSaveAsSourceKey;
+  currentPackageSaveAsSourceKey = sourceKey;
+  packageSaveAsTarget.value = row;
+  if (!sameTarget) {
+    packageSaveAsName.value = `${row.name}_COPY`;
+    packageSaveAsDrafts.value = {};
+  }
+  packageSaveAsPlan.value = undefined;
+  packageSaveAsError.value = "";
+  packageSaveAsDiagnostic.value = "";
+  packageSaveAsOpen.value = true;
+}
+
+let currentPackageSaveAsSourceKey = "";
+let packageSaveAsRequestId = 0;
+watch([packageSaveAsOpen, packageSaveAsTarget, packageSaveAsName, () => props.connection.id, () => props.database, selectedSchema, effectiveDatabaseType], (_value, _oldValue, onCleanup) => {
+  const requestId = ++packageSaveAsRequestId;
+  const row = packageSaveAsTarget.value;
+  const sourceKey = row ? JSON.stringify([props.connection.id, props.database, effectiveDatabaseType.value, row.schema || selectedSchema.value || props.database, row.name]) : "";
+  if (sourceKey && sourceKey !== currentPackageSaveAsSourceKey) {
+    currentPackageSaveAsSourceKey = sourceKey;
+    packageSaveAsDrafts.value = {};
+  }
+  const newName = packageSaveAsName.value.trim();
+  packageSaveAsPlan.value = undefined;
+  packageSaveAsError.value = "";
+  packageSaveAsDiagnostic.value = "";
+  if (!packageSaveAsOpen.value || !row || !newName || newName === row.name || !props.connection.id || !props.database || (effectiveDatabaseType.value !== "oracle" && effectiveDatabaseType.value !== "oceanbase-oracle")) return;
+  const timer = setTimeout(async () => {
+    packageSaveAsLoading.value = true;
+    try {
+      const plan = await prepareOraclePackageSaveAs(
+        {
+          connectionId: props.connection.id,
+          database: props.database,
+          databaseType: effectiveDatabaseType.value as "oracle" | "oceanbase-oracle",
+          schema: row.schema || selectedSchema.value || props.database,
+          oldName: row.name,
+          newName,
+        },
+        { ...packageSaveAsDrafts.value },
+      );
+      if (requestId === packageSaveAsRequestId) packageSaveAsPlan.value = plan;
+    } catch (error) {
+      if (requestId === packageSaveAsRequestId) packageSaveAsDiagnostic.value = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (requestId === packageSaveAsRequestId) packageSaveAsLoading.value = false;
+    }
+  }, 250);
+  onCleanup(() => clearTimeout(timer));
+});
+
+async function confirmPackageSaveAs() {
+  const row = packageSaveAsTarget.value;
+  const plan = packageSaveAsPlan.value;
+  if (!row || !plan || !plan.executable || !packageSaveAsOpen.value) return;
+  const schema = row.schema || selectedSchema.value || props.database;
+  if (plan.target.newName !== packageSaveAsName.value.trim() || plan.target.oldName !== row.name || plan.target.schema !== schema || plan.target.connectionId !== props.connection.id || plan.target.database !== props.database) {
+    packageSaveAsError.value = t("objects.packageSaveAsMetadataProblem");
+    return;
+  }
+  packageSaveAsExecuting.value = true;
+  packageSaveAsError.value = "";
+  packageSaveAsDiagnostic.value = "";
+  const isCurrentPlan = () => {
+    const currentRow = packageSaveAsTarget.value;
+    return (
+      packageSaveAsOpen.value &&
+      packageSaveAsPlan.value === plan &&
+      !!currentRow &&
+      currentRow.name === plan.target.oldName &&
+      props.connection.id === plan.target.connectionId &&
+      props.database === plan.target.database &&
+      (currentRow.schema || selectedSchema.value || props.database) === plan.target.schema &&
+      effectiveDatabaseType.value === plan.target.databaseType &&
+      packageSaveAsName.value.trim() === plan.target.newName
+    );
+  };
+  try {
+    const executed = await executeObjectBrowserSqlWithProductionGuard(plan.statements.join("\n\n"), async () => {
+      await executeOraclePackageSaveAs(
+        plan,
+        () =>
+          packageSaveAsPlan.value === plan &&
+          packageSaveAsOpen.value &&
+          packageSaveAsTarget.value?.name === plan.target.oldName &&
+          props.connection.id === plan.target.connectionId &&
+          props.database === plan.target.database &&
+          (row.schema || selectedSchema.value || props.database) === plan.target.schema,
+      );
+      return true;
+    });
+    if (!executed) return;
+    toast(t("objects.packageSaveAsSuccess", { oldName: row.name, newName: plan.canonicalNewName }));
+    packageSaveAsOpen.value = false;
+    await reload();
+    await connectionStore.refreshObjectListTreeNode(props.connection.id, props.database, schema);
+  } catch (error) {
+    if (isCurrentPlan()) {
+      packageSaveAsError.value = t("objects.packageSaveAsFailed");
+      packageSaveAsDiagnostic.value = error instanceof Error ? error.message : String(error);
+      packageSaveAsPlan.value = { ...plan, executable: false };
+    }
+    if (error instanceof OraclePackageSaveAsFailure && error.dispatched) {
+      try {
+        await connectionStore.refreshObjectListTreeNode(plan.target.connectionId, plan.target.database, plan.target.schema);
+        if (props.connection.id === plan.target.connectionId && props.database === plan.target.database && (packageSaveAsTarget.value?.schema || selectedSchema.value || props.database) === plan.target.schema) await reload();
+      } catch {
+        // Keep the package DDL failure visible when metadata refresh also fails.
+      }
+    }
+  } finally {
+    packageSaveAsExecuting.value = false;
+  }
+}
+
+function editPackageSaveAsDraft(part: "spec" | "body", source: string) {
+  packageSaveAsDrafts.value = { ...packageSaveAsDrafts.value, [part]: source };
+  ++packageSaveAsRequestId;
+  if (packageSaveAsPlan.value) packageSaveAsPlan.value = { ...packageSaveAsPlan.value, executable: false };
+}
+
+async function validatePackageSaveAsDrafts() {
+  if (packageSaveAsPlan.value) packageSaveAsPlan.value = { ...packageSaveAsPlan.value, executable: false };
+  packageSaveAsError.value = "";
+  packageSaveAsDiagnostic.value = "";
+  packageSaveAsValidating.value = true;
+  try {
+    const row = packageSaveAsTarget.value;
+    const newName = packageSaveAsName.value.trim();
+    if (!row || !newName) return;
+    const requestId = ++packageSaveAsRequestId;
+    const drafts = { ...packageSaveAsDrafts.value };
+    const targetKey = JSON.stringify([props.connection.id, props.database, effectiveDatabaseType.value, row.schema || selectedSchema.value || props.database, row.name, newName]);
+    const plan = await prepareOraclePackageSaveAs(
+      {
+        connectionId: props.connection.id,
+        database: props.database,
+        databaseType: effectiveDatabaseType.value as "oracle" | "oceanbase-oracle",
+        schema: row.schema || selectedSchema.value || props.database,
+        oldName: row.name,
+        newName,
+      },
+      drafts,
+    );
+    if (
+      requestId === packageSaveAsRequestId &&
+      packageSaveAsOpen.value &&
+      packageSaveAsTarget.value === row &&
+      packageSaveAsName.value.trim() === newName &&
+      targetKey === JSON.stringify([props.connection.id, props.database, effectiveDatabaseType.value, row.schema || selectedSchema.value || props.database, row.name, packageSaveAsName.value.trim()]) &&
+      JSON.stringify(packageSaveAsDrafts.value) === JSON.stringify(drafts)
+    )
+      packageSaveAsPlan.value = plan;
+  } catch (error) {
+    packageSaveAsDiagnostic.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    packageSaveAsValidating.value = false;
+  }
+}
+
 let renamePreviewRequestId = 0;
+let currentViewRenameTargetKey = "";
 
 async function refreshRenamePreviewSql() {
   const requestId = ++renamePreviewRequestId;
@@ -1831,13 +2149,77 @@ async function refreshRenamePreviewSql() {
   const newName = renameInput.value.trim();
   if (!showRenameDialog.value || !row || !newName || newName === row.name) {
     renamePreviewSqlText.value = "";
+    viewRenamePlan.value = undefined;
+    routineRenamePlan.value = undefined;
+    tableRenamePlan.value = undefined;
+    return;
+  }
+  if ((effectiveDatabaseType.value === "oracle" || effectiveDatabaseType.value === "oceanbase-oracle") && (row.type === "PROCEDURE" || row.type === "FUNCTION")) {
+    const targetKey = JSON.stringify([props.connection.id, props.database, effectiveDatabaseType.value, row.schema || selectedSchema.value || props.database, row.type, row.name, newName]);
+    const drafts = { ...routineRenameDrafts.value };
+    viewRenameLoading.value = true;
+    try {
+      const plan = await prepareOracleRoutineRename(
+        {
+          connectionId: props.connection.id,
+          database: props.database,
+          databaseType: effectiveDatabaseType.value as "oracle" | "oceanbase-oracle",
+          schema: row.schema || selectedSchema.value || props.database,
+          objectType: row.type,
+          oldName: row.name,
+          newName,
+        },
+        drafts,
+      );
+      if (
+        requestId === renamePreviewRequestId &&
+        showRenameDialog.value &&
+        renameTarget.value === row &&
+        targetKey === JSON.stringify([props.connection.id, props.database, effectiveDatabaseType.value, row.schema || selectedSchema.value || props.database, row.type, row.name, renameInput.value.trim()]) &&
+        JSON.stringify(drafts) === JSON.stringify(routineRenameDrafts.value)
+      ) {
+        routineRenamePlan.value = plan;
+        renameError.value = "";
+        renamePreviewSqlText.value = plan.statements.join("\n\n");
+      }
+    } catch (error) {
+      if (requestId === renamePreviewRequestId) renameError.value = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (requestId === renamePreviewRequestId) viewRenameLoading.value = false;
+    }
     return;
   }
   if (supportsSourceBackedRoutineRename(effectiveDatabaseType.value, row.type as ObjectSourceKind)) {
-    renamePreviewSqlText.value = `-- Recreate ${row.type} from source, then drop the original object.`;
+    renamePreviewSqlText.value = t("objects.routineRenamePreview");
+    return;
+  }
+  if ((effectiveDatabaseType.value === "oracle" || effectiveDatabaseType.value === "oceanbase-oracle") && row.type === "TABLE") {
+    viewRenameLoading.value = true;
+    try {
+      const plan = await prepareOracleTableRename({ connectionId: props.connection.id, database: props.database, databaseType: effectiveDatabaseType.value, schema: row.schema || selectedSchema.value || props.database, oldName: row.name, newName }, tableRenameDrafts.value);
+      if (requestId === renamePreviewRequestId) {
+        tableRenamePlan.value = plan;
+        renameError.value = "";
+        renamePreviewSqlText.value = `-- ${t("objects.tableRenameCoverage")}\n\n${plan.statements.join("\n\n")}`;
+      }
+    } catch (error) {
+      if (requestId === renamePreviewRequestId) renameError.value = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (requestId === renamePreviewRequestId) viewRenameLoading.value = false;
+    }
     return;
   }
   try {
+    if (effectiveDatabaseType.value === "oceanbase-oracle" && row.type === "VIEW") {
+      viewRenameLoading.value = true;
+      const plan = await prepareOracleViewRename({ connectionId: props.connection.id, database: props.database, schema: row.schema || selectedSchema.value || props.database, oldName: row.name, newName }, viewRenameDrafts.value);
+      if (requestId === renamePreviewRequestId) {
+        viewRenamePlan.value = plan;
+        renameError.value = "";
+        renamePreviewSqlText.value = `-- ${t("objects.viewRenameCoverage")}\n\n${plan.statements.join("\n\n")}`;
+      }
+      return;
+    }
     const sql = await buildRenameObjectSql({
       databaseType: effectiveDatabaseType.value,
       objectType: row.type,
@@ -1846,26 +2228,145 @@ async function refreshRenamePreviewSql() {
       newName,
     });
     if (requestId === renamePreviewRequestId) renamePreviewSqlText.value = sql;
-  } catch {
-    if (requestId === renamePreviewRequestId) renamePreviewSqlText.value = "";
+  } catch (error) {
+    if (requestId === renamePreviewRequestId) {
+      renamePreviewSqlText.value = "";
+      if (effectiveDatabaseType.value === "oceanbase-oracle" && row.type === "VIEW") renameError.value = error instanceof Error ? error.message : String(error);
+    }
+  } finally {
+    if (requestId === renamePreviewRequestId) viewRenameLoading.value = false;
   }
 }
 
-watch([showRenameDialog, renameTarget, renameInput, selectedSchema], () => {
-  void refreshRenamePreviewSql();
+function editViewRenameDraft(name: string, source: string) {
+  viewRenameDrafts.value = { ...viewRenameDrafts.value, [name]: source };
+  if (viewRenamePlan.value) viewRenamePlan.value = { ...viewRenamePlan.value, executable: false };
+}
+
+function editTableRenameDraft(name: string, source: string) {
+  tableRenameDrafts.value = { ...tableRenameDrafts.value, [name]: source };
+  if (tableRenamePlan.value) tableRenamePlan.value = { ...tableRenamePlan.value, executable: false };
+}
+
+function editRoutineRenameDraft(name: string, source: string) {
+  routineRenameDrafts.value = { ...routineRenameDrafts.value, [name]: source };
+  ++renamePreviewRequestId;
+  if (routineRenamePlan.value) routineRenamePlan.value = { ...routineRenamePlan.value, executable: false };
+}
+
+async function validateRoutineRenameDrafts() {
+  if (routineRenamePlan.value) routineRenamePlan.value = { ...routineRenamePlan.value, executable: false };
+  viewRenameValidating.value = true;
+  try {
+    await refreshRenamePreviewSql();
+  } finally {
+    viewRenameValidating.value = false;
+  }
+}
+
+async function validateTableRenameDrafts(clearDrafts = false) {
+  if (clearDrafts) tableRenameDrafts.value = {};
+  viewRenameValidating.value = true;
+  try {
+    await refreshRenamePreviewSql();
+  } finally {
+    viewRenameValidating.value = false;
+  }
+}
+
+async function validateViewRenameDrafts(clearDrafts = false) {
+  const row = renameTarget.value;
+  if (!row) return;
+  if (clearDrafts) viewRenameDrafts.value = {};
+  viewRenameValidating.value = true;
+  try {
+    await refreshRenamePreviewSql();
+  } finally {
+    viewRenameValidating.value = false;
+  }
+}
+
+watch([showRenameDialog, renameTarget, renameInput, selectedSchema, () => props.connection.id, () => props.database], (_value, _oldValue, onCleanup) => {
+  ++renamePreviewRequestId;
+  const row = renameTarget.value;
+  const targetKey = row && (row.type === "VIEW" || row.type === "PROCEDURE" || row.type === "FUNCTION" || row.type === "TABLE") ? JSON.stringify([props.connection.id, props.database, effectiveDatabaseType.value, row.schema || selectedSchema.value || props.database, row.type, row.name]) : "";
+  if (targetKey !== currentViewRenameTargetKey) {
+    currentViewRenameTargetKey = targetKey;
+    viewRenameDrafts.value = {};
+    viewRenamePlan.value = undefined;
+    routineRenamePlan.value = undefined;
+    tableRenamePlan.value = undefined;
+    routineRenameDrafts.value = {};
+    tableRenameDrafts.value = {};
+  } else if (viewRenamePlan.value) viewRenamePlan.value = { ...viewRenamePlan.value, executable: false };
+  if (routineRenamePlan.value) routineRenamePlan.value = { ...routineRenamePlan.value, executable: false };
+  if ((effectiveDatabaseType.value !== "oracle" && effectiveDatabaseType.value !== "oceanbase-oracle") || (renameTarget.value?.type !== "VIEW" && renameTarget.value?.type !== "PROCEDURE" && renameTarget.value?.type !== "FUNCTION" && renameTarget.value?.type !== "TABLE")) {
+    viewRenamePlan.value = undefined;
+    routineRenamePlan.value = undefined;
+    tableRenamePlan.value = undefined;
+    void refreshRenamePreviewSql();
+    return;
+  }
+  const timer = setTimeout(() => void refreshRenamePreviewSql(), 250);
+  onCleanup(() => clearTimeout(timer));
 });
 
 async function confirmRename() {
   const row = renameTarget.value;
-  const newName = renameInput.value.trim();
+  let newName = renameInput.value.trim();
   if (!row || !newName || newName === row.name) return;
   renameError.value = "";
   const oldPinnedNode = pinnedTreeNodeForObjectBrowserRow(row);
   const oldLegacyPinnedNodes = legacyPinnedTreeNodesForObjectBrowserRow(row);
   let renameApplied = false;
+  let updatedViewDependencies: number | undefined;
+  let updatedTableDependencies: number | undefined;
+  let tableRenameFreeze: ReturnType<typeof freezeSourceIdentities> | undefined;
   try {
     const schema = row.schema || selectedSchema.value || props.database;
-    if (supportsSourceBackedRoutineRename(effectiveDatabaseType.value, row.type as ObjectSourceKind)) {
+    if (row.type === "TABLE" && effectiveDatabaseType.value === "dameng") {
+      tableRenameFreeze = freezeSourceIdentities([{ connectionId: props.connection.id, database: props.database, schema, objectType: "TABLE", name: row.name }]);
+    }
+    if ((effectiveDatabaseType.value === "oracle" || effectiveDatabaseType.value === "oceanbase-oracle") && row.type === "TABLE") {
+      const plan = tableRenamePlan.value;
+      if (!plan || plan.target.newName !== newName || plan.target.oldName !== row.name || plan.target.schema !== schema || plan.target.connectionId !== props.connection.id || plan.target.database !== props.database) throw new Error(t("objects.viewRenameRefresh"));
+      if (!plan.executable) throw new Error(t("objects.viewRenameValidationPending"));
+      viewRenameExecuting.value = true;
+      const executed = await executeObjectBrowserSqlWithProductionGuard(plan.statements.join("\n\n"), async () => {
+        await executeOracleTableRename(
+          plan,
+          tableRenameDrafts.value,
+          () => tableRenamePlan.value === plan && showRenameDialog.value && props.connection.id === plan.target.connectionId && props.database === plan.target.database && (row.schema || selectedSchema.value || props.database) === plan.target.schema,
+        );
+        return true;
+      });
+      if (!executed) return;
+      newName = plan.canonicalNewName;
+      updatedTableDependencies = plan.dependents.length;
+    } else if (effectiveDatabaseType.value === "oceanbase-oracle" && row.type === "VIEW") {
+      const plan = viewRenamePlan.value;
+      if (!plan || plan.target.newName !== newName || plan.target.oldName !== row.name || plan.target.schema !== schema || plan.target.connectionId !== props.connection.id || plan.target.database !== props.database) throw new Error(t("objects.viewRenameRefresh"));
+      if (!plan.executable) throw new Error(t("objects.viewRenameValidationPending"));
+      viewRenameExecuting.value = true;
+      const executed = await executeObjectBrowserSqlWithProductionGuard(plan.statements.join("\n"), async () => {
+        await executeOracleViewRename(plan, () => viewRenamePlan.value === plan && showRenameDialog.value && props.connection.id === plan.target.connectionId && props.database === plan.target.database && (row.schema || selectedSchema.value || props.database) === plan.target.schema);
+        return true;
+      });
+      if (!executed) return;
+      newName = plan.canonicalNewName;
+      updatedViewDependencies = plan.views.length - 1;
+    } else if ((effectiveDatabaseType.value === "oracle" || effectiveDatabaseType.value === "oceanbase-oracle") && (row.type === "PROCEDURE" || row.type === "FUNCTION")) {
+      const plan = routineRenamePlan.value;
+      if (!plan || plan.target.newName !== newName || plan.target.oldName !== row.name || plan.target.schema !== schema || plan.target.connectionId !== props.connection.id || plan.target.database !== props.database) throw new Error(t("objects.viewRenameRefresh"));
+      if (!plan.executable) throw new Error(t("objects.viewRenameValidationPending"));
+      viewRenameExecuting.value = true;
+      const executed = await executeObjectBrowserSqlWithProductionGuard(plan.statements.join("\n\n"), async () => {
+        await executeOracleRoutineRename(plan, () => routineRenamePlan.value === plan && showRenameDialog.value && props.connection.id === plan.target.connectionId && props.database === plan.target.database && (row.schema || selectedSchema.value || props.database) === plan.target.schema);
+        return true;
+      });
+      if (!executed) return;
+      newName = plan.canonicalNewName;
+    } else if (supportsSourceBackedRoutineRename(effectiveDatabaseType.value, row.type as ObjectSourceKind)) {
       const source = await api.getObjectSource(props.connection.id, props.database, schema, row.name, row.type as ObjectSourceKind, row.signature ?? undefined);
       const statements = await buildRoutineRenameObjectSourceStatements({
         databaseType: effectiveDatabaseType.value,
@@ -1890,11 +2391,20 @@ async function confirmRename() {
         oldName: row.name,
         newName,
       });
-      const executed = await executeObjectBrowserSqlWithProductionGuard(sql, () => api.executeQuery(props.connection.id, props.database, sql, schema));
+      const executed = await executeObjectBrowserSqlWithProductionGuard(sql, () => {
+        tableRenameFreeze?.markDispatched();
+        return api.executeQuery(props.connection.id, props.database, sql, schema);
+      });
       if (!executed) return;
     }
     renameApplied = true;
-    toast(t("contextMenu.renameObjectSuccess", { oldName: row.name, newName }));
+    toast(
+      updatedTableDependencies !== undefined
+        ? t("objects.tableRenameSuccess", { oldName: row.name, newName, count: updatedTableDependencies })
+        : updatedViewDependencies === undefined
+          ? t("contextMenu.renameObjectSuccess", { oldName: row.name, newName })
+          : t("objects.viewRenameSuccess", { oldName: row.name, newName, count: updatedViewDependencies }),
+    );
     showRenameDialog.value = false;
     if (sourceRow.value?.id === row.id) closeSource();
     const renamedTarget = { ...oldPinnedNode, label: newName, objectName: newName, tableName: newName };
@@ -1914,12 +2424,30 @@ async function confirmRename() {
       connectionStore.removePinnedTreeNodes([oldPinnedNode, ...oldLegacyPinnedNodes], canonicalizeObjectBrowserPinnedIdentity);
     }
   } catch (e: any) {
+    if (e instanceof OracleViewRenameFailure) {
+      connectionStore.removePinnedTreeNodes([oldPinnedNode, ...oldLegacyPinnedNodes], canonicalizeObjectBrowserPinnedIdentity);
+      renamePreviewSqlText.value += `\n\n-- ${t("objects.viewRenameRecovery")}\n${e.plan.views.map((view) => view.source).join("\n\n")}`;
+    }
+    if (e instanceof OracleRoutineRenameFailure) {
+      renameError.value = e.message;
+      if (routineRenamePlan.value) routineRenamePlan.value = { ...routineRenamePlan.value, executable: false };
+    }
+    if (e instanceof OracleTableRenameFailure) {
+      renameError.value = e.message;
+      if (tableRenamePlan.value) tableRenamePlan.value = { ...tableRenamePlan.value, executable: false };
+      if (e.completed.some((step) => step.startsWith("TABLE "))) connectionStore.removePinnedTreeNodes([oldPinnedNode, ...oldLegacyPinnedNodes], canonicalizeObjectBrowserPinnedIdentity);
+    }
+    if (viewRenamePlan.value) viewRenamePlan.value = { ...viewRenamePlan.value, executable: false, issues: [...viewRenamePlan.value.issues, { code: "metadata_drift", message: e?.message || String(e), repairable: false }] };
     if (renameApplied) {
       // The database mutation succeeded even when metadata refresh did not;
       // remove the old pin instead of allowing it to revive later.
       connectionStore.removePinnedTreeNodes([oldPinnedNode, ...oldLegacyPinnedNodes], canonicalizeObjectBrowserPinnedIdentity);
     }
     renameError.value = e?.message || String(e);
+  } finally {
+    tableRenameFreeze?.cancel();
+    tableRenameFreeze?.finish();
+    viewRenameExecuting.value = false;
   }
 }
 
@@ -2136,7 +2664,6 @@ function setSelectedTableIds(ids: Set<string>) {
 }
 
 function toggleTableSelection(row: ObjectBrowserRow) {
-  if (row.type !== "TABLE") return;
   const next = new Set(selectedTableIds.value);
   if (next.has(row.id)) {
     next.delete(row.id);
@@ -2175,7 +2702,7 @@ async function fetchSortedTableRowsForDrop(): Promise<ObjectBrowserRow[]> {
   const rows = [...selectedTableRows.value];
   if (rows.length <= 1) return rows;
 
-  const fkResults = await Promise.all(rows.map((row) => api.listForeignKeys(props.connection.id, props.database, row.schema || selectedSchema.value || "", row.name, props.catalog).catch(() => [] as ForeignKeyInfo[])));
+  const fkResults = await Promise.all(rows.map((row) => (row.type === "TABLE" ? api.listForeignKeys(props.connection.id, props.database, row.schema || selectedSchema.value || "", row.name, props.catalog).catch(() => [] as ForeignKeyInfo[]) : Promise.resolve([] as ForeignKeyInfo[]))));
 
   const tablesWithFk: TableWithFk[] = rows.map((row, i) => ({
     name: row.name,
@@ -2193,7 +2720,7 @@ async function refreshBatchDropPreviewSql() {
   const sortedRows = await fetchSortedTableRowsForDrop();
   const useCascade = canBatchDropCascade.value && batchDropCascade.value;
   for (const row of sortedRows) {
-    const sql = await buildDropTableSql(tableAdminSqlOptions(row, { cascade: useCascade })).catch(() => "");
+    const sql = await buildDropSqlForRow(row, { cascade: useCascade }).catch(() => "");
     if (sql) statements.push(sql);
   }
   batchDropPreviewSql.value = statements.join("\n");
@@ -2223,7 +2750,7 @@ async function confirmBatchDropTables() {
     const plan = await Promise.all(
       targets.map(async (target) => ({
         target,
-        sql: await buildDropTableSql(tableAdminSqlOptions(target, { cascade: useCascade })),
+        sql: await buildDropSqlForRow(target, { cascade: useCascade }),
       })),
     );
     batchSql = plan.map(({ sql }) => sql).join(";\n");
@@ -2260,7 +2787,7 @@ async function confirmBatchDropTables() {
     }
 
     if (result.failed) throw result.failed;
-    toast(t("objects.batchDropSuccess", { count: result.succeeded.length }));
+    toast(hasSelectedTablesOnly.value ? t("objects.batchDropSuccess", { count: result.succeeded.length }) : t("contextMenu.batchDropSuccess", { count: result.succeeded.length }));
   } catch (e: any) {
     if (!batchDropRecorded && batchSql) {
       await recordTableMutationHistory(getTableMutationHistoryStoreOrNull(), {
@@ -2667,45 +3194,91 @@ async function exportTableData(row: ObjectBrowserRow, format: "csv" | "xlsx" | "
   }
 }
 
-function requestDuplicateStructure(row: ObjectBrowserRow) {
-  duplicateTarget.value = row;
-  duplicateTableName.value = `${row.name}_copy`;
-  showDuplicateDialog.value = true;
+function requestCopyAsNewTable(row: ObjectBrowserRow) {
+  pasteTableFromClipboard.value = false;
+  pasteTableMode.value = defaultPasteTableMode(effectiveDatabaseType.value);
+  pasteTableEntries.value = [
+    {
+      sourceName: row.name,
+      targetName: `${row.name}_copy`,
+      schema: normalizeObjectBrowserTableClipboardSchema(row.schema || selectedSchema.value),
+      tableComment: row.comment,
+    },
+  ];
+  showPasteDialog.value = true;
 }
 
-async function buildDuplicateStructurePlan(sourceName: string, targetName: string, schema: string | undefined, tableComment?: string | null, sourceColumns?: ColumnInfo[]) {
-  return buildSharedDuplicateTableStructurePlan({
-    connectionId: props.connection.id,
+function captureTableCopyContext() {
+  return {
+    connection: { ...props.connection },
     database: props.database,
     catalog: props.catalog,
+    schema: selectedSchema.value,
     databaseType: effectiveDatabaseType.value,
+    identifierQuote: connectionStore.connectionIdentifierQuote?.(props.connection.id),
+  };
+}
+
+type TableCopyContext = ReturnType<typeof captureTableCopyContext>;
+
+function reloadTableCopyContext(context: TableCopyContext) {
+  if (props.connection.id === context.connection.id && props.database === context.database && props.catalog === context.catalog && selectedSchema.value === context.schema) return reload();
+  return Promise.resolve();
+}
+
+async function buildDuplicateStructurePlan(context: TableCopyContext, sourceName: string, targetName: string, schema: string | undefined, tableComment?: string | null, sourceColumns?: ColumnInfo[]) {
+  return buildSharedDuplicateTableStructurePlan({
+    connectionId: context.connection.id,
+    database: context.database,
+    catalog: context.catalog,
+    databaseType: context.databaseType,
     schema,
     sourceName,
     targetName,
     tableComment,
     sourceColumns,
-    identifierQuote: connectionStore.connectionIdentifierQuote?.(props.connection.id),
+    identifierQuote: context.identifierQuote,
   });
 }
 
-function executeDuplicateStructurePlan(plan: { sql: string; executeAsScript: boolean }, schema: string | undefined) {
-  return plan.executeAsScript ? api.executeScript(props.connection.id, props.database, plan.sql, schema) : api.executeQuery(props.connection.id, props.database, plan.sql, schema);
+function executeDuplicateStructurePlan(context: TableCopyContext, plan: DuplicateTableStructurePlan, schema: string | undefined) {
+  if (plan.oceanbaseClone) return executeOceanbaseTableClone(plan.oceanbaseClone, (sql) => api.executeQuery(context.connection.id, context.database, sql, plan.oceanbaseClone!.targetSchema));
+  return plan.executeAsScript ? api.executeScript(context.connection.id, context.database, plan.sql, schema) : api.executeQuery(context.connection.id, context.database, plan.sql, schema);
 }
 
 async function confirmDuplicateStructure() {
+  return effectiveDatabaseType.value === "oceanbase-oracle" ? cloneDialog.run(confirmDuplicateStructureImpl) : confirmDuplicateStructureImpl();
+}
+
+async function confirmDuplicateStructureImpl() {
   const row = duplicateTarget.value;
   const newName = duplicateTableName.value.trim();
   if (!row || !newName) return;
+  const context = captureTableCopyContext();
   showDuplicateDialog.value = false;
   try {
-    const schema = row.schema || selectedSchema.value;
-    const plan = await buildDuplicateStructurePlan(row.name, newName, schema, row.comment);
-    const executed = await executeObjectBrowserSqlWithProductionGuard(plan.sql, () => executeDuplicateStructurePlan(plan, schema));
+    const schema = row.schema || context.schema;
+    const plan = await buildDuplicateStructurePlan(context, row.name, newName, schema, row.comment);
+    if (!(await cloneDialog.request([{ plan, scope: [context.connection.id, context.database, context.catalog || ""] }]))) return;
+    const executed = await executeObjectBrowserSqlWithProductionGuard(plan.sql, () => executeDuplicateStructurePlan(context, plan, schema), context);
     if (!executed) return;
     toast(t("contextMenu.duplicateStructureSuccess", { name: newName }));
-    await reload();
-    await connectionStore.refreshObjectListTreeNode(props.connection.id, props.database, schema);
+    await reloadTableCopyContext(context);
+    await connectionStore.refreshObjectListTreeNode(context.connection.id, context.database, schema);
   } catch (e: any) {
+    if (e instanceof OceanbaseTableCloneError) {
+      const refreshed = await Promise.allSettled([reloadTableCopyContext(context), connectionStore.refreshObjectListTreeNode(context.connection.id, context.database, e.targetSchema)]);
+      cloneDialog.showFailure(
+        e,
+        [],
+        refreshed.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+      );
+      return;
+    }
+    if (context.databaseType === "oceanbase-oracle") {
+      cloneDialog.showFailure(e);
+      return;
+    }
     toast(t("contextMenu.tableOperationFailed", { message: e?.message || String(e) }), 5000);
   }
 }
@@ -2835,6 +3408,7 @@ function openPasteTableDialog() {
     toast(t("contextMenu.noTableToPaste"), 2000);
     return;
   }
+  pasteTableFromClipboard.value = true;
   pasteTableMode.value = defaultPasteTableMode(effectiveDatabaseType.value);
   pasteTableEntries.value = clipboard.tables.map((entry) => ({
     sourceName: entry.tableName,
@@ -2863,9 +3437,16 @@ function onObjectBrowserKeydown(event: KeyboardEvent) {
 }
 
 async function confirmPasteTable() {
-  const entries = pasteTableEntries.value.filter((entry) => entry.targetName.trim());
+  return effectiveDatabaseType.value === "oceanbase-oracle" ? cloneDialog.run(confirmPasteTableImpl) : confirmPasteTableImpl();
+}
+
+async function confirmPasteTableImpl() {
+  const entries = pasteTableEntries.value.filter((entry) => entry.targetName.trim()).map((entry) => ({ ...entry }));
   if (entries.length === 0) return;
-  const clipboardAtPasteStart = connectionStore.treeClipboard;
+  const context = captureTableCopyContext();
+  const shouldConsumeTableClipboard = pasteTableFromClipboard.value;
+  const clipboardAtPasteStart = shouldConsumeTableClipboard ? connectionStore.treeClipboard : null;
+  pasteTableFromClipboard.value = false;
   const mode = pasteTableMode.value;
   const copyData = pasteTableModeCopiesData(mode) && pasteTableDataCopySupported.value;
   showPasteDialog.value = false;
@@ -2874,37 +3455,60 @@ async function confirmPasteTable() {
   let firstPasteError: unknown;
   let pasteCancelled = false;
   let hasMutatedTable = false;
+  const preparedClones = new Map<(typeof entries)[number], DuplicateTableStructurePlan>();
+  if (context.databaseType === "oceanbase-oracle" && mode !== "data-only") {
+    try {
+      for (const entry of entries) preparedClones.set(entry, await buildDuplicateStructurePlan(context, entry.sourceName, entry.targetName.trim(), entry.schema || context.schema, entry.tableComment));
+      if (!(await cloneDialog.request([...preparedClones.values()].map((plan) => ({ plan, scope: [context.connection.id, context.database, context.catalog || ""] }))))) return;
+    } catch (error) {
+      cloneDialog.showFailure(
+        error,
+        entries.map((entry) => `${entry.schema || context.schema || ""}.${entry.targetName}`),
+      );
+      return;
+    }
+  }
+  let cloneFailure: { error: unknown; remaining: string[]; refreshErrors: unknown[] } | undefined;
+  const completedCloneTargets: string[] = [];
   for (const entry of entries) {
-    const targetName = entry.targetName.trim();
-    const schema = entry.schema || selectedSchema.value;
+    let targetName = entry.targetName.trim();
+    let schema = entry.schema || context.schema;
+    let completedClone: OceanbaseTableClone | undefined;
     try {
       let sourceColumns: ColumnInfo[] | undefined;
       if (mode === "structure-and-data" || mode === "structure-only") {
-        const plan = await buildDuplicateStructurePlan(entry.sourceName, targetName, schema, entry.tableComment, sourceColumns);
+        const plan = preparedClones.get(entry) || (await buildDuplicateStructurePlan(context, entry.sourceName, targetName, schema, entry.tableComment, sourceColumns));
         sourceColumns = plan.sourceColumns;
-        const executed = await executeObjectBrowserSqlWithProductionGuard(plan.sql, () => executeDuplicateStructurePlan(plan, schema));
+        if (plan.oceanbaseClone) {
+          targetName = plan.oceanbaseClone.targetName;
+          schema = plan.oceanbaseClone.targetSchema;
+        }
+        const executed = await executeObjectBrowserSqlWithProductionGuard(plan.sql, () => executeDuplicateStructurePlan(context, plan, schema), context);
         if (!executed) {
           pasteCancelled = true;
           break;
         }
         hasMutatedTable = true;
+        completedClone = plan.oceanbaseClone;
       }
       if (copyData) {
-        sourceColumns ??= await api.getColumns(props.connection.id, props.database, schema || "", entry.sourceName, props.catalog);
-        const dataCopyColumnOptions = tableDataCopyColumnOptions(effectiveDatabaseType.value, sourceColumns);
+        sourceColumns ??= await api.getColumns(context.connection.id, context.database, schema || "", entry.sourceName, context.catalog);
+        const dataCopyColumnOptions = tableDataCopyColumnOptions(context.databaseType, sourceColumns);
         if (dataCopyColumnOptions.columns.length === 0) {
           throw new Error("No writable columns available for table data copy.");
         }
         const dataSql = await buildCopyTableDataSql({
-          databaseType: effectiveDatabaseType.value,
+          databaseType: context.databaseType,
           schema,
           sourceName: entry.sourceName,
           targetName,
-          normalizeNewTargetName: mode === "structure-and-data",
-          identifierQuote: connectionStore.connectionIdentifierQuote?.(props.connection.id),
+          normalizeNewTargetName: mode === "structure-and-data" && context.databaseType !== "oceanbase-oracle",
+          identifierQuote: context.identifierQuote,
           ...dataCopyColumnOptions,
         });
-        const executed = await executeObjectBrowserSqlWithProductionGuard(dataSql, () => api.executeQuery(props.connection.id, props.database, dataSql, schema, undefined, { timeoutSecs: 0 }));
+        const clone = preparedClones.get(entry)?.oceanbaseClone;
+        const execute = (sql: string) => api.executeQuery(context.connection.id, context.database, sql, schema, undefined, { timeoutSecs: 0 });
+        const executed = await executeObjectBrowserSqlWithProductionGuard(dataSql, () => (clone ? executeOceanbaseTableCloneData(clone, dataSql, execute) : execute(dataSql)), context);
         if (!executed) {
           pasteCancelled = true;
           break;
@@ -2912,17 +3516,36 @@ async function confirmPasteTable() {
         hasMutatedTable = true;
       }
       successCount++;
-    } catch (e: any) {
+      if (preparedClones.has(entry)) completedCloneTargets.push(`${schema}.${targetName}`);
+    } catch (caught: any) {
+      // 在 catch 开头统一归一化克隆错误，保证块内后续所有引用都能拿到 e
+      const e = completedClone && !(caught instanceof OceanbaseTableCloneError) ? oceanbaseCloneDataPreparationError(completedClone, caught) : caught;
+      if (context.databaseType === "oceanbase-oracle" && preparedClones.size) {
+        const refreshed = await Promise.allSettled([reloadTableCopyContext(context), connectionStore.refreshObjectListTreeNode(context.connection.id, context.database, schema)]);
+        cloneFailure = {
+          error: e,
+          remaining: entries.slice(entries.indexOf(entry) + 1).map((pending) => {
+            const clone = preparedClones.get(pending)!.oceanbaseClone!;
+            return `${clone.targetSchema}.${clone.targetName}`;
+          }),
+          refreshErrors: refreshed.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        };
+        break;
+      }
       pasteFailCount++;
-      firstPasteError ??= e;
-      console.error(`Failed to paste table "${entry.sourceName}" -> "${targetName}":`, e);
+      firstPasteError ??= caught;
+      console.error(`Failed to paste table "${entry.sourceName}" -> "${targetName}":`, caught);
     }
+  }
+  if (cloneFailure) {
+    cloneDialog.showFailure(cloneFailure.error, cloneFailure.remaining, cloneFailure.refreshErrors, completedCloneTargets);
+    return;
   }
   if (pasteCancelled) {
     if (hasMutatedTable) {
       try {
-        await reload();
-        await connectionStore.refreshObjectListTreeNode(props.connection.id, props.database, selectedSchema.value);
+        await reloadTableCopyContext(context);
+        await connectionStore.refreshObjectListTreeNode(context.connection.id, context.database, context.schema);
         toast(t("contextMenu.pasteTableCancelledAfterPartial"), 5000);
       } catch (e: any) {
         toast(t("contextMenu.pasteTableRefreshFailed", { message: translateBackendError(t, e) }), 5000);
@@ -2932,15 +3555,15 @@ async function confirmPasteTable() {
   }
   const pasteFeedback = tablePasteFeedback(successCount, pasteFailCount, firstPasteError);
   if (pasteFailCount === 0) {
-    if (connectionStore.treeClipboard === clipboardAtPasteStart) {
+    if (shouldConsumeTableClipboard && connectionStore.treeClipboard === clipboardAtPasteStart) {
       connectionStore.treeClipboard = null;
     }
     toast(t("contextMenu.batchPasteSuccess", { count: successCount }), 3000);
   } else {
     toast(`${t("contextMenu.batchPastePartialFail", { success: pasteFeedback.successCount, failed: pasteFeedback.failedCount })}\n${t("contextMenu.tableOperationFailed", { message: translateBackendError(t, pasteFeedback.firstError) })}`, 5000);
   }
-  await reload();
-  await connectionStore.refreshObjectListTreeNode(props.connection.id, props.database, selectedSchema.value);
+  await reloadTableCopyContext(context);
+  await connectionStore.refreshObjectListTreeNode(context.connection.id, context.database, context.schema);
 }
 
 function tableAdminSqlOptions(row: ObjectBrowserRow, options?: { cascade?: boolean }): TableAdminSqlOptions {
@@ -2960,10 +3583,10 @@ function tableAdminSqlOptions(row: ObjectBrowserRow, options?: { cascade?: boole
  * assessed before the callback runs so generated DDL cannot bypass protection
  * via executable comments, EXPLAIN ANALYZE, or qualified production targets.
  */
-async function executeObjectBrowserSqlWithProductionGuard<T>(sql: string, execute: () => Promise<T>): Promise<T | undefined> {
+async function executeObjectBrowserSqlWithProductionGuard<T>(sql: string, execute: () => Promise<T>, context: Pick<TableCopyContext, "connection" | "database"> = props): Promise<T | undefined> {
   return executeWithProductionSqlGuard({
-    connection: props.connection,
-    database: props.database,
+    connection: context.connection,
+    database: context.database,
     sql,
     source: t("production.sourceObjectBrowser"),
     execute,
@@ -3194,6 +3817,7 @@ function cancelEditSource() {
 }
 
 async function saveSource() {
+  if (sourceSaving.value || sourceLoading.value) return;
   if (!sourceCanEdit.value) {
     toast(t("objects.sourceReadOnly"), 3000);
     return;
@@ -3204,31 +3828,43 @@ async function saveSource() {
   const connectionId = props.connection.id;
   const database = props.database;
   const schema = row.schema || selectedSchema.value || database;
+  const connection = props.connection;
+  const databaseType = effectiveDatabaseType.value;
   sourceSaving.value = true;
   sourceSaveError.value = "";
   try {
+    if (!sourceIdentity) return;
+    const identity = sourceIdentity;
+    assertSourceIdentity(identity);
     const statements = await buildExecutableObjectSourceStatements({
-      databaseType: effectiveDatabaseType.value,
+      databaseType,
       objectType: row.type as ObjectSourceKind,
       schema,
       name: row.name,
       source: sourceDraft.value,
     });
+    const execute = async () => {
+      if (sidePanelGuard.isStale(epoch) || sourceRow.value !== row) return false;
+      const release = beginSourceSave(identity);
+      try {
+        await executeObjectSourceSave(connectionId, database, databaseType, statements, schema);
+        return true;
+      } finally {
+        release();
+      }
+    };
     const executableSql = statements.filter((sql) => sql.trim()).join(";\n");
     if (executableSql.trim()) {
       const saved = await executeWithProductionSqlGuard({
-        connection: props.connection,
+        connection,
         database,
         sql: executableSql,
         source: t("production.sourceObjectSource"),
-        execute: async () => {
-          await executeObjectSourceSave(connectionId, database, effectiveDatabaseType.value, statements, schema);
-          return true;
-        },
+        execute,
       });
       if (!saved || sidePanelGuard.isStale(epoch)) return;
     } else {
-      await executeObjectSourceSave(connectionId, database, effectiveDatabaseType.value, statements, schema);
+      if (!(await execute())) return;
       if (sidePanelGuard.isStale(epoch)) return;
     }
     toast(t("objects.sourceSaved"));
@@ -3237,7 +3873,7 @@ async function saveSource() {
     await openSource(row);
   } catch (e: unknown) {
     if (sidePanelGuard.isStale(epoch)) return;
-    sourceSaveError.value = formatObjectSourceSaveError(e, effectiveDatabaseType.value, row.type as ObjectSourceKind, t("objects.postgresViewColumnChangeHint"));
+    sourceSaveError.value = formatObjectSourceSaveError(e, databaseType, row.type as ObjectSourceKind, t("objects.postgresViewColumnChangeHint"));
   } finally {
     if (sidePanelGuard.isFresh(epoch)) sourceSaving.value = false;
   }
@@ -3674,6 +4310,7 @@ watch(
     objectBrowserRowsLoadGuard.invalidate();
     schemaListLoadGuard.invalidate();
     closeSidePanel();
+    selectedRowId.value = null;
     loadingSchemas.value = false;
     loadingObjects.value = false;
     loadingMoreObjects.value = false;
@@ -3690,6 +4327,7 @@ watch(
     userHasSelectedFilter.value = false;
     objectFilter.value = usesServerObjectPaging.value ? (props.selectedObjectFilter ?? props.initialObjectFilter ?? "tables") : "all";
     clearTableSelection();
+    selectedRowId.value = null;
     // Close side panel and invalidate any pending source/table-info requests
     // so stale results from the old context don't overwrite new state.
     closeSidePanel();
@@ -3755,7 +4393,7 @@ function tableClipboardMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
 }
 
 function isSelectedBatchTableContext(item: ObjectBrowserRow): boolean {
-  return item.type === "TABLE" && selectedTableCount.value > 1 && selectedTableIds.value.has(item.id);
+  return selectedTableCount.value > 1 && selectedTableIds.value.has(item.id);
 }
 
 function addToAiMenuItem(item: ObjectBrowserRow): ContextMenuItem {
@@ -3801,10 +4439,10 @@ function getTableMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
   }
   const useBatchActions = isSelectedBatchTableContext(item);
   const moreActions: ContextMenuItem[] = [];
-  if (supportsVacuumTable.value) {
+  if (supportsVacuumTable.value && (!useBatchActions || hasSelectedTablesOnly.value)) {
     moreActions.push({ sidebarActionId: "contextMenu.vacuumTable", label: t("contextMenu.vacuumTable"), action: () => requestVacuumTable(item), icon: Activity, variant: "destructive" as const });
   }
-  if (supportsTruncateTable.value) {
+  if (supportsTruncateTable.value && (!useBatchActions || hasSelectedTablesOnly.value)) {
     moreActions.push({
       sidebarActionId: "contextMenu.truncateTable",
       label: useBatchActions ? selectedBatchTableCountLabel("batchTruncate") : t("contextMenu.truncateTable"),
@@ -3813,22 +4451,22 @@ function getTableMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
       variant: "destructive" as const,
     });
   }
-  moreActions.push(
-    {
+  if (!useBatchActions || hasSelectedTablesOnly.value) {
+    moreActions.push({
       sidebarActionId: "contextMenu.emptyTable",
       label: useBatchActions ? selectedBatchTableCountLabel("batchEmpty") : t("contextMenu.emptyTable"),
       action: useBatchActions ? requestBatchEmptyTables : () => requestEmptyTable(item),
       icon: Eraser,
       variant: "destructive" as const,
-    },
-    {
-      sidebarActionId: "contextMenu.dropTable",
-      label: useBatchActions ? selectedBatchTableCountLabel("batchDrop") : t("contextMenu.dropTable"),
-      action: useBatchActions ? requestBatchDropTables : () => requestDrop(item),
-      icon: Trash2,
-      variant: "destructive" as const,
-    },
-  );
+    });
+  }
+  moreActions.push({
+    sidebarActionId: "contextMenu.dropTable",
+    label: useBatchActions ? selectedBatchTableCountLabel("batchDrop") : t("contextMenu.dropTable"),
+    action: useBatchActions ? requestBatchDropTables : () => requestDrop(item),
+    icon: Trash2,
+    variant: "destructive" as const,
+  });
   return [
     { sidebarActionId: "contextMenu.viewData", label: t("contextMenu.viewData"), action: () => openViewData(item), icon: Table2 },
     {
@@ -3850,7 +4488,7 @@ function getTableMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
     { sidebarActionId: "contextMenu.exportStructure", label: t("contextMenu.exportStructure"), action: () => exportStructure(item), icon: FileCode },
     ...(canOpenDataDictionary.value ? [{ sidebarActionId: "dataDictionary.title", label: t("dataDictionary.title"), action: () => openDataDictionary(item), icon: FileText }] : []),
     { label: "", separator: true },
-    { sidebarActionId: "contextMenu.duplicateStructure", label: t("contextMenu.duplicateStructure"), action: () => requestDuplicateStructure(item), icon: CopyPlus },
+    { sidebarActionId: "contextMenu.duplicateStructure", label: t("contextMenu.duplicateStructure"), action: () => requestCopyAsNewTable(item), icon: CopyPlus },
     ...tableClipboardMenuItems(item),
     { label: "", separator: true },
     { sidebarActionId: "common.more", label: t("common.more"), icon: ListTree, children: moreActions },
@@ -3933,6 +4571,7 @@ function getEventMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
 
 function getPackageMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
   return [
+    ...((effectiveDatabaseType.value === "oracle" || effectiveDatabaseType.value === "oceanbase-oracle") && (item.type === "PACKAGE" || item.type === "PACKAGE_BODY") ? [{ label: t("objects.packageSaveAsTitle"), action: () => requestPackageSaveAs(item), icon: CopyPlus }] : []),
     ...(effectiveDatabaseType.value === "xugu" && buildXuguCompileSql({ objectType: item.type, schema: item.schema || selectedSchema.value, name: item.name }) ? [{ label: t("contextMenu.compileObject"), action: () => compileXuguObject(item), icon: Wrench }] : []),
     { label: t("contextMenu.viewSource"), action: () => openSource(item), icon: Code2 },
     { label: "", separator: true },
@@ -3995,6 +4634,18 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
 </script>
 
 <template>
+  <DangerConfirmDialog
+    v-model:open="cloneDialogOpen"
+    :title="t(cloneDialogState?.failure ? 'oceanbaseCloneDialog.failed' : 'oceanbaseCloneDialog.title')"
+    :message="t(cloneDialogState?.failure ? 'oceanbaseCloneDialog.failedMessage' : 'oceanbaseCloneDialog.message')"
+    :details-text="cloneDialogState?.summary"
+    :details="cloneDialogState?.details"
+    :details-label="t('oceanbaseCloneDialog.details')"
+    :show-cancel="!cloneDialogState?.failure"
+    :confirm-label="cloneDialogState?.failure ? t('oceanbaseCloneDialog.close') : undefined"
+    :close-on-confirm="false"
+    @confirm="cloneDialog.confirm"
+  />
   <FirebirdObjectManager v-if="effectiveDatabaseType === 'firebird'" v-model:open="firebirdManagerOpen" :connection-id="connection.id" :database="database" />
   <div ref="rootRef" data-object-browser-root class="flex h-full min-h-0 min-w-0 flex-col bg-background outline-none" tabindex="0" @keydown="onObjectBrowserKeydown">
     <SidebarMenuPreferencesDialog v-if="sidebarMenuPreferences" v-model:open="sidebarMenuPreferencesOpen" :scope="sidebarMenuPreferences.scope" :items="sidebarMenuPreferences.items" />
@@ -4067,13 +4718,19 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
         <button type="button" class="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground" :class="{ 'bg-background text-foreground shadow-sm': isListView }" :title="t('objects.viewList')" @click="setViewMode('list')">
           <List class="h-3.5 w-3.5" />
         </button>
-        <button type="button" class="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground" :class="{ 'bg-background text-foreground shadow-sm': !isListView }" :title="t('objects.viewGrid')" @click="setViewMode('grid')">
+        <button type="button" class="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground" :class="{ 'bg-background text-foreground shadow-sm': isGridView }" :title="t('objects.viewGrid')" @click="setViewMode('grid')">
           <LayoutGrid class="h-3.5 w-3.5" />
+        </button>
+        <button type="button" class="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground" :class="{ 'bg-background text-foreground shadow-sm': isCompactView }" :title="t('objects.viewCompact')" @click="setViewMode('compact')">
+          <Grid3X3 class="h-3.5 w-3.5" />
         </button>
       </div>
       <Button v-if="showInlineCheckboxToggle && supportsBatchTableActions" variant="ghost" size="icon" class="h-7 w-7" :class="{ 'text-primary': settingsStore.editorSettings.objectBrowserShowCheckbox }" :title="t('objects.toggleCheckbox')" @click="toggleCheckboxColumn">
         <CheckSquare v-if="settingsStore.editorSettings.objectBrowserShowCheckbox" class="h-3.5 w-3.5" />
         <Square v-else class="h-3.5 w-3.5" />
+      </Button>
+      <Button v-if="showInlineSidePanelToggle" variant="ghost" size="icon" class="h-7 w-7" :class="{ 'text-primary': isSidePanelOpen }" :title="isSidePanelOpen ? t('objects.closeDetailPanel') : t('objects.openDetailPanel')" @click="toggleSidePanel">
+        <PanelRight class="h-3.5 w-3.5" />
       </Button>
       <Button variant="ghost" size="icon" class="h-7 w-7" :title="refreshTooltip" :disabled="loadingObjects" @click="refresh">
         <RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': loadingObjects || refreshingObjects }" />
@@ -4109,10 +4766,19 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
           <LayoutGrid class="h-3.5 w-3.5" />
           {{ t("objects.viewGrid") }}
         </DropdownMenuItem>
+        <DropdownMenuItem @select="setViewMode('compact')">
+          <Grid3X3 class="h-3.5 w-3.5" />
+          {{ t("objects.viewCompact") }}
+        </DropdownMenuItem>
         <DropdownMenuCheckboxItem v-if="supportsBatchTableActions" :model-value="settingsStore.editorSettings.objectBrowserShowCheckbox" @select.prevent @update:model-value="toggleCheckboxColumn()">{{ t("objects.toggleCheckbox") }}</DropdownMenuCheckboxItem>
+        <DropdownMenuItem @select="toggleSidePanel">
+          <PanelRight class="h-3.5 w-3.5" />
+          {{ isSidePanelOpen ? t("objects.closeDetailPanel") : t("objects.openDetailPanel") }}
+        </DropdownMenuItem>
+        <DropdownMenuCheckboxItem :model-value="settingsStore.editorSettings.objectBrowserAutoOpenDetailPanel !== false" @select.prevent @update:model-value="toggleAutoOpenDetailPanel()">{{ t("objects.autoOpenDetailPanel") }}</DropdownMenuCheckboxItem>
         <template v-if="showObjectFilter && toolbarTier >= 2">
           <DropdownMenuSeparator />
-          <DropdownMenuCheckboxItem v-for="filter in objectFilters" :key="filter" :model-value="objectFilter === filter" @select.prevent @update:model-value="selectObjectFilter(filter)">{{ filterLabel(filter) }}</DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem v-for="filter in objectFilters" :key="filter" :model-value="objectFilter === filter" @select.prevent @update:model-value="selectObjectFilter(filter)">{{ filterLabel(filter) }} </DropdownMenuCheckboxItem>
         </template>
         <template v-else-if="singleKindFilter && toolbarTier >= 2">
           <DropdownMenuSeparator />
@@ -4132,11 +4798,11 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
         <Clipboard class="mr-1.5 h-3.5 w-3.5" />
         {{ t("objects.copyTableSelected") }}
       </Button>
-      <Button v-if="supportsBatchTableActions && supportsTruncateTable" variant="ghost" size="sm" class="h-7 px-2 text-xs text-destructive" @click="requestBatchTruncateTables">
+      <Button v-if="supportsBatchTableActions && supportsTruncateTable && hasSelectedTablesOnly" variant="ghost" size="sm" class="h-7 px-2 text-xs text-destructive" @click="requestBatchTruncateTables">
         <Scissors class="mr-1.5 h-3.5 w-3.5" />
         {{ t("objects.truncateSelected") }}
       </Button>
-      <Button v-if="supportsBatchTableActions" variant="ghost" size="sm" class="h-7 px-2 text-xs text-destructive" @click="requestBatchEmptyTables">
+      <Button v-if="supportsBatchTableActions && hasSelectedTablesOnly" variant="ghost" size="sm" class="h-7 px-2 text-xs text-destructive" @click="requestBatchEmptyTables">
         <Eraser class="mr-1.5 h-3.5 w-3.5" />
         {{ t("contextMenu.batchEmpty", { count: selectedTableCount }) }}
       </Button>
@@ -4167,7 +4833,7 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
     <div v-else class="flex min-h-0 min-w-0 flex-1" :class="{ 'event-editor-layout': isEventEditor }">
       <div class="flex min-h-0 min-w-0 flex-1 flex-col">
         <div v-if="isListView" class="object-browser-table flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <div ref="objectListHeaderRef" class="h-7 shrink-0 overflow-hidden">
+          <div ref="objectListHeaderRef" class="relative h-7 shrink-0 overflow-hidden">
             <div class="grid h-7 items-center gap-3 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground" :style="{ gridTemplateColumns, minWidth: `${objectGridMinWidth}px` }">
               <div v-if="showCheckboxColumn" class="relative flex min-w-0 items-center">
                 <button class="flex h-6 w-6 items-center justify-center rounded-sm hover:bg-accent" type="button" :disabled="visibleSelectableRows.length === 0" @click="toggleVisibleTableSelection">
@@ -4178,30 +4844,44 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <GripVertical class="h-3 w-3" />
                 </div>
               </div>
-              <div class="relative flex min-w-0 items-center">
+              <div v-if="isObjectColumnVisible('name')" class="relative flex min-w-0 items-center">
                 <button class="flex min-w-0 items-center gap-1 truncate pr-4 text-left" type="button" :disabled="usesServerObjectPaging" @click="toggleSort('name')">
                   <span class="truncate">{{ t("objects.name") }}</span>
                   <component :is="sortIconFor('name')" v-if="sortIconFor('name')" class="h-3 w-3 shrink-0" />
                 </button>
-                <div class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary" @mousedown="onObjectColumnResizeStart('name', $event)" @dblclick="resetObjectColumnWidth('name', 260, $event)">
+                <div
+                  v-if="!isLastVisibleObjectColumn('name')"
+                  data-object-column-resize="name"
+                  class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
+                  @mousedown="onObjectColumnResizeStart('name', $event)"
+                  @dblclick="resetObjectColumnWidth('name', 260, $event)"
+                >
                   <GripVertical class="h-3 w-3" />
                 </div>
               </div>
-              <div class="relative flex min-w-0 items-center">
+              <div v-if="isObjectColumnVisible('type')" class="relative flex min-w-0 items-center">
                 <button class="flex min-w-0 items-center gap-1 truncate pr-4 text-left" type="button" :disabled="usesServerObjectPaging" @click="toggleSort('type')">
                   <span class="truncate">{{ t("objects.type") }}</span>
                   <component :is="sortIconFor('type')" v-if="sortIconFor('type')" class="h-3 w-3 shrink-0" />
                 </button>
-                <div class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary" @mousedown="onObjectColumnResizeStart('type', $event)" @dblclick="resetObjectColumnWidth('type', 110, $event)">
+                <div
+                  v-if="!isLastVisibleObjectColumn('type')"
+                  data-object-column-resize="type"
+                  class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
+                  @mousedown="onObjectColumnResizeStart('type', $event)"
+                  @dblclick="resetObjectColumnWidth('type', 110, $event)"
+                >
                   <GripVertical class="h-3 w-3" />
                 </div>
               </div>
-              <div v-if="showObjectRowStats" class="relative flex min-w-0 items-center">
+              <div v-if="showObjectRowStats && isObjectColumnVisible('estimatedRows')" class="relative flex min-w-0 items-center">
                 <button class="flex min-w-0 items-center gap-1 truncate pr-4 text-left" type="button" :disabled="usesServerObjectPaging" :title="t('objects.statisticsHint')" @click="toggleSort('estimatedRows')">
                   <span class="truncate">{{ objectRowsLabel }}</span>
                   <component :is="sortIconFor('estimatedRows')" v-if="sortIconFor('estimatedRows')" class="h-3 w-3 shrink-0" />
                 </button>
                 <div
+                  v-if="!isLastVisibleObjectColumn('estimatedRows')"
+                  data-object-column-resize="estimatedRows"
                   class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
                   @mousedown="onObjectColumnResizeStart('estimatedRows', $event)"
                   @dblclick="resetObjectColumnWidth('estimatedRows', 110, $event)"
@@ -4209,12 +4889,14 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <GripVertical class="h-3 w-3" />
                 </div>
               </div>
-              <div v-if="showObjectSizeStats" class="relative flex min-w-0 items-center">
+              <div v-if="showObjectSizeStats && isObjectColumnVisible('totalBytes')" class="relative flex min-w-0 items-center">
                 <button class="flex min-w-0 items-center gap-1 truncate pr-4 text-left" type="button" :disabled="usesServerObjectPaging" :title="t('objects.statisticsHint')" @click="toggleSort('totalBytes')">
                   <span class="truncate">{{ t("objects.size") }}</span>
                   <component :is="sortIconFor('totalBytes')" v-if="sortIconFor('totalBytes')" class="h-3 w-3 shrink-0" />
                 </button>
                 <div
+                  v-if="!isLastVisibleObjectColumn('totalBytes')"
+                  data-object-column-resize="totalBytes"
                   class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
                   @mousedown="onObjectColumnResizeStart('totalBytes', $event)"
                   @dblclick="resetObjectColumnWidth('totalBytes', 100, $event)"
@@ -4222,12 +4904,14 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <GripVertical class="h-3 w-3" />
                 </div>
               </div>
-              <div v-if="hasCreatedAt" class="relative flex min-w-0 items-center">
+              <div v-if="hasCreatedAt && isObjectColumnVisible('created_at')" class="relative flex min-w-0 items-center">
                 <button class="flex min-w-0 items-center gap-1 truncate pr-4 text-left" type="button" :disabled="usesServerObjectPaging" @click="toggleSort('created_at')">
                   <span class="truncate">{{ t("objects.createdAt") }}</span>
                   <component :is="sortIconFor('created_at')" v-if="sortIconFor('created_at')" class="h-3 w-3 shrink-0" />
                 </button>
                 <div
+                  v-if="!isLastVisibleObjectColumn('created_at')"
+                  data-object-column-resize="created_at"
                   class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
                   @mousedown="onObjectColumnResizeStart('created_at', $event)"
                   @dblclick="resetObjectColumnWidth('created_at', 150, $event)"
@@ -4235,12 +4919,14 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <GripVertical class="h-3 w-3" />
                 </div>
               </div>
-              <div v-if="hasUpdatedAt" class="relative flex min-w-0 items-center">
+              <div v-if="hasUpdatedAt && isObjectColumnVisible('updated_at')" class="relative flex min-w-0 items-center">
                 <button class="flex min-w-0 items-center gap-1 truncate pr-4 text-left" type="button" :disabled="usesServerObjectPaging" @click="toggleSort('updated_at')">
                   <span class="truncate">{{ t("objects.updatedAt") }}</span>
                   <component :is="sortIconFor('updated_at')" v-if="sortIconFor('updated_at')" class="h-3 w-3 shrink-0" />
                 </button>
                 <div
+                  v-if="!isLastVisibleObjectColumn('updated_at')"
+                  data-object-column-resize="updated_at"
                   class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
                   @mousedown="onObjectColumnResizeStart('updated_at', $event)"
                   @dblclick="resetObjectColumnWidth('updated_at', 150, $event)"
@@ -4248,12 +4934,14 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                   <GripVertical class="h-3 w-3" />
                 </div>
               </div>
-              <div class="relative flex min-w-0 items-center">
+              <div v-if="isObjectColumnVisible('comment')" class="relative flex min-w-0 items-center">
                 <button class="flex min-w-0 items-center gap-1 truncate pr-4 text-left" type="button" :disabled="usesServerObjectPaging" @click="toggleSort('comment')">
                   <span class="truncate">{{ t("objects.comment") }}</span>
                   <component :is="sortIconFor('comment')" v-if="sortIconFor('comment')" class="h-3 w-3 shrink-0" />
                 </button>
                 <div
+                  v-if="!isLastVisibleObjectColumn('comment')"
+                  data-object-column-resize="comment"
                   class="absolute -right-2 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center text-muted-foreground/70 hover:bg-primary/30 hover:text-primary"
                   @mousedown="onObjectColumnResizeStart('comment', $event)"
                   @dblclick="resetObjectColumnWidth('comment', 260, $event)"
@@ -4262,6 +4950,20 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                 </div>
               </div>
             </div>
+            <Popover>
+              <PopoverTrigger as-child>
+                <button type="button" class="absolute right-1 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground" :title="t('objects.configureColumns')" :aria-label="t('objects.configureColumns')">
+                  <Settings2 class="h-3.5 w-3.5" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" class="w-52 p-1">
+                <div class="px-2 py-1.5 text-xs font-medium text-foreground">{{ t("objects.configureColumns") }}</div>
+                <button v-for="column in objectColumnDefinitions" :key="column.key" type="button" class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent" :disabled="column.key === 'name'" @click="toggleObjectColumnVisibility(column.key)">
+                  <span class="flex h-4 w-4 items-center justify-center rounded border" :class="isObjectColumnVisible(column.key) ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-transparent'"><Check class="h-3 w-3 stroke-[3]" /></span>
+                  <span class="truncate">{{ column.label }}</span>
+                </button>
+              </PopoverContent>
+            </Popover>
           </div>
           <RecycleScroller ref="listScrollerRef" class="object-browser-scroller min-h-0 flex-1" :style="{ '--dbx-object-grid-min-width': `${objectGridMinWidth}px` }" :items="filteredRows" :item-size="34" :buffer="600" :skip-hover="true" key-field="id">
             <template #default="{ item }">
@@ -4269,14 +4971,14 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                 <div
                   class="grid h-[34px] cursor-default items-center gap-3 border-b px-3"
                   :class="{
-                    'bg-accent text-accent-foreground': isOpen || sourceRow?.id === item.id || sidePanelRow?.id === item.id || selectedTableIds.has(item.id),
-                    'hover:bg-accent/40': !isOpen && sourceRow?.id !== item.id && sidePanelRow?.id !== item.id && !selectedTableIds.has(item.id),
+                    'bg-accent text-accent-foreground': isOpen || sourceRow?.id === item.id || sidePanelRow?.id === item.id || selectedRowId === item.id || selectedTableIds.has(item.id),
+                    'hover:bg-accent/40': !isOpen && sourceRow?.id !== item.id && sidePanelRow?.id !== item.id && selectedRowId !== item.id && !selectedTableIds.has(item.id),
                   }"
-                  :style="{ gridTemplateColumns, boxShadow: sidePanelRow?.id === item.id && !selectedTableIds.has(item.id) ? 'inset 3px 0 0 var(--primary)' : undefined }"
+                  :style="{ gridTemplateColumns, boxShadow: (sidePanelRow?.id === item.id || selectedRowId === item.id) && !selectedTableIds.has(item.id) ? 'inset 3px 0 0 var(--primary)' : undefined }"
                   @click="onRowClick(item, $event)"
                   @contextmenu="onContextMenu"
                 >
-                  <button v-if="showCheckboxColumn" class="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" type="button" :class="{ invisible: item.type !== 'TABLE' }" @click.stop="toggleTableSelection(item)">
+                  <button v-if="showCheckboxColumn" class="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" type="button" @click.stop="toggleTableSelection(item)">
                     <CheckSquare v-if="selectedTableIds.has(item.id)" class="h-3.5 w-3.5 text-primary" />
                     <Square v-else class="h-3.5 w-3.5" />
                   </button>
@@ -4302,25 +5004,25 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                       {{ t("objects.partitions", { count: item.partitionCount }) }}
                     </span>
                   </div>
-                  <div class="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
+                  <div v-if="isObjectColumnVisible('type')" class="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
                     <span class="truncate">{{ typeLabel(item) }}</span>
                     <span v-if="item.valid != null" class="shrink-0 rounded border px-1 py-px text-[10px] font-medium" :class="item.valid ? 'border-emerald-500/30 text-emerald-600' : 'border-destructive/30 text-destructive'">
                       {{ t(item.valid ? "objects.validStatus" : "objects.invalidStatus") }}
                     </span>
                   </div>
-                  <div v-if="showObjectRowStats" class="truncate text-xs tabular-nums text-muted-foreground" :title="item.estimatedRows == null ? '' : formatObjectBrowserCount(item.estimatedRows)">
+                  <div v-if="showObjectRowStats && isObjectColumnVisible('estimatedRows')" class="truncate text-xs tabular-nums text-muted-foreground" :title="item.estimatedRows == null ? '' : formatObjectBrowserCount(item.estimatedRows)">
                     {{ formatObjectBrowserCount(item.estimatedRows) }}
                   </div>
-                  <div v-if="showObjectSizeStats" class="truncate text-xs tabular-nums text-muted-foreground" :title="item.totalBytes == null ? '' : formatObjectBrowserBytes(item.totalBytes)">
+                  <div v-if="showObjectSizeStats && isObjectColumnVisible('totalBytes')" class="truncate text-xs tabular-nums text-muted-foreground" :title="item.totalBytes == null ? '' : formatObjectBrowserBytes(item.totalBytes)">
                     {{ formatObjectBrowserBytes(item.totalBytes) }}
                   </div>
-                  <div v-if="hasCreatedAt" class="truncate text-xs tabular-nums text-muted-foreground" :title="formatObjectBrowserTimestamp(item.created_at)">
+                  <div v-if="hasCreatedAt && isObjectColumnVisible('created_at')" class="truncate text-xs tabular-nums text-muted-foreground" :title="formatObjectBrowserTimestamp(item.created_at)">
                     {{ formatObjectBrowserTimestamp(item.created_at) }}
                   </div>
-                  <div v-if="hasUpdatedAt" class="truncate text-xs tabular-nums text-muted-foreground" :title="formatObjectBrowserTimestamp(item.updated_at)">
+                  <div v-if="hasUpdatedAt && isObjectColumnVisible('updated_at')" class="truncate text-xs tabular-nums text-muted-foreground" :title="formatObjectBrowserTimestamp(item.updated_at)">
                     {{ formatObjectBrowserTimestamp(item.updated_at) }}
                   </div>
-                  <div class="truncate text-xs text-muted-foreground" :title="item.comment || ''">
+                  <div v-if="isObjectColumnVisible('comment')" class="truncate text-xs text-muted-foreground" :title="item.comment || ''">
                     {{ item.comment || "" }}
                   </div>
                 </div>
@@ -4328,22 +5030,23 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
             </template>
           </RecycleScroller>
         </div>
-        <div v-else ref="gridContainerRef" class="object-browser-grid-wrapper min-h-0 flex-1 p-2">
+        <div v-else ref="gridContainerRef" class="object-browser-grid-wrapper min-h-0 flex-1 p-2" :class="{ 'p-1': isCompactView }">
           <RecycleScroller ref="gridScrollerRef" v-if="gridRows.length > 0" class="object-browser-grid-scroller h-full" :items="gridRows" :item-size="objectGridRowHeight" :buffer="600" :skip-hover="true" key-field="key">
             <template #default="{ item: row }">
-              <div class="object-browser-grid-row" :style="{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`, height: `${objectGridRowHeight - OBJECT_GRID_GAP}px` }">
+              <div class="object-browser-grid-row" :style="{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`, columnGap: `${isCompactView ? OBJECT_COMPACT_GAP : OBJECT_GRID_GAP}px`, height: `${objectGridRowHeight - (isCompactView ? OBJECT_COMPACT_GAP : OBJECT_GRID_GAP)}px` }">
                 <CustomContextMenu v-for="item in row.cards" :key="item.id" :items="() => getObjectBrowserMenuItems(item)" v-slot="{ onContextMenu, isOpen }">
                   <div
+                    v-if="isGridView"
                     class="relative flex h-full min-h-0 cursor-default flex-col items-center gap-1 rounded-lg border p-3 text-center transition-all"
                     :class="{
-                      'border-primary bg-accent shadow-sm': isOpen || sourceRow?.id === item.id || sidePanelRow?.id === item.id || selectedTableIds.has(item.id),
-                      'bg-card hover:border-primary/40 hover:bg-accent/40 hover:shadow-sm': !isOpen && sourceRow?.id !== item.id && sidePanelRow?.id !== item.id && !selectedTableIds.has(item.id),
+                      'border-primary bg-accent shadow-sm': isOpen || sourceRow?.id === item.id || sidePanelRow?.id === item.id || selectedRowId === item.id || selectedTableIds.has(item.id),
+                      'bg-card hover:border-primary/40 hover:bg-accent/40 hover:shadow-sm': !isOpen && sourceRow?.id !== item.id && sidePanelRow?.id !== item.id && selectedRowId !== item.id && !selectedTableIds.has(item.id),
                     }"
                     :title="item.displayName"
                     @click="onRowClick(item, $event)"
                     @contextmenu="onContextMenu"
                   >
-                    <button v-if="showCheckboxColumn" class="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" type="button" :class="{ invisible: item.type !== 'TABLE' }" @click.stop="toggleTableSelection(item)">
+                    <button v-if="showCheckboxColumn" class="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" type="button" @click.stop="toggleTableSelection(item)">
                       <CheckSquare v-if="selectedTableIds.has(item.id)" class="h-3.5 w-3.5 text-primary" />
                       <Square v-else class="h-3.5 w-3.5" />
                     </button>
@@ -4373,6 +5076,25 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
                     <div v-if="hasAnyComment" class="w-full truncate text-[10px] leading-[15px] text-muted-foreground/60" :title="item.comment?.trim() || undefined">
                       {{ item.comment?.trim() || "\u00A0" }}
                     </div>
+                  </div>
+                  <div
+                    v-else
+                    data-object-compact-card
+                    class="flex h-full min-w-0 cursor-default items-center gap-1 rounded border px-1.5 text-[11px] text-foreground transition-colors"
+                    :class="{
+                      'border-primary bg-accent shadow-sm': isOpen || sourceRow?.id === item.id || sidePanelRow?.id === item.id || selectedRowId === item.id || selectedTableIds.has(item.id),
+                      'bg-card hover:border-primary/40 hover:bg-accent/40': !isOpen && sourceRow?.id !== item.id && sidePanelRow?.id !== item.id && selectedRowId !== item.id && !selectedTableIds.has(item.id),
+                    }"
+                    :title="item.displayName"
+                    @click="onRowClick(item, $event)"
+                    @contextmenu="onContextMenu"
+                  >
+                    <button v-if="showCheckboxColumn" class="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" type="button" @click.stop="toggleTableSelection(item)">
+                      <CheckSquare v-if="selectedTableIds.has(item.id)" class="h-3.5 w-3.5 text-primary" />
+                      <Square v-else class="h-3.5 w-3.5" />
+                    </button>
+                    <component :is="iconFor(item)" class="h-3.5 w-3.5 shrink-0" :class="iconClass(item.type)" aria-hidden="true" />
+                    <span class="min-w-0 truncate font-medium">{{ item.displayName }}</span>
                   </div>
                 </CustomContextMenu>
               </div>
@@ -4448,7 +5170,9 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
             <DdlStorageToggle :database-type="effectiveDatabaseType" :disabled="tableDdlLoading" />
           </div>
           <div v-if="tableInfoTab === 'info'" class="flex-1 min-h-0 overflow-auto">
-            <div v-if="tableOverviewLoading" class="h-full flex items-center justify-center"><Loader2 class="w-4 h-4 animate-spin text-muted-foreground" /></div>
+            <div v-if="tableOverviewLoading" class="h-full flex items-center justify-center">
+              <Loader2 class="w-4 h-4 animate-spin text-muted-foreground" />
+            </div>
             <div v-else-if="tableInfoSearchQuery && tableOverviewRows.length === 0" class="p-6 text-center text-xs text-muted-foreground">{{ t("grid.tableInfoNoResults") }}</div>
             <div v-else class="divide-y">
               <div v-for="row in tableOverviewRows" :key="row.label" class="flex items-baseline gap-3 px-3 py-2 text-xs">
@@ -4689,16 +5413,7 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
     </template>
   </DangerConfirmDialog>
 
-  <DangerConfirmDialog
-    v-model:open="showBatchDropConfirm"
-    :title="t('objects.confirmBatchDropTitle')"
-    :message="t('objects.confirmBatchDropMessage', { count: selectedTableCount })"
-    :sql="batchDropPreviewSql"
-    :confirm-label="t('objects.dropSelected')"
-    :loading="batchDropExecuting"
-    :close-on-confirm="false"
-    @confirm="confirmBatchDropTables"
-  >
+  <DangerConfirmDialog v-model:open="showBatchDropConfirm" :title="batchDropConfirmTitle" :message="batchDropConfirmMessage" :sql="batchDropPreviewSql" :confirm-label="t('objects.dropSelected')" :loading="batchDropExecuting" :close-on-confirm="false" @confirm="confirmBatchDropTables">
     <template #options>
       <div v-if="batchDropExecuting" class="mb-3 rounded-md border bg-muted/20 px-3 py-2.5">
         <div class="mb-1.5 flex items-center justify-between text-xs tabular-nums text-muted-foreground">
@@ -4747,19 +5462,82 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
     @confirm="confirmBatchEmptyTables"
   />
 
+  <OraclePackageSaveAsDialog
+    :open="packageSaveAsOpen"
+    :old-name="packageSaveAsTarget?.name || ''"
+    :new-name="packageSaveAsName"
+    :plan="packageSaveAsPlan || null"
+    :drafts="packageSaveAsDrafts"
+    :error="packageSaveAsError"
+    :diagnostic="packageSaveAsDiagnostic"
+    :loading="packageSaveAsLoading"
+    :validating="packageSaveAsValidating"
+    :executing="packageSaveAsExecuting"
+    @update:open="packageSaveAsOpen = $event"
+    @update:new-name="packageSaveAsName = $event"
+    @edit="editPackageSaveAsDraft"
+    @validate="validatePackageSaveAsDrafts"
+    @reload="validatePackageSaveAsDrafts"
+    @confirm="confirmPackageSaveAs"
+  />
   <Dialog v-model:open="showRenameDialog">
-    <DialogContent class="sm:max-w-[420px]">
+    <DialogContent
+      :class="(effectiveDatabaseType === 'oracle' || effectiveDatabaseType === 'oceanbase-oracle') && (renameTarget?.type === 'VIEW' || renameTarget?.type === 'PROCEDURE' || renameTarget?.type === 'FUNCTION' || renameTarget?.type === 'TABLE') ? 'sm:max-w-[min(90vw,900px)]' : 'sm:max-w-[420px]'"
+    >
       <DialogHeader>
         <DialogTitle>{{ t("contextMenu.renameObjectTitle") }}</DialogTitle>
       </DialogHeader>
       <div class="grid gap-3">
         <Input v-model="renameInput" :placeholder="t('contextMenu.renameObjectNamePlaceholder')" @keydown.enter.prevent="confirmRename" />
-        <pre v-if="renamePreviewSqlText" class="max-h-32 min-w-0 max-w-full overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap" v-html="highlight(renamePreviewSqlText)"></pre>
+        <OracleViewRenamePreview
+          v-if="effectiveDatabaseType === 'oceanbase-oracle' && renameTarget?.type === 'VIEW'"
+          :plan="viewRenamePlan || null"
+          :drafts="viewRenameDrafts"
+          :loading="viewRenameLoading"
+          :validating="viewRenameValidating"
+          :executing="viewRenameExecuting"
+          @edit="editViewRenameDraft"
+          @validate="validateViewRenameDrafts()"
+          @reload="validateViewRenameDrafts()"
+        />
+        <OracleRoutineRenamePreview
+          v-else-if="(effectiveDatabaseType === 'oracle' || effectiveDatabaseType === 'oceanbase-oracle') && (renameTarget?.type === 'PROCEDURE' || renameTarget?.type === 'FUNCTION')"
+          :plan="routineRenamePlan || null"
+          :drafts="routineRenameDrafts"
+          :loading="viewRenameLoading"
+          :validating="viewRenameValidating"
+          :executing="viewRenameExecuting"
+          @edit="editRoutineRenameDraft"
+          @validate="validateRoutineRenameDrafts"
+          @reload="refreshRenamePreviewSql()"
+        />
+        <OracleTableRenamePreview
+          v-else-if="(effectiveDatabaseType === 'oracle' || effectiveDatabaseType === 'oceanbase-oracle') && renameTarget?.type === 'TABLE'"
+          :plan="tableRenamePlan || null"
+          :drafts="tableRenameDrafts"
+          :loading="viewRenameLoading"
+          :validating="viewRenameValidating"
+          :executing="viewRenameExecuting"
+          @edit="editTableRenameDraft"
+          @validate="validateTableRenameDrafts()"
+          @reload="validateTableRenameDrafts()"
+        />
+        <pre v-else-if="renamePreviewSqlText" class="max-h-32 min-w-0 max-w-full overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap" v-html="highlight(renamePreviewSqlText)"></pre>
         <p v-if="renameError" class="min-w-0 max-w-full overflow-x-auto text-sm text-destructive">{{ renameError }}</p>
       </div>
       <DialogFooter>
         <Button variant="outline" @click="showRenameDialog = false">{{ t("dangerDialog.cancel") }}</Button>
-        <Button :disabled="!renameInput.trim() || renameInput.trim() === renameTarget?.name" @click="confirmRename">
+        <Button
+          :disabled="
+            !renameInput.trim() ||
+            renameInput.trim() === renameTarget?.name ||
+            viewRenameExecuting ||
+            ((effectiveDatabaseType === 'oracle' || effectiveDatabaseType === 'oceanbase-oracle') && renameTarget?.type === 'TABLE' && !tableRenamePlan?.executable) ||
+            (effectiveDatabaseType === 'oceanbase-oracle' && renameTarget?.type === 'VIEW' && !viewRenamePlan?.executable) ||
+            ((effectiveDatabaseType === 'oracle' || effectiveDatabaseType === 'oceanbase-oracle') && (renameTarget?.type === 'PROCEDURE' || renameTarget?.type === 'FUNCTION') && !routineRenamePlan?.executable)
+          "
+          @click="confirmRename"
+        >
           {{ t("contextMenu.renameObject") }}
         </Button>
       </DialogFooter>
@@ -4771,7 +5549,7 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
       <DialogHeader>
         <DialogTitle>{{ compileErrorTitle }}</DialogTitle>
       </DialogHeader>
-      <pre class="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-destructive/5 p-3 text-sm text-destructive">{{ compileErrorMessage }}</pre>
+      <pre class="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-destructive/5 p-3 text-sm text-destructive">      {{ compileErrorMessage }}</pre>
       <DialogFooter>
         <Button @click="showCompileErrorDialog = false">{{ t("common.close") }}</Button>
       </DialogFooter>
@@ -4854,7 +5632,7 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
   <Dialog v-model:open="showPasteDialog">
     <DialogContent class="sm:max-w-[500px]">
       <DialogHeader>
-        <DialogTitle>{{ pasteTableEntries.length > 1 ? t("contextMenu.batchPasteTitle") : t("contextMenu.pasteTableConfirmTitle") }}</DialogTitle>
+        <DialogTitle>{{ pasteTableFromClipboard ? (pasteTableEntries.length > 1 ? t("contextMenu.batchPasteTitle") : t("contextMenu.pasteTableConfirmTitle")) : t("contextMenu.duplicateNameTitle") }}</DialogTitle>
       </DialogHeader>
       <div class="space-y-4">
         <div class="flex gap-2">

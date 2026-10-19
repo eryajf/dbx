@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, inject, shallowRef, watch, onBeforeUnmount } from "vue";
+import { ref, computed, inject, nextTick, shallowRef, watch, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   Database,
@@ -55,6 +55,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import LightTooltip from "@/components/ui/LightTooltip.vue";
+import { encodeOceanBaseUrlUsername } from "@/lib/connection/connectionUrlBuilder";
 import type { ColumnInfo, ConnectionConfig, CustomTypeTreeMemberMeta, DatabaseType, TreeNode, TriggerInfo } from "@/types/database";
 import { alignedCommentLeadingWidth, canTreeNodePin, canTreeNodeShowExpander, isSidebarCommentSupportedType, sidebarTreeNodeComment, trailingCommentAvailableWidth, trailingCommentGapPx, treeItemPaddingLeft, treeLabelWidthClass, usesFullWidthTreeLabel } from "@/lib/sidebar/sidebarTreeItemLayout";
 import {
@@ -79,7 +80,7 @@ import { findTreeNodeById } from "@/lib/sql/newQueryContext";
 import { resolveTableVGroupDropTarget, setTableVGroupDropTargetNodeId, tableVGroupDropTargetNodeId } from "@/lib/sidebar/sidebarTableVGroupDrag";
 import { connectionDisplayUrlScheme } from "@/lib/connection/connectionPresentation";
 import { redactConnectionStringSecrets } from "@/lib/connection/connectionStringRedaction";
-import { isFocusSearchShortcut } from "@/lib/editor/keyboardShortcuts";
+import { isExecuteSqlShortcut, isFocusSearchShortcut } from "@/lib/editor/keyboardShortcuts";
 import { encodeSpannerResourcePath } from "@/lib/connection/spannerResourcePath";
 import { hexToRgba } from "@/lib/common/color";
 import { sidebarDisplayTableName } from "@/lib/sidebar/sidebarTableNameDisplay";
@@ -96,7 +97,7 @@ import { supportsSidebarObjectNameFilter } from "@/lib/sidebar/sidebarObjectName
 import { hasTreeNodeDatabaseContext } from "@/lib/sidebar/treeNodeContext";
 import { isWindows } from "@/lib/backend/platform";
 import { flattenTree } from "@/composables/useFlatTree";
-import { productionContextForDatabase } from "@/lib/database/productionSafety";
+import { showSidebarRowProductionBadge } from "@/lib/sidebar/sidebarProductionBadge";
 import { focusSidebarRenameInput } from "@/lib/sidebar/sidebarRenameFocus";
 import { ensureSqlExtension, stripSqlExtension } from "@/lib/savedSql/savedSqlFileName";
 import { savedSqlErrorMessage } from "@/lib/savedSql/savedSqlErrors";
@@ -203,6 +204,8 @@ const props = defineProps<{
   pendingRename?: boolean;
   highlighted?: boolean;
   commentLabelWidth?: number;
+  /** This row is rendered as the fixed database/schema context. */
+  isStickyContext?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -227,42 +230,16 @@ const stopPasteHandlerRegistration = watch(
 
 const activeNode = shallowRef<TreeNode>(props.node);
 
-const isDisabledTrigger = computed(() => activeNode.value.type === "trigger" && (activeNode.value.meta as TriggerInfo | undefined)?.enabled === false);
-
-// Marked rows answer "which environment am I looking at" for the connection and
-// database that carry the mark, plus the objects below them: a long tree scrolls
-// the boundary row out of sight, and that is exactly when the marker is needed.
-// Grouping rows (group-*), detail rows (column, index, …) and chrome rows stay
-// unmarked so the badge keeps pointing at write targets.
-const PRODUCTION_BADGE_NODE_TYPES: ReadonlySet<TreeNode["type"]> = new Set([
-  "connection",
-  "database",
-  "redis-db",
-  "mongo-db",
-  "table",
-  "table-vgroup",
-  "view",
-  "materialized_view",
-  "procedure",
-  "function",
-  "sequence",
-  "synonym",
-  "type",
-  "package",
-  "job",
-  "extension",
-  "event-trigger",
-  "oracle-db-link",
-  "mongo-collection",
-  "dynamodb-table",
-  "vector-collection",
-  "elasticsearch-index",
-]);
+const isDisabledTrigger = computed(() => {
+  const current = activeNode.value;
+  if (current.type !== "trigger") return false;
+  const meta = (props.node.meta as TriggerInfo | undefined) ?? (current.meta as TriggerInfo | undefined);
+  return meta?.enabled === false;
+});
 
 const showProductionBadge = computed(() => {
-  const connectionId = activeNode.value.connectionId;
-  const context = productionContextForDatabase(connectionId ? connectionStore.getConfig(connectionId) : undefined, activeNode.value.database);
-  return context.active && PRODUCTION_BADGE_NODE_TYPES.has(activeNode.value.type);
+  const node = activeNode.value;
+  return showSidebarRowProductionBadge(node, node.connectionId ? connectionStore.getConfig(node.connectionId) : undefined, props.isStickyContext);
 });
 
 function currentDatabaseType(): DatabaseType | undefined {
@@ -584,7 +561,8 @@ function connectionTooltipUrl(config: ConnectionConfig): string {
   const scheme = connectionDisplayUrlScheme(config);
   const port = Number(config.port) > 0 ? `:${config.port}` : "";
   const user = cleanTooltipValue(config.username);
-  const userInfo = user ? `${encodeURIComponent(user)}@` : "";
+  const encodedUser = config.db_type === "mysql" && config.driver_profile?.trim().toLowerCase() === "oceanbase" ? encodeOceanBaseUrlUsername(user) : encodeURIComponent(user).replace(/%40/g, "@");
+  const userInfo = user ? `${encodedUser}@` : "";
   const database = tooltipDatabaseValue(config);
   const encodedDatabase = config.db_type === "spanner" ? encodeSpannerResourcePath(database) : encodeURIComponent(database);
   const path = database ? `/${encodedDatabase}` : "";
@@ -963,7 +941,8 @@ function refreshTrailingCommentMeasurement() {
 }
 
 function formattedObjectStorage(): string {
-  if (settingsStore.editorSettings.sidebarObjectInfoMode !== "size" || (activeNode.value.type !== "database" && activeNode.value.type !== "table" && activeNode.value.type !== "materialized_view")) return "";
+  const mode = settingsStore.editorSettings.sidebarObjectInfoMode;
+  if ((mode !== "size" && mode !== "comment-and-size") || (activeNode.value.type !== "database" && activeNode.value.type !== "table" && activeNode.value.type !== "materialized_view")) return "";
   return formatSidebarObjectStorage(activeNode.value.sizeBytes);
 }
 
@@ -971,7 +950,11 @@ function formattedObjectStorage(): string {
 // 后留下一大段空白。无论全局是 aligned 还是 inline，连接节点的 comment 都紧跟 label。
 const alignedCommentLabelWidth = computed(() => (settingsStore.editorSettings.sidebarObjectInfoMode === "comment-aligned" && activeNode.value.type !== "connection" ? props.commentLabelWidth : undefined));
 
-function alignedCommentLeadingStyle(): { width: string } | undefined {
+function alignedCommentLeadingStyle(): { width: string } | { maxWidth: string } | undefined {
+  if (settingsStore.editorSettings.sidebarObjectInfoMode === "comment-and-size" && trailingComment.value) {
+    // Reserve the inline comment's margin so a long name cannot push into the size column.
+    return { maxWidth: "max(0px, calc(100% - 1rem))" };
+  }
   const width = alignedCommentLeadingWidth(alignedCommentLabelWidth.value, canTreeNodePin(activeNode.value.type));
   return width === undefined ? undefined : { width: `${width}px` };
 }
@@ -1057,7 +1040,7 @@ const rowStyle = computed(() => {
   const backgroundColor = hexToRgba(color, isActiveConnectionScope.value ? 0.14 : 0.08);
   return {
     paddingLeft: paddingLeft.value,
-    paddingRight: trailingComment.value ? "12px" : undefined,
+    paddingRight: props.isStickyContext && !showProductionBadge.value ? "72px" : trailingComment.value ? "12px" : undefined,
     "--tree-connection-row-bg": backgroundColor,
     "--tree-connection-row-hover-bg": hexToRgba(color, isActiveConnectionScope.value ? 0.2 : 0.16),
     "--tree-connection-active-bg": hexToRgba(color, 0.18),
@@ -1110,6 +1093,10 @@ function onTableSearchControlKeydown(event: KeyboardEvent) {
     input?.focus();
     input?.select();
   }
+  // Let the app-level shortcut handler open the database default query while
+  // the table-search input remains focused. Other tree-local key handling
+  // must stay contained in the search control.
+  if (isExecuteSqlShortcut(event, settingsStore.editorSettings.shortcuts)) return;
   event.stopPropagation();
 }
 
@@ -1126,6 +1113,16 @@ const renameInputRef = ref<HTMLInputElement>();
 
 /** Snapshot of the row being renamed: reprojecting the tree mid-rename recycles activeNode. */
 const renameTargetNode = shallowRef<TreeNode | null>(null);
+
+function restoreRowFocus() {
+  void nextTick(() => {
+    // Only reclaim focus when it is genuinely lost (fell back to <body>).
+    // A blur triggered by the user focusing something else (editor, search
+    // box, Tab navigation) must keep that target focused.
+    if (document.activeElement && document.activeElement !== document.body) return;
+    rowRef.value?.focus({ preventScroll: true });
+  });
+}
 
 function startRenameGroup() {
   renameTargetNode.value = activeNode.value;
@@ -1185,12 +1182,17 @@ function finishRenameGroup() {
   const trimmed = renameInput.value.trim();
   // An empty name cancels the rename and keeps the group as-is — never delete
   // here. Deleting a group is done explicitly via the context menu (issue #681).
-  if (!trimmed || trimmed === target.label) return;
+  if (!trimmed || trimmed === target.label) {
+    restoreRowFocus();
+    return;
+  }
   if (target.type === "table-vgroup" && target.vgroupId) {
     connectionStore.renameTableVGroup(target, target.vgroupId, trimmed);
+    restoreRowFocus();
     return;
   }
   connectionStore.renameConnectionGroup(target.id, trimmed);
+  restoreRowFocus();
 }
 
 async function finishRenameSavedSql() {
@@ -1198,13 +1200,17 @@ async function finishRenameSavedSql() {
   isRenamingSavedSql.value = false;
   const fileId = activeNode.value.savedSqlId;
   const trimmed = renameInput.value.trim();
-  if (!fileId || !trimmed || ensureSqlExtension(trimmed) === activeNode.value.label) return;
+  if (!fileId || !trimmed || ensureSqlExtension(trimmed) === activeNode.value.label) {
+    restoreRowFocus();
+    return;
+  }
   try {
     const savedSqlStore = useSavedSqlStore();
     await savedSqlStore.renameFile(fileId, ensureSqlExtension(trimmed));
   } catch (e: any) {
     toast(t("savedSql.renameFailed", { message: savedSqlErrorMessage(e, t) }), 5000);
   }
+  restoreRowFocus();
 }
 
 async function finishRenameConnection() {
@@ -1212,12 +1218,16 @@ async function finishRenameConnection() {
   isRenamingConnection.value = false;
   const connectionId = activeNode.value.connectionId;
   const trimmed = renameInput.value.trim();
-  if (!connectionId || !trimmed || trimmed === activeNode.value.label) return;
+  if (!connectionId || !trimmed || trimmed === activeNode.value.label) {
+    restoreRowFocus();
+    return;
+  }
   try {
     await connectionStore.renameConnection(connectionId, trimmed);
   } catch (e: any) {
     toast(t("connection.saveFailed", { message: e?.message || String(e) }), 5000);
   }
+  restoreRowFocus();
 }
 
 function finishRename() {
@@ -1230,6 +1240,7 @@ function cancelRename() {
   isRenamingGroup.value = false;
   isRenamingSavedSql.value = false;
   isRenamingConnection.value = false;
+  restoreRowFocus();
 }
 
 const PINNED_TREE_NODE_DRAG_TYPE = "__pinned-tree-node__";
@@ -1725,7 +1736,7 @@ function onKeydown(event: KeyboardEvent) {
             <Ban class="h-2.5 w-2.5 stroke-[3]" aria-hidden="true" />
           </span>
         </span>
-        <div ref="trailingCommentLayoutRef" :class="hasTrailingMetadata() ? 'flex flex-1 min-w-0 items-center' : 'contents'">
+        <div ref="trailingCommentLayoutRef" :class="[hasTrailingMetadata() ? 'flex flex-1 min-w-0 items-center' : 'contents', { 'overflow-hidden': settingsStore.editorSettings.sidebarObjectInfoMode === 'comment-and-size' }]">
           <div ref="trailingCommentLeadingRef" :class="trailingComment ? 'flex max-w-full min-w-0 shrink-0 items-center gap-2' : formattedObjectStorage() ? 'flex min-w-0 flex-1 items-center gap-2' : 'contents'" :style="alignedCommentLeadingStyle()">
             <input
               v-if="isRenamingGroup || isRenamingSavedSql || isRenamingConnection"

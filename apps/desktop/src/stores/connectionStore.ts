@@ -4,7 +4,8 @@ import type { SqlFilePreview } from "@/lib/backend/api";
 import { uuid } from "@/lib/common/utils";
 import { containsHan, orderedSubsequenceSpan, pinyinFirstLetters } from "@/lib/common/pinyin";
 import { ref, computed, watch, markRaw, reactive } from "vue";
-import { DEFAULT_QUERY_TIMEOUT_SECS } from "@/lib/connection/timeoutLimits";
+import { DEFAULT_QUERY_TIMEOUT_SECS, normalizeManualTransactionTimeoutSecs } from "@/lib/connection/timeoutLimits";
+import { gaussdbConnectionMode } from "@/lib/database/jdbcDialect";
 import { notifyComponentUpdatesChanged } from "@/lib/updates/componentUpdateEvents";
 import type {
   ColumnInfo,
@@ -13,6 +14,7 @@ import type {
   CompletionAssistantObjectKind,
   CompletionAssistantRequest,
   ConnectionConfig,
+  ConnectionIdleClosedEvent,
   ConnectionLivenessMessage,
   DatabaseType,
   DatabaseConnectionInfo,
@@ -205,6 +207,7 @@ import { buildCustomTypeTreeChildren } from "@/lib/sidebar/customTypeTree";
 import { TreeNodeLoadRegistry, type TreeNodeLoadHandle } from "@/lib/metadata/treeNodeLoadHandle";
 import { buildXuguTablespaceChildren } from "@/lib/sidebar/xuguTablespaces";
 import i18n, { currentLocale } from "@/i18n";
+import { useToast } from "@/composables/useToast";
 import type { MqAdminConfig } from "@/types/mq";
 import { RABBITMQ_MQ_TENANT, resolveMqSystemKindFromConnection } from "@/lib/mq/mqConsoleDefaults";
 import { applySidebarDatabaseStorage, applySidebarTableStorage, sidebarDatabaseNames, supportsSidebarDatabaseStorage, supportsSidebarTableStorage, type SidebarTableStorageScope } from "@/lib/sidebar/sidebarDatabaseStorage";
@@ -234,6 +237,7 @@ const MONGO_LEGACY_DRIVER_LABEL = "MongoDB (Legacy)";
 const XUGU_TABLE_CHILD_METADATA_AGENT_VERSION = "0.1.23";
 const SUPERSEDED_CONNECTION_ATTEMPT_MESSAGE = "Connection attempt was superseded by a newer attempt";
 const SHARDINGSPHERE_PROXY_VERSION_MARKER = "shardingsphere-proxy";
+const MYCAT_VERSION_MARKER = "mycat";
 
 export interface EtcdAccessCapabilities {
   /** May access cluster-wide administration APIs such as status and leases. */
@@ -248,12 +252,14 @@ const unrestrictedEtcdAccess: EtcdAccessCapabilities = { admin: true, writable: 
 const restrictedEtcdAccess: EtcdAccessCapabilities = { admin: false, writable: false, writePermissions: [] };
 const fallbackEtcdV2Access: EtcdAccessCapabilities = { admin: false, writable: true, writePermissions: null };
 
-function usesShardingSphereLogicalTables(databaseInfo: DatabaseConnectionInfo | undefined): boolean {
-  return databaseInfo?.productVersion?.toLowerCase().includes(SHARDINGSPHERE_PROXY_VERSION_MARKER) === true;
+function usesProxyLogicalTables(databaseInfo: DatabaseConnectionInfo | undefined): boolean {
+  const version = databaseInfo?.productVersion?.toLowerCase() ?? "";
+  const serverComment = databaseInfo?.serverComment?.toLowerCase() ?? "";
+  return version.includes(SHARDINGSPHERE_PROXY_VERSION_MARKER) || version.includes(MYCAT_VERSION_MARKER) || serverComment.includes(MYCAT_VERSION_MARKER);
 }
 
 function mysqlTableListSourceChanged(config: ConnectionConfig, databaseInfo: DatabaseConnectionInfo): boolean {
-  return config.db_type === "mysql" && usesShardingSphereLogicalTables(config.database_info) !== usesShardingSphereLogicalTables(databaseInfo);
+  return config.db_type === "mysql" && usesProxyLogicalTables(config.database_info) !== usesProxyLogicalTables(databaseInfo);
 }
 
 function normalizeTableNameFilter(filter: Partial<TableNameFilter> | undefined | null): TableNameFilter {
@@ -709,6 +715,7 @@ export const useConnectionStore = defineStore("connection", () => {
   };
   const connectInFlight = new Map<string, Promise<void>>();
   const disconnectInFlight = new Map<string, Promise<void>>();
+  const credentialCloseInFlight = new Map<string, Promise<void>>();
   const disconnectInFlightScoped = new Map<string, boolean>();
   const passwordChangeReconnectRequired = new Map<string, "retiring" | "ready">();
   const cancelDisconnectInFlight = new Map<string, Promise<void>>();
@@ -716,6 +723,9 @@ export const useConnectionStore = defineStore("connection", () => {
   const cancelledLocalConnectionAttempts = new Map<string, Set<number>>();
   const successfulLocalConnectionAttempts = new Map<string, number>();
   const connectionStateRevisions = new Map<string, number>();
+  // 每个连接最近一次「建立会话」的本地墙钟时间（Unix 毫秒）。用于识别后端空闲自动断开
+  // 事件的迟到：若连接时间晚于事件里的 `closedAtMs`，说明事件描述的是上一个会话。
+  const connectionConnectedAtMs = new Map<string, number>();
   const connectionErrorRevisions = new Map<string, number>();
   const tableListSourceRevisions = new Map<string, number>();
   const treeNodeLoads = new TreeNodeLoadRegistry();
@@ -1117,12 +1127,14 @@ export const useConnectionStore = defineStore("connection", () => {
   }
 
   function getBlockingDisconnectInFlight(connectionId: string): Promise<void> | undefined {
+    const credentialClose = credentialCloseInFlight.get(connectionId);
+    if (credentialClose) return credentialClose;
     return disconnectInFlightScoped.get(connectionId) ? undefined : disconnectInFlight.get(connectionId);
   }
 
   /** True while any disconnect for the connection is in flight (full or scoped). */
   function hasDisconnectInFlight(connectionId: string): boolean {
-    return disconnectInFlight.has(connectionId);
+    return credentialCloseInFlight.has(connectionId) || disconnectInFlight.has(connectionId);
   }
 
   /** 用户显式关闭过、且此后没有重新连上的连接（见 `userClosedConnectionIds`）。 */
@@ -1170,11 +1182,46 @@ export const useConnectionStore = defineStore("connection", () => {
     return bounded;
   }
 
-  function startDisconnectRequest(connectionId: string, metadataDrain?: Promise<void>): Promise<void> {
+  function startDisconnectRequest(connectionId: string, metadataDrain?: Promise<void>, expectedConfigFingerprint?: string, beforeDisconnect?: () => Promise<void>): Promise<void> {
+    const pendingCredentialClose = credentialCloseInFlight.get(connectionId);
+    if (pendingCredentialClose) return pendingCredentialClose;
     const clientAttempt = activeLocalConnectionAttempts.get(connectionId) ?? successfulLocalConnectionAttempts.get(connectionId);
+    const disconnectIfCurrent = () => {
+      const config = getConfig(connectionId);
+      if (expectedConfigFingerprint && (!config || connectionConfigFingerprint(config) !== expectedConfigFingerprint)) return;
+      return api.disconnectDb(connectionId, clientAttempt);
+    };
+    if (beforeDisconnect) {
+      // Register before any asynchronous retirement work. A scoped pool teardown
+      // may normally overlap reconnect, but a pending forget must never do so.
+      const request = Promise.resolve().then(async () => {
+        let retirementFailed = false;
+        let retirementError: unknown;
+        try {
+          await beforeDisconnect();
+        } catch (error) {
+          retirementFailed = true;
+          retirementError = error;
+        }
+        try {
+          const poolRequest = metadataDrain ? metadataDrain.then(disconnectIfCurrent) : Promise.resolve(disconnectIfCurrent());
+          await trackDisconnectRequest(connectionId, poolRequest, clientAttempt != null);
+        } catch (error) {
+          if (!retirementFailed) throw error;
+        }
+        if (retirementFailed) throw retirementError;
+      });
+      const tracked = request.finally(() => {
+        if (credentialCloseInFlight.get(connectionId) === tracked) credentialCloseInFlight.delete(connectionId);
+      });
+      // Disconnect also awaits UI persistence; observe an early rejection now.
+      void tracked.catch(() => undefined);
+      credentialCloseInFlight.set(connectionId, tracked);
+      return tracked;
+    }
     let request: Promise<void>;
     try {
-      request = metadataDrain ? metadataDrain.then(() => api.disconnectDb(connectionId, clientAttempt)) : api.disconnectDb(connectionId, clientAttempt);
+      request = metadataDrain ? metadataDrain.then(disconnectIfCurrent) : Promise.resolve(disconnectIfCurrent());
     } catch (error) {
       request = Promise.reject(error);
     }
@@ -1780,6 +1827,9 @@ export const useConnectionStore = defineStore("connection", () => {
       query_timeout_secs: queryTimeoutInherit ? settingsStore.editorSettings.globalQueryTimeoutSecs : (config.query_timeout_secs ?? DEFAULT_QUERY_TIMEOUT_SECS),
       query_timeout_inherit: queryTimeoutInherit,
       idle_timeout_secs: config.idle_timeout_secs ?? 60,
+      manual_transaction_timeout_secs: normalizeManualTransactionTimeoutSecs(config.manual_transaction_timeout_secs),
+      // 空闲自动断开默认不启用（0），落盘时同样补默认值。
+      idle_disconnect_secs: config.idle_disconnect_secs ?? 0,
       keepalive_interval_secs: config.keepalive_interval_secs ?? DEFAULT_KEEPALIVE_INTERVAL_SECS,
       redis_database_aliases: normalizeRedisDatabaseAliases(config.redis_database_aliases),
       redis_key_filter: dbType === "redis" && typeof config.redis_key_filter === "string" ? config.redis_key_filter.trim() || undefined : undefined,
@@ -4595,6 +4645,17 @@ export const useConnectionStore = defineStore("connection", () => {
     }
   }
 
+  async function retireSessionCredentialIfPresent(connectionId: string): Promise<void> {
+    if (!(await api.sessionCredentialStatus(connectionId))) return;
+    try {
+      await api.forgetSessionCredential(connectionId);
+    } catch (error) {
+      const alreadyGone = `Connection has no transient session credential to forget: ${connectionId}`;
+      if (connectionErrorMessage(error) === alreadyGone && !(await api.sessionCredentialStatus(connectionId))) return;
+      throw error;
+    }
+  }
+
   /**
    * Prompt for a transient password when saving is disabled, or when a server
    * confirms that a metadata-only synced connection sent no password. The
@@ -4683,7 +4744,7 @@ export const useConnectionStore = defineStore("connection", () => {
         const prompted = await ensureConnectionPassword({ ...config, password: "", save_password: false }, true);
         config = prompted.config;
         rememberPassword = prompted.rememberPassword;
-      } else if (connectionNeedsPasswordPrompt(config) && (await pluginConnectionPasswordPromptNeeded(config)) && !(await hasSessionCredential(config.id))) {
+      } else if (connectionNeedsPasswordPrompt(config) && (await pluginConnectionPasswordPromptNeeded(config)) && (isConnectionClosedByUser(config.id) || !(await hasSessionCredential(config.id)))) {
         const prompted = await ensureConnectionPassword(config);
         config = prompted.config;
         rememberPassword = prompted.rememberPassword;
@@ -4700,14 +4761,22 @@ export const useConnectionStore = defineStore("connection", () => {
       await ensureLocalConnectionAttemptActiveAfterConnectResult(config.id, localAttempt, id);
       await syncMongoLegacyDriverFallback(id, config);
       await ensureLocalConnectionAttemptActiveAfterConnectResult(config.id, localAttempt, id);
+      const refreshDwsMetadataBeforeReady = config.db_type === "gaussdb" && gaussdbConnectionMode(config) === "dws";
+      if (config.db_type !== "plugin" && refreshDwsMetadataBeforeReady) {
+        // Refresh the product version before exposing the connection so `dbVersion`
+        // is current. Support comes from the explicit profile, not the version.
+        // Metadata remains optional: refreshConnectedDatabaseInfo swallows failures.
+        await refreshConnectedDatabaseInfo(id, { ...config, id });
+        await ensureLocalConnectionAttemptActiveAfterConnectResult(config.id, localAttempt, id);
+      }
       passwordChangeReconnectRequired.delete(config.id);
       activeConnectionId.value = id;
-      connectedIds.value.add(id);
+      markConnectionConnected(id);
       // 显式连接成功即结束"用户已关闭"状态：页签界面随后的被动唤醒可以正常参与。
       clearConnectionClosedByUser(config.id);
       clearConnectionClosedByUser(id);
       if (config.db_type !== "plugin") {
-        void refreshConnectedDatabaseInfo(id, { ...config, id });
+        if (!refreshDwsMetadataBeforeReady) void refreshConnectedDatabaseInfo(id, { ...config, id });
         await refreshConnectionIdentifierQuote(id, { ...config, id });
         ensureLocalConnectionAttemptActive(config.id, localAttempt);
         // Compatibility modes warm asynchronously; the QueryEditor watcher and the
@@ -4855,6 +4924,49 @@ export const useConnectionStore = defineStore("connection", () => {
   }
 
   /**
+   * 把连接标记为已连接，并记录本次会话建立的本地墙钟时间。
+   *
+   * 所有「连上」的路径都必须走这里，否则 `handleConnectionIdleClosed` 无法判断后端事件是否
+   * 早于当前会话（见该函数的「迟到事件」说明）。
+   */
+  function markConnectionConnected(connectionId: string): void {
+    connectedIds.value.add(connectionId);
+    connectionConnectedAtMs.set(connectionId, Date.now());
+  }
+
+  /**
+   * 处理后端「空闲自动断开」事件（issue #12112）：某连接的连接池因空闲超过
+   * `idle_disconnect_secs` 被后端关闭。
+   *
+   * 这是系统触发的断开，而非用户主动关闭，因此复用 `disconnect` 时传
+   * `skipTabHandling: true` 跳过页签策略处理——无论用户配置的 `disconnectTabHandlingMode`
+   * 为何，都保留该连接下已打开的查询页签与结果（与「删除连接」流程同一思路）；并传
+   * `markClosedByUser: false`，不写「用户已关闭」标记，使页签下次被触发时能通过既有
+   * `ensureConnected` 自动重连。
+   *
+   * 空值与幂等保护：缺少 connectionId、连接配置已删除、或该连接本就不在已连接集合中时
+   * 直接返回，既不抛异常也不重复弹提示（后端可能对同一次断开重复发送事件）。
+   *
+   * 迟到事件保护：事件通道（web 端 SSE 尤其）可能有缓冲，事件可能在连接已经重新建立之后
+   * 才到达；此时它描述的是上一个会话，直接忽略。否则会把刚建好的新会话一并断掉，并弹出
+   * 误导性的「已空闲断开」提示。缺少 `closedAtMs`（旧后端）时退回原行为。
+   */
+  async function handleConnectionIdleClosed(payload: ConnectionIdleClosedEvent): Promise<void> {
+    const connectionId = payload?.connectionId;
+    if (!connectionId) return;
+    // 已不在已连接集合（用户已手动断开，或此前已处理过该事件）时忽略，避免重复 toast。
+    if (!connectedIds.value.has(connectionId)) return;
+    const closedAtMs = Number(payload.closedAtMs);
+    const connectedAtMs = connectionConnectedAtMs.get(connectionId);
+    if (Number.isFinite(closedAtMs) && connectedAtMs !== undefined && connectedAtMs > closedAtMs) return;
+    const config = getConfig(connectionId);
+    if (!config) return;
+    await disconnect(connectionId, { skipTabHandling: true, markClosedByUser: false });
+    const seconds = config.idle_disconnect_secs ?? 0;
+    useToast().toast(i18n.global.t("connection.idleDisconnectToast", { name: config.name || connectionId, seconds }), 5000);
+  }
+
+  /**
    * 断开连接。
    *
    * `options.skipTabHandling` 用于「删除连接」流程：删除时页签已按
@@ -4865,15 +4977,30 @@ export const useConnectionStore = defineStore("connection", () => {
    * 「关闭连接」。系统侧释放（插件页签关闭后回收连接、改密码后的退役、删除连接）必须
    * 传 false，否则后续用户重新打开那个页签时会因为标记而连不上（见 `userClosedConnectionIds`）。
    */
-  async function disconnect(connectionId: string, options: { skipTabHandling?: boolean; markClosedByUser?: boolean } = {}) {
+  async function disconnect(connectionId: string, options: { skipTabHandling?: boolean; markClosedByUser?: boolean; expectedConfigFingerprint?: string } = {}) {
+    const isExpectedConfigCurrent = () => {
+      const config = getConfig(connectionId);
+      return !options.expectedConfigFingerprint || (!!config && connectionConfigFingerprint(config) === options.expectedConfigFingerprint);
+    };
+    if (!isExpectedConfigCurrent()) return;
     const metadataDrain = cancelSchemaDiffTasksForConnection(connectionId, new Error(i18n.global.t("schemaDiff.connectionDisconnected")));
     const stateRevision = bumpConnectionStateRevision(connectionId);
     // 先写标记再清理：清理过程中存活下来的页签（未保存草稿、keep-tabs 模式）一旦被
     // 重新挂载，也不该在这一刻把连接连回来。
     if (options.markClosedByUser !== false) markConnectionClosedByUser(connectionId);
     const shouldRemoveOneTimeConnection = getConfig(connectionId)?.one_time === true;
-    if (hasSqlServerActivityTraceForConnection(connectionId)) await disposeSqlServerActivityTracesForConnection(connectionId);
-    const disconnectRequest = startDisconnectRequest(connectionId, metadataDrain);
+    const shouldRetireCredential = options.markClosedByUser !== false && getConfig(connectionId)?.save_password === false;
+    if (!shouldRetireCredential && hasSqlServerActivityTraceForConnection(connectionId)) {
+      await disposeSqlServerActivityTracesForConnection(connectionId);
+      if (!isExpectedConfigCurrent()) return;
+    }
+    const beforeDisconnect = shouldRetireCredential
+      ? async () => {
+          await retireSessionCredentialIfPresent(connectionId);
+          if (hasSqlServerActivityTraceForConnection(connectionId)) await disposeSqlServerActivityTracesForConnection(connectionId);
+        }
+      : undefined;
+    const disconnectRequest = startDisconnectRequest(connectionId, metadataDrain, options.expectedConfigFingerprint, beforeDisconnect);
     cancelLocalConnectionAttempt(connectionId);
 
     connectedIds.value.delete(connectionId);
@@ -4903,7 +5030,9 @@ export const useConnectionStore = defineStore("connection", () => {
     invalidateCompletionCache(connectionId);
     invalidateObjectBrowserRowsCache({ connectionId });
     await invalidateSidebarTableSearchIndexesForConnection(connectionId);
+    if (!isExpectedConfigCurrent()) return;
     const { useQueryStore } = await import("@/stores/queryStore");
+    if (!isExpectedConfigCurrent()) return;
     const queryStore = useQueryStore();
     // 断开连接是明确的元数据新鲜度边界：数据标签页保留展示/编辑状态，但
     // 其 tableMeta 不得再被视为 warm cache（issue #6623——reconnect 后重开
@@ -4923,10 +5052,12 @@ export const useConnectionStore = defineStore("connection", () => {
           break;
       }
     }
+    if (!isExpectedConfigCurrent()) return;
     // Tab handling is synchronous in memory, but persistence is debounced. Flush
     // the scoped tab state before disconnect returns so a quick reconnect/restart
     // cannot restore tabs that the selected policy already removed.
     await queryStore.flushPendingPersist().catch(() => undefined);
+    if (!isExpectedConfigCurrent()) return;
     await disconnectRequest;
     if (isCurrentConnectionStateRevision(connectionId, stateRevision)) {
       clearConnectionError(connectionId);
@@ -4939,28 +5070,47 @@ export const useConnectionStore = defineStore("connection", () => {
   /**
    * "断开并忘记本次密码"：关闭连接池（保留其它已保存连接的凭据），并清除该
    * `save_password === false` 连接本次运行期的会话密码，使下一次连接必须重新输入。
-   * 若该连接本无会话凭据，后端会返回错误并在此抛出（不静默吞掉），避免误报成功。
+   * 普通关闭已清除凭据时可安全重复；真实 API 错误仍向调用方传播。
    */
   async function disconnectAndForgetConnectionPassword(connectionId: string) {
     await disconnect(connectionId);
-    await api.forgetSessionCredential(connectionId);
+    if (getConfig(connectionId)?.save_password !== false) await retireSessionCredentialIfPresent(connectionId);
   }
 
-  async function retirePasswordAfterChange(connectionId: string) {
+  async function retirePasswordAfterChange(connectionId: string, expectedConfigFingerprint?: string): Promise<{ status: "retired"; fingerprint: string } | { status: "skipped" }> {
+    const originalConfig = getConfig(connectionId);
+    if (expectedConfigFingerprint && (!originalConfig || connectionConfigFingerprint(originalConfig) !== expectedConfigFingerprint)) return { status: "skipped" };
     passwordChangeReconnectRequired.set(connectionId, "retiring");
     connections.value = connections.value.map((config) => (config.id === connectionId ? { ...config, password: "", save_password: false } : config));
+    const retiredConfigFingerprint = connectionConfigFingerprint(getConfig(connectionId)!);
+    const isRetiredConfigCurrent = () => {
+      const current = getConfig(connectionId);
+      return !expectedConfigFingerprint || (!!current && connectionConfigFingerprint(current) === retiredConfigFingerprint);
+    };
+    const stopRetirementForChangedConfig = () => {
+      if (passwordChangeReconnectRequired.get(connectionId) === "retiring") passwordChangeReconnectRequired.delete(connectionId);
+      return { status: "skipped" as const };
+    };
     // 改密码后的退役是系统侧断开：用户随后会显式重连，写"用户已关闭"标记只会让
     // 页签界面在重连期间多停一档空态。
-    const results = await Promise.allSettled([disconnect(connectionId, { markClosedByUser: false }), persistConnections()]);
+    const results = await Promise.allSettled([disconnect(connectionId, { markClosedByUser: false, expectedConfigFingerprint: retiredConfigFingerprint }), persistConnections()]);
+    if (!isRetiredConfigCurrent()) return stopRetirementForChangedConfig();
     try {
-      if (await api.sessionCredentialStatus(connectionId)) await api.forgetSessionCredential(connectionId);
+      const hasCredential = await api.sessionCredentialStatus(connectionId);
+      if (!isRetiredConfigCurrent()) return stopRetirementForChangedConfig();
+      if (hasCredential) {
+        await api.forgetSessionCredential(connectionId);
+        if (!isRetiredConfigCurrent()) return stopRetirementForChangedConfig();
+      }
       if (results.some((result) => result.status === "rejected")) throw new Error();
       passwordChangeReconnectRequired.set(connectionId, "ready");
       setConnectionError(connectionId, i18n.global.t("userAdmin.passwordChangedReconnect"));
     } catch {
+      if (!isRetiredConfigCurrent()) return stopRetirementForChangedConfig();
       setConnectionError(connectionId, i18n.global.t("userAdmin.passwordChangedCleanupFailed"));
       throw new Error(i18n.global.t("userAdmin.passwordChangedCleanupFailed"));
     }
+    return { status: "retired", fingerprint: retiredConfigFingerprint };
   }
 
   async function closeDatabaseConnection(connectionId: string, database: string) {
@@ -5069,7 +5219,7 @@ export const useConnectionStore = defineStore("connection", () => {
       // Fast-path the common case (password saved or no password needed) so the
       // in-flight dedup above keeps its exact microtask cadence; only await the
       // interactive prompt when the connection actually needs a typed password.
-      if (connectionNeedsPasswordPrompt(config) && (await pluginConnectionPasswordPromptNeeded(config)) && !(await hasSessionCredential(connectionId))) {
+      if (connectionNeedsPasswordPrompt(config) && (await pluginConnectionPasswordPromptNeeded(config)) && (isConnectionClosedByUser(connectionId) || !(await hasSessionCredential(connectionId)))) {
         if (options.allowPasswordPrompt === false) throw new Error(CONNECTION_PASSWORD_REQUIRED_MESSAGE);
         const prompted = await ensureConnectionPassword(config);
         config = prompted.config;
@@ -5087,11 +5237,18 @@ export const useConnectionStore = defineStore("connection", () => {
       await ensureLocalConnectionAttemptActiveAfterConnectResult(connectionId, localAttempt, id);
       await syncMongoLegacyDriverFallback(connectionId, config);
       await ensureLocalConnectionAttemptActiveAfterConnectResult(connectionId, localAttempt, id);
-      connectedIds.value.add(connectionId);
+      const refreshDwsMetadataBeforeReady = config.db_type === "gaussdb" && gaussdbConnectionMode(config) === "dws";
+      if (config.db_type !== "plugin" && refreshDwsMetadataBeforeReady) {
+        // Refresh the product version before reconnect completion so `dbVersion`
+        // reflects the new server session; support comes from the explicit profile.
+        await refreshConnectedDatabaseInfo(connectionId, config);
+        await ensureLocalConnectionAttemptActiveAfterConnectResult(connectionId, localAttempt, id);
+      }
+      markConnectionConnected(connectionId);
       // 任何路径真的连上之后，"用户已关闭"标记就不能再拦后续的被动唤醒。
       clearConnectionClosedByUser(connectionId);
       if (config.db_type !== "plugin") {
-        void refreshConnectedDatabaseInfo(connectionId, config);
+        if (!refreshDwsMetadataBeforeReady) void refreshConnectedDatabaseInfo(connectionId, config);
         await refreshConnectionIdentifierQuote(connectionId, config);
         ensureLocalConnectionAttemptActive(connectionId, localAttempt);
         void refreshConnectionDatabaseModes(connectionId, config);
@@ -5237,7 +5394,7 @@ export const useConnectionStore = defineStore("connection", () => {
   }
 
   async function loadSidebarDatabaseStorage(connectionId: string, options?: { force?: boolean }): Promise<void> {
-    if (settingsStore.editorSettings.sidebarObjectInfoMode !== "size" || !connectedIds.value.has(connectionId)) return;
+    if ((settingsStore.editorSettings.sidebarObjectInfoMode !== "size" && settingsStore.editorSettings.sidebarObjectInfoMode !== "comment-and-size") || !connectedIds.value.has(connectionId)) return;
     if (!supportsSidebarDatabaseStorage(getConfig(connectionId))) return;
     const connectionNode = findConnectionNode(connectionId);
     const databases = sidebarDatabaseNames(connectionNode?.children);
@@ -5279,7 +5436,7 @@ export const useConnectionStore = defineStore("connection", () => {
   }
 
   async function loadSidebarTableStorage(scope: SidebarTableStorageScope, options?: { force?: boolean }): Promise<void> {
-    if (settingsStore.editorSettings.sidebarObjectInfoMode !== "size" || !connectedIds.value.has(scope.connectionId)) return;
+    if ((settingsStore.editorSettings.sidebarObjectInfoMode !== "size" && settingsStore.editorSettings.sidebarObjectInfoMode !== "comment-and-size") || !connectedIds.value.has(scope.connectionId)) return;
     if (!supportsSidebarTableStorage(getConfig(scope.connectionId))) return;
     const requestKey = sidebarTableStorageRequestKey(scope);
     const cacheScope = sidebarTableStorageCacheScope(scope);
@@ -5309,7 +5466,7 @@ export const useConnectionStore = defineStore("connection", () => {
   }
 
   const sidebarDatabaseStorageScope = computed(() => {
-    if (settingsStore.editorSettings.sidebarObjectInfoMode !== "size") return "";
+    if (settingsStore.editorSettings.sidebarObjectInfoMode !== "size" && settingsStore.editorSettings.sidebarObjectInfoMode !== "comment-and-size") return "";
     return [...connectedIds.value]
       .filter((connectionId) => supportsSidebarDatabaseStorage(getConfig(connectionId)))
       .map((connectionId) => sidebarDatabaseStorageRequestKey(connectionId, sidebarDatabaseNames(findConnectionNode(connectionId)?.children)))
@@ -5320,7 +5477,7 @@ export const useConnectionStore = defineStore("connection", () => {
   watch(
     sidebarDatabaseStorageScope,
     () => {
-      if (settingsStore.editorSettings.sidebarObjectInfoMode !== "size") return;
+      if (settingsStore.editorSettings.sidebarObjectInfoMode !== "size" && settingsStore.editorSettings.sidebarObjectInfoMode !== "comment-and-size") return;
       for (const connectionId of connectedIds.value) {
         void loadSidebarDatabaseStorage(connectionId);
       }
@@ -7272,7 +7429,7 @@ export const useConnectionStore = defineStore("connection", () => {
 
   async function loadAllObjectGroupChildren(parent: TreeNode, initialLoadOptions?: LoadTreeOptions) {
     if (!parent.connectionId || !hasTreeNodeDatabaseContext(parent)) return;
-    if (!objectTypesForGroupNode(parent.type)) return;
+    if (!objectTypesForGroupNode(parent.type) || parent.tableName) return;
     const liveParent = treeNodeInSidebarTree(parent);
     if (!liveParent) return;
     if (initialLoadOptions?.force || !isTreeNodeChildrenLoaded(liveParent.id) || filteredObjectGroupChildrenIds.has(liveParent.id)) {
@@ -7928,7 +8085,14 @@ export const useConnectionStore = defineStore("connection", () => {
     }
     invalidateCompletionCachesForNode(node);
     invalidateMetadataCachesForNode(node, options);
-    if (objectTypesForGroupNode(node.type)) {
+    if (node.type === "trigger") {
+      const parentNode = findParentNode(treeNodes.value, node.id) ?? (node.id.lastIndexOf(":") > 0 ? findNode(treeNodes.value, node.id.slice(0, node.id.lastIndexOf(":"))) : null);
+      if (parentNode) {
+        await refreshTreeNode(parentNode, options);
+        return;
+      }
+    }
+    if (objectTypesForGroupNode(node.type) && !node.tableName) {
       clearLoadedChildrenCache(node.id, { deletePersisted: false });
       await loadObjectGroupChildren(node, { force: true });
       await invalidateSidebarTableSearchIndexesForTreeRefresh(node);
@@ -8004,7 +8168,7 @@ export const useConnectionStore = defineStore("connection", () => {
 
   async function refreshTreeNodeForTableNameFilter(node: TreeNode, scopeKey: string, revision: number) {
     invalidateMetadataCachesForNode(node);
-    if (objectTypesForGroupNode(node.type)) {
+    if (objectTypesForGroupNode(node.type) && !node.tableName) {
       clearLoadedChildrenCache(node.id);
       await loadObjectGroupChildren(node, {
         force: true,
@@ -9256,6 +9420,15 @@ export const useConnectionStore = defineStore("connection", () => {
     return deduped;
   }
 
+  function normalizeCompletionIdentifier(name?: string | null): string {
+    if (!name) return "";
+    const trimmed = name.trim();
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("`") && trimmed.endsWith("`")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      return trimmed.slice(1, -1);
+    }
+    return trimmed.toLowerCase();
+  }
+
   async function listCompletionObjects(
     connectionId: string,
     database: string,
@@ -9302,7 +9475,8 @@ export const useConnectionStore = defineStore("connection", () => {
               if (databaseType === "oceanbase-oracle" && parentName) throw error;
               if (databaseType === "oceanbase-oracle" && !/does not support filtered routine completion|unknown method|method not found|not supported/i.test(String(error))) throw error;
               if (objectKinds.length === 1 && objectKinds[0] === "sequence") {
-                loadedObjects = [];
+                const objects = isSchemaAwareDatabase(connectionId) ? await listSchemaAwareCompletionObjects(connectionId, database, schema) : await api.listCompletionObjects(connectionId, database, connectionDatabaseMetadataSchema(getConfig(connectionId), database, schema));
+                loadedObjects = dedupeCompletionObjects(objects.map(toSqlCompletionObject).filter((object): object is SqlCompletionObject => object?.type === "sequence"));
               } else {
                 const objects = isSchemaAwareDatabase(connectionId) ? await listSchemaAwareCompletionObjects(connectionId, database, schema) : await api.listCompletionObjects(connectionId, database, connectionDatabaseMetadataSchema(getConfig(connectionId), database, schema));
                 loadedObjects = dedupeCompletionObjects(objects.map(toSqlCompletionObject).filter((object): object is SqlCompletionObject => object != null));
@@ -9328,8 +9502,8 @@ export const useConnectionStore = defineStore("connection", () => {
           if (!objectKinds.includes("sequence")) return false;
         } else if (object.type !== "procedure" && object.type !== "function") return false;
         else if (!objectKinds.includes("routine") && !objectKinds.includes(object.type)) return false;
-        if (schema && !globalSearch && object.schema !== schema) return false;
-        if (parentName && object.parentName !== parentName) return false;
+        if (schema && !globalSearch && (!object.schema || normalizeCompletionIdentifier(object.schema) !== normalizeCompletionIdentifier(schema))) return false;
+        if (parentName && (!object.parentName || normalizeCompletionIdentifier(object.parentName) !== normalizeCompletionIdentifier(parentName))) return false;
         if (caseSensitive) return object.name.includes(filter.trim());
       }
       return !normalizedFilter || fuzzyCompletionObjectMatch(object, normalizedFilter);
@@ -9973,7 +10147,7 @@ export const useConnectionStore = defineStore("connection", () => {
           if (node.children) await refreshNodes(node.children);
           continue;
         }
-        if (objectTypesForGroupNode(node.type)) {
+        if (objectTypesForGroupNode(node.type) && !node.tableName) {
           if (node.connectionId && connectedIds.value.has(node.connectionId)) {
             clearLoadedChildrenCache(node.id);
             if (node.isExpanded) {
@@ -10418,7 +10592,7 @@ export const useConnectionStore = defineStore("connection", () => {
     if (!connections.value.find((c) => c.id === normalized.id)) {
       connections.value.push(normalized);
     }
-    connectedIds.value.add(normalized.id);
+    markConnectionConnected(normalized.id);
     markConnectionHealthChecked(normalized.id);
     clearConnectionError(normalized.id);
   }
@@ -10468,6 +10642,8 @@ export const useConnectionStore = defineStore("connection", () => {
     connectionGroupOptions,
     selectedConnectionGroupId,
     getConfig,
+    connectionStateRevision,
+    isCurrentConnectionStateRevision,
     getEtcdAccessCapabilities,
     ensureEtcdAccessCapabilities,
     canWriteEtcdKey,
@@ -10525,6 +10701,8 @@ export const useConnectionStore = defineStore("connection", () => {
     hasDisconnectInFlight,
     markConnectionOffline,
     handleConnectionLivenessMessage,
+    handleConnectionIdleClosed,
+    markConnectionConnected,
     metadataGenerationFor,
     disconnectAndForgetConnectionPassword,
     retirePasswordAfterChange,

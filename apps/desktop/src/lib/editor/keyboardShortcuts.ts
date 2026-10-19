@@ -180,6 +180,10 @@ export function isExecuteSqlInNewResultTabShortcut(event: ShortcutLikeEvent, sho
   return matchesShortcut(event, actionShortcut("executeSqlInNewResultTab", shortcuts));
 }
 
+export function isExplainSqlShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
+  return matchesShortcut(event, actionShortcut("explainSql", shortcuts));
+}
+
 export function isCloseTabShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
   return matchesShortcut(event, actionShortcut("closeTab", shortcuts));
 }
@@ -194,6 +198,10 @@ export function isCloseOtherTabsShortcut(event: ShortcutLikeEvent, shortcuts?: P
 
 export function isCloseAllTabsShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>, platform = globalThis.navigator?.platform || ""): boolean {
   return matchesShortcut(event, actionShortcut("closeAllTabs", shortcuts), platform);
+}
+
+export function isSaveAllTabsShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>, platform = globalThis.navigator?.platform || ""): boolean {
+  return matchesShortcut(event, actionShortcut("saveAllTabs", shortcuts), platform);
 }
 
 export function isCloseWindowShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
@@ -214,6 +222,19 @@ export function isConvertNamingStyleShortcut(event: ShortcutLikeEvent, shortcuts
 
 export function isNewQueryShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
   return matchesShortcut(event, actionShortcut("newQuery", shortcuts));
+}
+
+/** Whether a global shortcut originated from the sidebar navigation surface. */
+export function isSidebarFocusedTarget(target: EventTarget | null, lastFocusedSidebarSurface = false): boolean {
+  if (typeof Element !== "undefined" && target instanceof Element && target.closest("[data-app-sidebar]")) return true;
+  if (!lastFocusedSidebarSurface || typeof document === "undefined") return false;
+  return !target || target === document.body || target === document.documentElement;
+}
+
+/** Whether the default-query shortcut is being invoked from navigation/search UI. */
+export function isDefaultQueryShortcutTarget(target: EventTarget | null, lastFocusedSidebarSurface = false): boolean {
+  if (isSidebarFocusedTarget(target, lastFocusedSidebarSurface)) return true;
+  return typeof Element !== "undefined" && target instanceof Element && !!target.closest("[data-object-search-input]");
 }
 
 export function isOpenSettingsShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
@@ -349,12 +370,28 @@ export function isViewTableDdlShortcut(event: ShortcutLikeEvent, shortcuts?: Par
   return matchesShortcut(event, actionShortcut("viewTableDdl", shortcuts));
 }
 
+export function isEditSidebarTableStructureShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>, platform = globalThis.navigator?.platform || ""): boolean {
+  return matchesShortcut(event, actionShortcut("editSidebarTableStructure", shortcuts, platform), platform);
+}
+
 export function isQuickOpenShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
   return matchesShortcut(event, actionShortcut("quickOpen", shortcuts));
 }
 
 export function isGlobalSearchShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
   return matchesShortcut(event, actionShortcut("globalSearch", shortcuts));
+}
+
+export function isOpenConnectionPickerShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
+  return matchesShortcut(event, actionShortcut("openConnectionPicker", shortcuts));
+}
+
+export function isOpenDatabasePickerShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
+  return matchesShortcut(event, actionShortcut("openDatabasePicker", shortcuts));
+}
+
+export function isOpenSchemaPickerShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>): boolean {
+  return matchesShortcut(event, actionShortcut("openSchemaPicker", shortcuts));
 }
 
 export function isNavigateTabHistoryBackShortcut(event: ShortcutLikeEvent, shortcuts?: Partial<ShortcutSettings>, platform = globalThis.navigator?.platform || ""): boolean {

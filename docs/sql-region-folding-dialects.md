@@ -162,6 +162,8 @@ The inventory below was read from `database-drivers.manifest.json`, the generate
 | `questdb` | SQL | `tagged` | `adapter` | `nested` | `double` | Existing PostgreSQL-family adapter |
 | `oceanbase-oracle` | SQL | `none` | `adapter` | `flat` | `double` | Existing adapter/registry; no dollar override |
 | `gbase` | SQL | `none` | `adapter` | `mysql` | `backtick` | Existing adapter/registry; no dollar override |
+| `gbase8s` | SQL | `none` | `adapter` | `legacy` | `double` | Upstream Informix descriptor; retain the Informix policy; server modes unverified |
+| `gbase8c` | SQL | `tagged` | `escape` | `nested` | `double` | Upstream PostgreSQL descriptor and openGauss-based agent; family policy, compatibility modes unverified |
 | `access` | SQL | `none` | `adapter` | `legacy` | `access` | Existing adapter/registry; no dollar override |
 | `h2` | SQL | `whitespace-bare` | `adapter` | `h2` | `double-backtick` | Official source above |
 | `snowflake` | SQL | `bare` | `backslash` | `slash-flat` | `double` | Official source above |

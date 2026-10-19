@@ -99,7 +99,7 @@ pub enum AiProvider {
     ClaudeCodeCli,
     #[serde(rename = "pi-agent-cli")]
     PiAgentCli,
-    #[serde(rename = "opencode-cli")]
+    #[serde(rename = "opencode-cli", alias = "opencode2-cli")]
     OpenCodeCli,
     #[serde(rename = "cursor-cli")]
     CursorCli,
@@ -459,6 +459,8 @@ pub struct AiConfig {
     #[serde(default)]
     pub opencode_cli_env: HashMap<String, String>,
     #[serde(default)]
+    pub opencode_cli_version: Option<String>,
+    #[serde(default)]
     pub cursor_cli_path: Option<String>,
     #[serde(default)]
     pub cursor_cli_env: HashMap<String, String>,
@@ -694,6 +696,24 @@ pub struct AiConversation {
     /// survives a restart and is restored when the conversation reopens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queued_input: Option<String>,
+    /// Ask/Agent mode the user picked for THIS conversation (#12075), written
+    /// only when the user operates the picker.
+    ///
+    /// Plain string, not an enum, and deliberately so: a future mode must not
+    /// need a schema migration, and the frontend validates unknown values back
+    /// down to `settings.defaultAiMode` (R9's fail-open, mirroring DBeaver's
+    /// unknown-`promptGeneratorId` fallback). `None` means "the user never
+    /// picked", which the frontend resolves through `pluginContext.mode` and then
+    /// the settings default — the capability limits (vector DB, plugin without a
+    /// connection) never write back here, so the user's own choice survives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_mode: Option<String>,
+    /// Picker action for this conversation, including the UI-only `auto` entry
+    /// (#9118 / R8): the record stores the ENTRY the user chose, not the action a
+    /// send happened to route to. Same string/`None` semantics as
+    /// [`AiConversation::assistant_mode`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_action: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1924,6 +1944,7 @@ fn ai_endpoint_is_loopback(config: &AiConfig) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
+    let host = host.strip_prefix('[').and_then(|host| host.strip_suffix(']')).unwrap_or(host);
     host.eq_ignore_ascii_case("localhost") || host.parse::<IpAddr>().map(|addr| addr.is_loopback()).unwrap_or(false)
 }
 
@@ -1932,7 +1953,10 @@ pub fn build_ai_http_client(config: &AiConfig, timeout_secs: u64) -> Result<reqw
     if config.skip_tls_verify {
         builder = builder.danger_accept_invalid_certs(true);
     }
-    if config.proxy_enabled && !config.proxy_url.trim().is_empty() && !ai_endpoint_is_loopback(config) {
+    if ai_endpoint_is_loopback(config) {
+        // Skipping an explicit proxy alone still allows environment and system proxies.
+        builder = builder.no_proxy();
+    } else if config.proxy_enabled && !config.proxy_url.trim().is_empty() {
         let proxy_url = normalize_ai_proxy_url(&config.proxy_url);
         let proxy = reqwest::Proxy::all(&proxy_url).map_err(|e| format!("Invalid AI proxy URL: {e}"))?;
         builder = builder.proxy(proxy);
@@ -5616,6 +5640,7 @@ mod tests {
                 pi_agent_cli_env: Default::default(),
                 opencode_cli_path: None,
                 opencode_cli_env: Default::default(),
+                opencode_cli_version: None,
                 cursor_cli_path: None,
                 cursor_cli_env: Default::default(),
                 grok_cli_path: None,
@@ -6253,6 +6278,7 @@ mod tests {
         assert!(config.pi_agent_cli_env.is_empty());
         assert!(config.opencode_cli_path.is_none());
         assert!(config.opencode_cli_env.is_empty());
+        assert!(config.opencode_cli_version.is_none());
         assert!(config.cursor_cli_path.is_none());
         assert!(config.cursor_cli_env.is_empty());
         assert!(config.codebuddy_cli_path.is_none());
@@ -6289,6 +6315,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6332,6 +6359,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6363,6 +6391,29 @@ mod tests {
     }
 
     #[test]
+    fn ai_http_client_identifies_loopback_endpoints() {
+        for (endpoint, expected) in [
+            ("http://localhost:3456/v1", true),
+            ("http://LOCALHOST:3456/v1", true),
+            ("http://127.0.0.1:3456/v1", true),
+            ("http://127.12.34.56:3456/v1", true),
+            ("http://[::1]:3456/v1", true),
+            ("http://192.168.1.2:3456/v1", false),
+            ("http://10.0.0.1:3456/v1", false),
+            ("http://[fd00::1]:3456/v1", false),
+            ("https://api.example.com/v1", false),
+            ("http://localhost.example.com/v1", false),
+            ("invalid endpoint", false),
+        ] {
+            let config: AiConfig = serde_json::from_value(serde_json::json!({
+                "provider": "openai-compatible", "endpoint": endpoint
+            }))
+            .unwrap();
+            assert_eq!(super::ai_endpoint_is_loopback(&config), expected, "{endpoint}");
+        }
+    }
+
+    #[test]
     fn ai_http_client_bypasses_proxy_for_loopback_endpoint() {
         let config = AiConfig {
             provider: AiProvider::OpenaiCompatible,
@@ -6390,6 +6441,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6431,6 +6483,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6476,6 +6529,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6518,6 +6572,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6579,6 +6634,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6616,6 +6672,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6656,6 +6713,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6763,6 +6821,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6851,6 +6910,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -6966,6 +7026,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -7016,6 +7077,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -7188,6 +7250,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -7234,6 +7297,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -7328,6 +7392,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -7677,6 +7742,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -7910,6 +7976,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -7963,6 +8030,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -8019,6 +8087,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -8069,6 +8138,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -8463,6 +8533,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -8540,6 +8611,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,
@@ -8613,6 +8685,7 @@ mod tests {
             pi_agent_cli_env: Default::default(),
             opencode_cli_path: None,
             opencode_cli_env: Default::default(),
+            opencode_cli_version: None,
             cursor_cli_path: None,
             cursor_cli_env: Default::default(),
             grok_cli_path: None,

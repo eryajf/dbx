@@ -77,6 +77,7 @@ export const replaceNacosSessionCredential = forward("replaceNacosSessionCredent
 export const checkConnectionHealth = forward("checkConnectionHealth");
 export const connectionIsOpen = forward("connectionIsOpen");
 export const subscribeConnectionLiveness = forward("subscribeConnectionLiveness");
+export const subscribeConnectionIdleClosed = forward("subscribeConnectionIdleClosed");
 export const prewarmConnection = forward("prewarmConnection");
 export const connectionIdentifierQuote = forward("connectionIdentifierQuote");
 export const closeDatabaseConnection = forward("closeDatabaseConnection");
@@ -183,6 +184,7 @@ export const loadSavedSqlFile = forward("loadSavedSqlFile");
 export const saveSavedSqlFolder = forward("saveSavedSqlFolder");
 export const deleteSavedSqlFolder = forward("deleteSavedSqlFolder");
 export const saveSavedSqlFile = forward("saveSavedSqlFile");
+export const saveDefaultQueryContent = forward("saveDefaultQueryContent");
 export const deleteSavedSqlFile = forward("deleteSavedSqlFile");
 export const savedSqlStorageDir = forward("savedSqlStorageDir");
 export const openSavedSqlStorageDir = forward("openSavedSqlStorageDir");
@@ -302,6 +304,8 @@ export const buildCreateUserSql = forward("buildCreateUserSql");
 export const buildDroppedFilePreviewSql = forward("buildDroppedFilePreviewSql");
 export const buildTableSelectSql = forward("buildTableSelectSql");
 export const buildDatabaseSearchSql = forward("buildDatabaseSearchSql");
+export const buildDatabaseSearchColumnsSql = forward("buildDatabaseSearchColumnsSql");
+export const buildDatabaseSearchProbeSql = forward("buildDatabaseSearchProbeSql");
 export const buildDatabaseStructureSearchSql = forward("buildDatabaseStructureSearchSql");
 export const supportsDatabaseStructureSearch = forward("supportsDatabaseStructureSearch");
 export const buildSearchResultWhere = forward("buildSearchResultWhere");
@@ -325,9 +329,16 @@ export const buildDropSchemaSql = forward("buildDropSchemaSql");
 export const buildDuplicateTableStructureSql = forward("buildDuplicateTableStructureSql");
 export const buildCopyTableDataSql = forward("buildCopyTableDataSql");
 export const buildExecutableObjectSourceStatements = forward("buildExecutableObjectSourceStatements");
+export const validateOracleExecutableObjectSource = forward("validateOracleExecutableObjectSource");
+export const fingerprintOracleRoutineObjectSource = forward("fingerprintOracleRoutineObjectSource");
 export const buildExecutableObjectSourceSql = forward("buildExecutableObjectSourceSql");
 export const buildEditableObjectSource = forward("buildEditableObjectSource");
 export const buildRoutineRenameObjectSourceStatements = forward("buildRoutineRenameObjectSourceStatements");
+export const rewriteOracleRoutineReferences = forward("rewriteOracleRoutineReferences");
+export const rewriteOracleTableReferences = forward("rewriteOracleTableReferences");
+export const parseOracleObjectName = forward("parseOracleObjectName");
+export const buildOracleViewRenameSource = forward("buildOracleViewRenameSource");
+export const reviewOracleViewRenameSource = forward("reviewOracleViewRenameSource");
 export const buildViewDdlSql = forward("buildViewDdlSql");
 export const buildTableStructureChangeSql = forward("buildTableStructureChangeSql");
 export const buildTableOwnerChangeSql = forward("buildTableOwnerChangeSql");
@@ -379,6 +390,8 @@ export const loadAiConfigs = forward("loadAiConfigs");
 export const setDefaultAiConfig = forward("setDefaultAiConfig");
 export const saveAiConfigItem = forward("saveAiConfigItem");
 export const deleteAiConfig = forward("deleteAiConfig");
+export const loadCcSwitchAiConfigs = forward("loadCcSwitchAiConfigs");
+export const loadMagpieAiConfigs = forward("loadMagpieAiConfigs");
 export const saveAiProviderConfig = forward("saveAiProviderConfig");
 export const loadAiProviderConfigs = forward("loadAiProviderConfigs");
 export const loadDesktopSettings = forward("loadDesktopSettings");
@@ -443,6 +456,9 @@ export const snippetSyncTest = forward("snippetSyncTest");
 export const snippetTokenStatus = forward("snippetTokenStatus");
 export const saveSnippetSavedToken = forward("saveSnippetSavedToken");
 export const forgetSnippetSavedToken = forward("forgetSnippetSavedToken");
+export const snippetPassphraseStatus = forward("snippetPassphraseStatus");
+export const saveSnippetSavedPassphrase = forward("saveSnippetSavedPassphrase");
+export const forgetSnippetSavedPassphrase = forward("forgetSnippetSavedPassphrase");
 export const snippetSyncSettings = forward("snippetSyncSettings");
 export const snippetSyncInspect = forward("snippetSyncInspect");
 export const saveSnippetSyncId = forward("saveSnippetSyncId");
@@ -474,6 +490,7 @@ export const listLocalSshKeys = forward("listLocalSshKeys");
 
 // SQL File Execution
 export const previewSqlFile = forward("previewSqlFile");
+export const refreshSqlFilePreview = forward("refreshSqlFilePreview");
 export const releaseSqlFilePreview = forward("releaseSqlFilePreview");
 export const executeSqlFile = forward("executeSqlFile");
 export const sqlFileFailureLogInfo = forward("sqlFileFailureLogInfo");
@@ -963,6 +980,8 @@ export const deleteHistoryEntry = forward("deleteHistoryEntry");
 
 // Updates
 export const checkMcpServerStatus = forward("checkMcpServerStatus");
+export const checkMcpKeychainAccess = forward("checkMcpKeychainAccess");
+export const authorizeMcpKeychain = forward("authorizeMcpKeychain");
 export const installMcpServer = forward("installMcpServer");
 export const installNativeMcpServer = forward("installNativeMcpServer");
 export const uninstallMcpServer = forward("uninstallMcpServer");
@@ -1050,6 +1069,7 @@ export type {
   SnippetSyncSummary,
   SnippetDownloadResult,
   SnippetTokenStatus,
+  SnippetPassphraseStatus,
   McpServerStatus,
   McpHttpServerSettings,
   McpHttpServerStatus,
@@ -1185,6 +1205,7 @@ export type {
   GlobalSearchRequest,
   GlobalSearchMatch,
   GlobalSearchSettings,
+  McpKeychainAccess,
 } from "@/lib/backend/tauri";
 
 // MQTT

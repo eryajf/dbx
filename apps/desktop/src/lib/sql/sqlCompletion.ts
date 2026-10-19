@@ -1,3 +1,4 @@
+import { collectMysqlRoutineVariables } from "@/lib/sql/mysqlRoutineVariables";
 import { Cassandra, MariaSQL, MSSQL, MySQL, PLSQL, PostgreSQL, SQLite, StandardSQL } from "@codemirror/lang-sql";
 import type { Completion, CompletionInfo } from "@codemirror/autocomplete";
 import type { DatabaseType, SqlSnippet } from "@/types/database";
@@ -25,7 +26,7 @@ import { ORACLE_FUNCTION_APPLY_TEMPLATES, ORACLE_FUNCTION_SIGNATURES } from "@/l
 import { POSTGRES_FUNCTION_APPLY_TEMPLATES, POSTGRES_FUNCTION_SIGNATURES } from "@/lib/sql/functionSignatures/postgres";
 import { TRINO_FUNCTION_APPLY_TEMPLATES, TRINO_FUNCTION_SIGNATURES } from "@/lib/sql/functionSignatures/trino";
 import { rejectsAliasReferenceInHaving } from "@/lib/database/databaseFeatureSupport";
-import { isOracleCompletionDatabase } from "@/lib/sql/oracleCompletionSession";
+import { isOracleCompletionDatabase, isSequenceCompletionDatabase } from "@/lib/sql/oracleCompletionSession";
 import { normalizeSqlTableCompletionSchemaQualification, type SqlTableCompletionSchemaQualification } from "@/lib/sql/sqlCompletionSchemaQualification";
 
 export { DEFAULT_SQL_SNIPPETS, resolveSqlSnippetBodyForDatabase } from "@/lib/sql/sqlSnippetTemplates";
@@ -219,6 +220,9 @@ const SQL_KEYWORDS = [
   "TEXT",
   "TIME",
   "TIMESTAMP",
+  "TIMESTAMPTZ",
+  "TIMETZ",
+  "INTERVAL",
   "TINYINT",
   "UNIQUEIDENTIFIER",
   "VARBINARY",
@@ -419,6 +423,17 @@ const POSTGRES_SQL_KEYWORDS = [
   "TSQUERY",
   "BYTEA",
   "BOOLEAN",
+  "TIMESTAMPTZ",
+  "TIMETZ",
+  "INTERVAL",
+  "INT2",
+  "INT4",
+  "INT8",
+  "FLOAT4",
+  "FLOAT8",
+  "MONEY",
+  "VARBIT",
+  "DOUBLE PRECISION",
   "RETURNING",
   "ILIKE",
   "SIMILAR TO",
@@ -516,6 +531,8 @@ const DUCKDB_SQL_KEYWORDS = [
   "UNPIVOT",
   "USING SAMPLE",
   "WINDOW",
+  "TIMESTAMPTZ",
+  "INTERVAL",
 ];
 
 const SQLSERVER_SQL_KEYWORDS = [
@@ -717,6 +734,14 @@ const ORACLE_SQL_KEYWORDS = Array.from(
 const DATABASE_SQL_KEYWORDS: Partial<Record<DatabaseType, string[]>> = {
   mysql: MYSQL_SQL_KEYWORDS,
   postgres: POSTGRES_SQL_KEYWORDS,
+  redshift: POSTGRES_SQL_KEYWORDS,
+  gaussdb: POSTGRES_SQL_KEYWORDS,
+  opengauss: POSTGRES_SQL_KEYWORDS,
+  kingbase: POSTGRES_SQL_KEYWORDS,
+  vastbase: POSTGRES_SQL_KEYWORDS,
+  highgo: POSTGRES_SQL_KEYWORDS,
+  uxdb: POSTGRES_SQL_KEYWORDS,
+  sundb: POSTGRES_SQL_KEYWORDS,
   sqlite: SQLITE_SQL_KEYWORDS,
   rqlite: SQLITE_SQL_KEYWORDS,
   turso: SQLITE_SQL_KEYWORDS,
@@ -730,8 +755,6 @@ const DATABASE_SQL_KEYWORDS: Partial<Record<DatabaseType, string[]>> = {
   doris: ["COMMENT", "MATERIALIZED", "MATERIALIZED VIEW", "DISTRIBUTED BY HASH", "DUPLICATE KEY", "AGGREGATE KEY", "UNIQUE KEY", "PRIMARY KEY", "PROPERTIES", "PARTITION BY", "BUCKETS", "LATERAL VIEW", "EXPLODE", "ARRAY", "MAP", "STRUCT", "BITMAP", "HLL"],
   starrocks: ["COMMENT", "MATERIALIZED", "MATERIALIZED VIEW", "DISTRIBUTED BY HASH", "DUPLICATE KEY", "PROPERTIES", "PARTITION BY", "BUCKETS", "LATERAL VIEW"],
   dameng: ["COMMENT"],
-  kingbase: ["COMMENT"],
-  vastbase: ["COMMENT"],
   spark: ["COMMENT"],
   iotdb: ["COMMENT"],
 };
@@ -878,6 +901,16 @@ const DATA_TYPE_KEYWORDS = new Set([
   "TEXT",
   "TIME",
   "TIMESTAMP",
+  "TIMESTAMPTZ",
+  "TIMETZ",
+  "INTERVAL",
+  "INT2",
+  "INT4",
+  "INT8",
+  "FLOAT4",
+  "FLOAT8",
+  "VARBIT",
+  "DOUBLE PRECISION",
   "TINYINT",
   "UNIQUEIDENTIFIER",
   "VARBINARY",
@@ -1526,7 +1559,7 @@ export type SqlCompletionClosingQuote = '"' | "'" | "`" | "]";
 export interface SqlCompletionItem {
   label: string;
   filterText?: string;
-  type: "keyword" | "table" | "column" | "snippet" | "function" | "schema" | "variable" | "text";
+  type: "keyword" | "table" | "column" | "snippet" | "function" | "schema" | "variable" | "sequence" | "text";
   detail?: string;
   info?: string | ((completion: Completion) => CompletionInfo | Promise<CompletionInfo>);
   apply?: string;
@@ -1855,7 +1888,7 @@ class SqlCompletionProvider {
     if (!context.dataTypeContext) {
       this.items.push(...customSnippetItems);
     }
-    this.items.push(...buildSqlServerLocalVariableItems(context));
+    this.items.push(...buildLocalVariableItems(context));
     if (!pendingJoinKeyword && !context.exclusiveTableSuggestions && !context.exclusiveColumnSuggestions && !context.exclusiveRoutineSuggestions) {
       if (!preferReferencedColumns && !context.dataTypeContext) {
         this.items.push(...buildSnippetItems(context.prefix, snippets.filter(shouldFormatBuiltinSnippet), this.input.keywordCase, this.databaseType));
@@ -1916,7 +1949,7 @@ class SqlCompletionProvider {
       this.items.push(...buildColumnItems(context, this.columnsByTable, this.dialect, this.databaseType, this.input.quoteIdentifiers));
       this.items.push(...buildSelectAllColumnItems(context, this.columnsByTable, this.t, this.dialect, this.databaseType));
       this.items.push(...buildInsertAllColumnItems(context, this.columnsByTable, this.t, this.dialect, this.input.keywordCase));
-      if (isOracleLikeDatabase(this.databaseType) && context.qualifier && !completionQualifierIsReferencedTable(context)) {
+      if ((isOracleLikeDatabase(this.databaseType) || isSequenceCompletionDatabase(this.databaseType)) && context.qualifier && !completionQualifierIsReferencedTable(context)) {
         const profileObjects = driverProfileCompletionObjects(this.input.driverProfile, context);
         const allObjects = [...(this.input.objects ?? []), ...profileObjects];
         const hasKnownSequence = allObjects.some((object) => sequenceMatchesQualifier(object, context));
@@ -2069,7 +2102,7 @@ export function buildPostgresSequenceLiteralCompletionItems(context: PostgresSeq
       return {
         label: object.name,
         filterText: context.nameQuoted ? identifier.slice(0, -1) : escapePostgresSequenceLiteralIdentifier(object.name),
-        type: "variable" as const,
+        type: "sequence" as const,
         detail: object.schema ? `sequence in ${object.schema}` : "sequence",
         info: object.comment?.trim() || undefined,
         apply: identifier,
@@ -2332,7 +2365,7 @@ function getSqlLexicalContext(sql: string, cursor: number, options: SqlSemanticB
       inBacktick = true;
     } else if (ch === "[") {
       inBracket = true;
-    } else if (ch === "$") {
+    } else if (ch === "$" && options.databaseType !== "mysql" && options.dialect !== "mysql") {
       const marker = matchDollarQuoteTag(sql, index);
       if (marker) {
         dollarTag = marker;
@@ -2813,7 +2846,8 @@ export function getSqlCompletionContext(sql: string, cursor: number, options: Sq
   const statementKind = detectStatementKind(beforeCursor || fullStatement);
   const selectListWildcardAfterCursor = isStandaloneSelectWildcard(rawStatement, cursor - statementSpan.start, selectListColumnContext, statementKind, resolveSqlDialectId(options));
   const preferredValueKeywords = sqlServerDatepartCompletionValues(beforeCursor, options.databaseType);
-  const localVariables = prefix.startsWith("@") ? collectSqlServerLocalVariables(sql, cursor, options) : undefined;
+  const mysqlVariablesAllowed = (options.databaseType === "mysql" || (!options.databaseType && options.dialect === "mysql")) && !prefix.startsWith("@") && !qualifier && !dataTypeContext && !afterTableTrigger && !insertInfo && !inCallRoutineContext;
+  const localVariables = prefix.startsWith("@") ? collectSqlServerLocalVariables(sql, cursor, options) : mysqlVariablesAllowed ? collectMysqlRoutineVariables(sql, cursor) : undefined;
   const preferredKeywords = qualifier ? [] : preferredKeywordsForCompletion(beforeCursor, beforeToken, selectListColumnContext, exclusiveTableSuggestions, updateInfo, deleteInfo, options.databaseType);
   const contextKind = detectCompletionContextKind({
     qualifier,
@@ -4827,7 +4861,7 @@ function buildObjectItems(context: SqlCompletionContext, objects: SqlCompletionO
   const onlyProcedures = context.contextKind === "exec";
   const onlyFunctions = context.suggestColumns && context.referencedTables.length > 0 && !context.qualifier;
   const prioritizeOracleFunctions = isOracleCompletionDatabase(databaseType) && context.statementKind === "select";
-  const allowOracleSequences = isOracleCompletionDatabase(databaseType) && !onlyProcedures;
+  const allowOracleSequences = isSequenceCompletionDatabase(databaseType) && !onlyProcedures;
   return objects
     .filter((object) => {
       if (object.type === "sequence") {
@@ -4837,11 +4871,11 @@ function buildObjectItems(context: SqlCompletionContext, objects: SqlCompletionO
     })
     .map((object) => {
       const qualifiedByContext = objectIsQualifiedByContext(object, context, databaseType, currentSchema);
-      const objectInCurrentSchema = !!currentSchema && !!object.schema && (databaseType === "oceanbase-oracle" ? object.schema === currentSchema : normalizeIdentifierPart(object.schema) === normalizeIdentifierPart(currentSchema));
+      const objectInCurrentSchema = !!currentSchema && !!object.schema && normalizeIdentifierPart(object.schema) === normalizeIdentifierPart(currentSchema);
       const suppliedApplyName = object.applyName ? quoteCompletionRoutineName(object.applyName, dialect) : undefined;
       const oceanBaseApplyName = databaseType === "oceanbase-oracle" ? [...(object.schema && !objectInCurrentSchema ? [object.schema] : []), ...(object.parentName ? [object.parentName] : []), object.name].map((part) => quoteCompletionRoutineIdentifier(part, dialect)).join(".") : undefined;
       const applyName =
-        qualifiedByContext || (context.qualifier && (databaseType === "oceanbase-oracle" ? object.schema === oceanBaseRoutineQualifierParts(context)[0] : object.schema?.toLowerCase() === context.qualifier.toLowerCase()))
+        qualifiedByContext || (context.qualifier && (databaseType === "oceanbase-oracle" ? normalizeIdentifierPart(object.schema ?? "") === normalizeIdentifierPart(oceanBaseRoutineQualifierParts(context)[0] ?? "") : object.schema?.toLowerCase() === context.qualifier.toLowerCase()))
           ? quoteCompletionRoutineIdentifier(object.name, dialect)
           : (oceanBaseApplyName ?? suppliedApplyName ?? (object.schema && !objectInCurrentSchema ? `${quoteCompletionRoutineIdentifier(object.schema, dialect)}.${quoteCompletionRoutineIdentifier(object.name, dialect)}` : quoteCompletionRoutineIdentifier(object.name, dialect)));
       const locationDetail = object.type === "trigger" && object.parentName ? `trigger on ${object.parentName}` : object.parentName ? `${object.type} in ${object.parentName}` : object.schema ? `${object.type} in ${object.schema}` : object.type;
@@ -4852,7 +4886,7 @@ function buildObjectItems(context: SqlCompletionContext, objects: SqlCompletionO
       const baseDedupeKey = object.applyName || (isOracleCompletionDatabase(databaseType) && object.schema) ? applyName : undefined;
       return {
         label: object.name,
-        type: object.type === "sequence" ? ("variable" as const) : ("function" as const),
+        type: object.type === "sequence" ? ("sequence" as const) : ("function" as const),
         detail,
         info: buildRoutineInfo(object),
         apply: object.type === "trigger" || object.type === "package" || object.type === "sequence" || (databaseType === "oceanbase-oracle" && object.signature == null) ? applyName : buildRoutineApply(applyName, object.signature, includeParams),
@@ -5006,7 +5040,7 @@ function objectMatchesCompletionContext(object: SqlCompletionObject, context: Sq
     const prefixMatches = context.prefixQuoted ? object.name.startsWith(context.prefix) : matchesPrefix(object.name, context.prefix);
     if (!context.qualifier) return prefixMatches;
     const parts = oceanBaseRoutineQualifierParts(context);
-    return prefixMatches && (object.parentName ? objectIsQualifiedByContext(object, context, databaseType, currentSchema) : parts.length === 1 && object.schema === parts[0]);
+    return prefixMatches && (object.parentName ? objectIsQualifiedByContext(object, context, databaseType, currentSchema) : parts.length === 1 && normalizeIdentifierPart(object.schema ?? "") === normalizeIdentifierPart(parts[0] ?? ""));
   }
   if (object.type === "sequence") {
     if (context.qualifier) {
@@ -5099,11 +5133,12 @@ function buildPreferredKeywordItems(prefix: string, keywords: string[], keywordC
     }));
 }
 
-function buildSqlServerLocalVariableItems(context: SqlCompletionContext): SqlCompletionItem[] {
+function buildLocalVariableItems(context: SqlCompletionContext): SqlCompletionItem[] {
   return (context.localVariables ?? [])
     .filter((variable) => matchesPrefix(variable, context.prefix))
     .map((variable) => ({
       label: variable,
+      apply: variable.startsWith("@") ? variable : quoteCompletionApplyIdentifier(variable, "mysql"),
       type: "variable" as const,
       detail: "local variable",
       boost: computeBoost(variable, context.prefix) + 4_000,
@@ -5942,7 +5977,7 @@ function normalizeTableName(name: string): string {
     .toLowerCase();
 }
 
-function normalizeIdentifierPart(name: string): string {
+export function normalizeIdentifierPart(name: string): string {
   return name.replace(/^["`[]|["`\]]$/g, "").toLowerCase();
 }
 
@@ -6609,7 +6644,9 @@ function dedupeAndSort(items: SqlCompletionItem[]): SqlCompletionItem[] {
 }
 
 function compareCompletionItems(left: SqlCompletionItem, right: SqlCompletionItem): number {
-  if ((left.type === "variable") !== (right.type === "variable")) return left.type === "variable" ? -1 : 1;
+  const leftSurfacesFirst = left.type === "variable" || left.type === "sequence";
+  const rightSurfacesFirst = right.type === "variable" || right.type === "sequence";
+  if (leftSurfacesFirst !== rightSurfacesFirst) return leftSurfacesFirst ? -1 : 1;
   if (!left.exactMatch !== !right.exactMatch) return left.exactMatch ? -1 : 1;
   const leftBonus = getHistoryBoost(left.label, left.type);
   const rightBonus = getHistoryBoost(right.label, right.type);
@@ -6625,6 +6662,8 @@ function getTypePriorityBoost(type: SqlCompletionItem["type"]): number {
     case "schema":
       return 120;
     case "variable":
+      return 220;
+    case "sequence":
       return 220;
     case "text":
       return 220;

@@ -149,7 +149,7 @@ function gbase8sConnection(): ConnectionConfig {
     ...informixConnection(),
     id: "gbase8s-1",
     name: "GBase 8s",
-    db_type: "gbase",
+    db_type: "gbase8s",
     driver_profile: "gbase8s",
     database: "dbx_test",
   } as ConnectionConfig;
@@ -855,6 +855,7 @@ describe("connectionStore metadata loading", () => {
     expect(connectionNode.children?.map((node) => [node.type, node.label, node.database, node.schema])).toEqual([
       ["schema", "DBX_TEST", "DBX_TEST", "DBX_TEST"],
       ["oracle-db-links", "tree.databaseLinks", "", undefined],
+      ["user-admin", "tree.userAdmin", "", undefined],
     ]);
 
     const linkRoot = connectionNode.children!.find((node) => node.type === "oracle-db-links")!;
@@ -907,7 +908,10 @@ describe("connectionStore metadata loading", () => {
 
     await store.loadDatabases(connection.id, { force: true });
 
-    expect(connectionNode.children?.map((node) => [node.type, node.label])).toEqual([["schema", "DBX_TEST"]]);
+    expect(connectionNode.children?.map((node) => [node.type, node.label])).toEqual([
+      ["schema", "DBX_TEST"],
+      ["user-admin", "tree.userAdmin"],
+    ]);
   });
 
   it.each([

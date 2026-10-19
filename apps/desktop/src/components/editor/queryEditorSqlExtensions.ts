@@ -15,6 +15,8 @@ import { currentStatementFrameLayer } from "@/lib/editor/codemirrorCurrentStatem
 import { createSqlAliasHighlights } from "@/lib/editor/codemirrorSqlAliasHighlights";
 import { createDbxCodeMirrorSqlDialect, sqlRegionDialectSpec, supportsQueryEditorSqlLanguage } from "@/lib/editor/codemirrorSqlDialect";
 import { sqlRegionDialect } from "@/lib/editor/sqlRegionFoldRanges";
+import { graphQueryLanguage, isGraphQueryDatabase } from "@/lib/graph/graphQueryLanguage";
+import { getGraphFunctionSignatureHelp } from "@/lib/graph/graphSignatureHelp";
 import { sqlSemanticTableNameSpansForSyntaxTree } from "@/lib/editor/codemirrorSqlSemanticHighlight";
 import { queryEditorCommentTokens, queryEditorLineCommentToken, queryEditorWordLanguageData } from "@/lib/editor/queryEditorLineComment";
 import { createShellLineCommentHighlight } from "@/lib/editor/codemirrorShellLineCommentHighlight";
@@ -301,7 +303,10 @@ export function configureQueryEditorSqlExtensions(options: QueryEditorSqlExtensi
       // text instead of materializing the whole document prefix on every
       // keystroke — doc.toString() was O(document) per key on large scripts.
       const windowFrom = Math.max(0, cursor - SQL_SIGNATURE_HELP_WINDOW_CHARS);
-      const signature = getSqlFunctionSignatureHelp(currentState.doc.sliceString(windowFrom, cursor), cursor - windowFrom, props.databaseType, sqlDriverProfile.value, { truncatedPrefix: windowFrom > 0 });
+      const source = currentState.doc.sliceString(windowFrom, cursor);
+      const signature = isGraphQueryDatabase(props.databaseType)
+        ? getGraphFunctionSignatureHelp(source, cursor - windowFrom, props.databaseType, { truncatedPrefix: windowFrom > 0 })
+        : getSqlFunctionSignatureHelp(source, cursor - windowFrom, props.databaseType, sqlDriverProfile.value, { truncatedPrefix: windowFrom > 0 });
       if (!signature) return null;
       return {
         pos: cursor,
@@ -336,7 +341,7 @@ export function configureQueryEditorSqlExtensions(options: QueryEditorSqlExtensi
     const dialect = createDbxCodeMirrorSqlDialect(langSql, props.syntaxDialect ?? props.dialect, props.databaseType, sqlDriverProfile.value);
     return [
       sqlRegionDialect.of(sqlRegionDialectSpec(dialect, props.syntaxDialect ?? props.dialect, props.databaseType)),
-      supportsQueryEditorSqlLanguage(props.databaseType) ? langSql.sql({ dialect }) : [],
+      isGraphQueryDatabase(props.databaseType) ? graphQueryLanguage(props.databaseType) : supportsQueryEditorSqlLanguage(props.databaseType) ? langSql.sql({ dialect }) : [],
       // Non-SQL editors (MongoDB shell) keep the SQL grammar for highlighting, so override the
       // comment marker that toggleLineComment reads from language data.
       Prec.highest(EditorState.languageData.of(() => [{ commentTokens: queryEditorCommentTokens(props.databaseType) }])),
@@ -355,7 +360,7 @@ export function configureQueryEditorSqlExtensions(options: QueryEditorSqlExtensi
   const refreshSqlSemanticHighlightEffect = StateEffect.define<null>();
 
   codeMirrorRuntime.buildSqlSemanticHighlightExtension = () => {
-    if (!supportsQueryEditorSqlLanguage(props.databaseType)) return [];
+    if (!supportsQueryEditorSqlLanguage(props.databaseType) || isGraphQueryDatabase(props.databaseType)) return [];
     return [
       createSqlAliasHighlights({ databaseType: props.databaseType, dialect: sqlBehaviorDialect(), enabled: queryEditorSelectionLanguage() === "sql" }),
       ViewPlugin.fromClass(
