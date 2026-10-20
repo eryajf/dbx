@@ -32,7 +32,7 @@ describe("Thai locale", () => {
     expect(localeFromLanguageTag("th_TH")).toBe("th");
     expect(detectLocaleFromLanguages(["fr-FR", "th-TH"])).toBe("th");
     expect(detectLocaleFromLanguages(["fr-FR"])).toBe("en");
-    expect(LOCALE_OPTIONS).toContainEqual({ value: "th", flag: "🇹🇭", label: "ภาษาไทย" });
+    expect(LOCALE_OPTIONS).toContainEqual(expect.objectContaining({ value: "th", flag: "🇹🇭", label: "ภาษาไทย" }));
   });
 
   it("compiles and interpolates Thai through Vue I18n", () => {
@@ -64,6 +64,12 @@ describe("Thai locale", () => {
     expect(hint, "th: sqliteExtensionsHint").toContain("|");
     expect(tableFilterExample, "th: tableFilterHelpExample").toContain("a|b");
     expect(`${placeholder}\n${hint}\n${tableFilterExample}`).not.toContain("{'|'}");
+  });
+
+  it("localizes the combined sidebar comment and object-size mode", () => {
+    expect(th.settings.sidebarObjectInfoModeCommentAndSize).toBe("คอมเมนต์ + ขนาดออบเจ็กต์");
+    expect(th.settings.sidebarObjectInfoModeDescription).toContain("ทั้งสองอย่าง");
+    expect(th.settings.sidebarObjectInfoModeDescription).not.toContain("ใช้พร้อมกันไม่ได้");
   });
 
   it("loads Thai lazily and persists an explicit selection", async () => {

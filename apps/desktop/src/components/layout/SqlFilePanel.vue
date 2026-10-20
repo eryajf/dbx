@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted } from "vue";
+import { ref, computed, nextTick, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { FolderOpen, FolderClosed, FileCode, FolderPlus, ChevronRight, ChevronDown, X, Trash2, RefreshCw, FolderSearch, Copy, Play, ChevronsUpDown, ChevronsDownUp, Settings, FilePlus, Pencil, LocateFixed } from "@lucide/vue";
+import { FolderOpen, FolderClosed, FileCode, FolderPlus, ChevronRight, ChevronDown, X, Trash2, RefreshCw, FolderSearch, Copy, Play, ChevronsUpDown, ChevronsDownUp, Settings, FilePlus, Pencil, Search, ArrowDownAZ, ArrowUpAZ } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import LightTooltip from "@/components/ui/LightTooltip.vue";
 import HelpTooltip from "@/components/ui/tooltip/HelpTooltip.vue";
+import SidebarLocateButton from "@/components/sidebar/SidebarLocateButton.vue";
 import CustomContextMenu, { type ContextMenuItem } from "@/components/ui/CustomContextMenu.vue";
 import { useQueryStore } from "@/stores/queryStore";
 import { useConnectionStore } from "@/stores/connectionStore";
@@ -21,6 +22,7 @@ import { externalSqlFileOpenErrorMessage, externalSqlEditorMaxBytes, formatSqlFi
 import * as api from "@/lib/backend/api";
 import type { SqlFileEntry } from "@/lib/backend/api";
 import { getSqlFileFilter, getSqlFileFolderPaths, saveSqlFileFilter, saveSqlFileFolderPaths, notifySqlFileFoldersChanged } from "@/lib/sqlFile/sqlFileFolders";
+import { filterAndSortSqlFileEntries, getSqlFileSortOrder, saveSqlFileSortOrder, type SqlFileSortOrder } from "@/lib/sql/sqlFileTreeFilter";
 import { orderedListRangeAnchorIndex, orderedListSelectionIntent, type OrderedListSelectionItem } from "@/lib/selection/orderedListSelection";
 
 const emit = defineEmits<{
@@ -42,9 +44,35 @@ interface FolderState {
 }
 
 const folders = ref<FolderState[]>([]);
+const fileTree = ref<HTMLElement | null>(null);
+const locatingFile = ref(false);
+const currentFilePath = computed(() => {
+  const tab = queryStore.tabs.find((tab) => tab.id === queryStore.activeTabId);
+  return tab?.mode === "query" ? tab.externalSqlPath : undefined;
+});
 const filterSettingsOpen = ref(false);
 const fileFilterDraft = ref(getSqlFileFilter());
 const fileFilterRegexExample = "(?i)[.](sql|ddl|sh|py)$";
+
+const searchText = ref("");
+const searchQuery = computed(() => searchText.value.trim().toLowerCase());
+const sortOrder = ref<SqlFileSortOrder>(getSqlFileSortOrder ? getSqlFileSortOrder() : "asc");
+const userCollapsedDuringSearch = ref<Set<string>>(new Set());
+
+watch(searchQuery, () => {
+  userCollapsedDuringSearch.value.clear();
+});
+
+function toggleSortOrder() {
+  const next = sortOrder.value === "asc" ? "desc" : "asc";
+  sortOrder.value = next;
+  saveSqlFileSortOrder?.(next);
+}
+
+function setSortOrder(order: SqlFileSortOrder) {
+  sortOrder.value = order;
+  saveSqlFileSortOrder?.(order);
+}
 
 // Right-click target. `kind` discriminates between a folder header, a tree
 // directory entry, and a tree file entry. `folderPath` is the owning top-level
@@ -69,7 +97,6 @@ const showDeleteFolderDialog = ref(false);
 const selectedPaths = ref<Set<string>>(new Set());
 const activePath = ref<string | null>(null);
 const selectionAnchorIndex = ref<number | null>(null);
-const fileTree = ref<HTMLElement | null>(null);
 
 function findFileAncestors(entries: SqlFileEntry[], path: string): string[] | null {
   for (const entry of entries) {
@@ -97,6 +124,13 @@ const activeFileTarget = computed(() => {
 async function locateActiveFile() {
   const target = activeFileTarget.value;
   if (!target) return;
+  if (searchText.value) {
+    const isVisibleNow = visibleItems.value.some((item) => item.type === "file" && normalizeExternalSqlPath(item.id) === target.path);
+    if (!isVisibleNow) {
+      searchText.value = "";
+      await nextTick();
+    }
+  }
   target.folder.collapsed = false;
   target.folder.expanded = new Set([...target.folder.expanded, ...target.ancestors]);
   const itemIndex = visibleItems.value.findIndex((item) => item.type === "file" && normalizeExternalSqlPath(item.id) === target.path);
@@ -159,7 +193,40 @@ async function addFolder(folderPath: string) {
   };
   folders.value.push(folder);
   saveFolders();
-  await loadFolderEntries(folderPath);
+  return loadFolderEntries(folderPath);
+}
+
+async function locateCurrentFile() {
+  const path = currentFilePath.value;
+  if (!path || locatingFile.value) return;
+  if (activeFileTarget.value) {
+    await locateActiveFile();
+    return;
+  }
+  if (!isTauriRuntime()) {
+    toast(t("sqlFileTree.desktopOnly"), 3000);
+    return;
+  }
+  locatingFile.value = true;
+  try {
+    const normalizedPath = normalizeExternalSqlPath(path);
+    const folder = folders.value.find((folder) => normalizedPath.startsWith(`${normalizeExternalSqlPath(folder.path).replace(/\/$/, "")}/`));
+    if (folder) {
+      if (await loadFolderEntries(folder.path)) return;
+    } else {
+      const slashedPath = path.replace(/\\/g, "/");
+      const parentPath = slashedPath.slice(0, slashedPath.lastIndexOf("/") + 1);
+      if (!parentPath) return;
+      if (await addFolder(parentPath)) return;
+    }
+    if (!activeFileTarget.value) {
+      toast(t("sqlFileTree.activeFileNotFound"), 5000);
+      return;
+    }
+    await locateActiveFile();
+  } finally {
+    locatingFile.value = false;
+  }
 }
 
 // Re-scan a single top-level folder and replace its entries. Mutated via the
@@ -271,18 +338,90 @@ async function copyPath(path: string) {
   }
 }
 
-function toggleExpand(folder: FolderState, path: string) {
-  const next = new Set(folder.expanded);
-  if (next.has(path)) {
-    next.delete(path);
-  } else {
-    next.add(path);
+interface ProcessedFolder {
+  entries: SqlFileEntry[];
+  autoExpanded: Set<string>;
+  hasMatches: boolean;
+}
+
+const folderProcessedMap = computed<Map<string, ProcessedFolder>>(() => {
+  const map = new Map<string, ProcessedFolder>();
+  for (const folder of folders.value) {
+    const res = filterAndSortSqlFileEntries(folder.entries, searchQuery.value, sortOrder.value);
+    map.set(folder.path, {
+      entries: res.entries,
+      autoExpanded: res.autoExpanded,
+      hasMatches: res.matchCount > 0,
+    });
   }
-  folder.expanded = next;
+  return map;
+});
+
+function getProcessedEntries(folderPath: string): SqlFileEntry[] {
+  return folderProcessedMap.value.get(folderPath)?.entries ?? [];
+}
+
+function isFolderContentVisible(folder: FolderState): boolean {
+  if (userCollapsedDuringSearch.value.has(folder.path)) {
+    return false;
+  }
+  if (searchQuery.value) {
+    const processed = folderProcessedMap.value.get(folder.path);
+    if (processed?.hasMatches) {
+      return true;
+    }
+  }
+  return !folder.collapsed;
+}
+
+function getEffectiveExpanded(folder: FolderState): Set<string> {
+  if (!searchQuery.value) {
+    return folder.expanded;
+  }
+  const processed = folderProcessedMap.value.get(folder.path);
+  const auto = processed?.autoExpanded ?? new Set<string>();
+  const combined = new Set<string>();
+  for (const p of folder.expanded) {
+    if (!userCollapsedDuringSearch.value.has(p)) combined.add(p);
+  }
+  for (const p of auto) {
+    if (!userCollapsedDuringSearch.value.has(p)) combined.add(p);
+  }
+  return combined;
+}
+
+function toggleExpand(folder: FolderState, path: string) {
+  const effective = getEffectiveExpanded(folder);
+  const isExpanded = effective.has(path);
+  if (isExpanded) {
+    if (searchQuery.value) {
+      userCollapsedDuringSearch.value.add(path);
+    }
+    const next = new Set(folder.expanded);
+    next.delete(path);
+    folder.expanded = next;
+  } else {
+    if (searchQuery.value) {
+      userCollapsedDuringSearch.value.delete(path);
+    }
+    const next = new Set(folder.expanded);
+    next.add(path);
+    folder.expanded = next;
+  }
 }
 
 function toggleFolderCollapse(folder: FolderState) {
-  folder.collapsed = !folder.collapsed;
+  if (searchQuery.value) {
+    const currentlyVisible = isFolderContentVisible(folder);
+    if (currentlyVisible) {
+      userCollapsedDuringSearch.value.add(folder.path);
+    } else {
+      userCollapsedDuringSearch.value.delete(folder.path);
+      folder.collapsed = false;
+    }
+  } else {
+    folder.collapsed = !folder.collapsed;
+  }
 }
 
 // Expand/collapse every directory beneath the given top-level folder.
@@ -365,8 +504,8 @@ const visibleItems = computed<OrderedListSelectionItem[]>(() => {
   const items: OrderedListSelectionItem[] = [];
   for (const folder of folders.value) {
     items.push({ type: "folderHeader", id: folder.path });
-    if (folder.collapsed) continue;
-    for (const { entry } of flatTree(folder.entries, folder.expanded)) {
+    if (!isFolderContentVisible(folder)) continue;
+    for (const { entry } of flatTree(getProcessedEntries(folder.path), getEffectiveExpanded(folder))) {
       items.push({ type: entry.is_dir ? "dir" : "file", id: entry.path });
     }
   }
@@ -650,6 +789,15 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
     const items: ContextMenuItem[] = [{ label: t("sqlFileTree.openFolder"), action: pickFolder, icon: FolderOpen }];
     if (folders.value.length > 0) {
       items.push({ label: "", separator: true });
+      items.push({
+        label: t("sqlLibrary.sortFiles"),
+        icon: ArrowDownAZ,
+        children: [
+          { label: t("sqlLibrary.sortNameAsc"), action: () => setSortOrder("asc"), icon: ArrowDownAZ },
+          { label: t("sqlLibrary.sortNameDesc"), action: () => setSortOrder("desc"), icon: ArrowUpAZ },
+        ],
+      });
+      items.push({ label: "", separator: true });
       items.push({ label: t("sqlFileTree.refreshAll"), action: refreshAll, icon: RefreshCw });
     }
     return items;
@@ -668,6 +816,15 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
       { label: t("sqlFileTree.expandAll"), action: () => folder && setAllExpanded(folder, true), icon: ChevronsUpDown, disabled: !folder },
       { label: t("sqlFileTree.collapseAll"), action: () => folder && setAllExpanded(folder, false), icon: ChevronsDownUp, disabled: !folder },
       { label: "", separator: true },
+      {
+        label: t("sqlLibrary.sortFiles"),
+        icon: ArrowDownAZ,
+        children: [
+          { label: t("sqlLibrary.sortNameAsc"), action: () => setSortOrder("asc"), icon: ArrowDownAZ },
+          { label: t("sqlLibrary.sortNameDesc"), action: () => setSortOrder("desc"), icon: ArrowUpAZ },
+        ],
+      },
+      { label: "", separator: true },
       { label: t("sqlFileTree.refreshFolder"), action: () => refreshFolder(target.folderPath), icon: RefreshCw },
       { label: "", separator: true },
       { label: t("sqlFileTree.removeFolder"), action: () => folderIdx !== -1 && removeFolder(folderIdx), icon: Trash2, variant: "destructive" },
@@ -684,6 +841,15 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
       { label: "", separator: true },
       { label: t("sqlFileTree.expandAll"), action: () => expandSubtree(target), icon: ChevronsUpDown },
       { label: t("sqlFileTree.collapseAll"), action: () => collapseSubtree(target), icon: ChevronsDownUp },
+      { label: "", separator: true },
+      {
+        label: t("sqlLibrary.sortFiles"),
+        icon: ArrowDownAZ,
+        children: [
+          { label: t("sqlLibrary.sortNameAsc"), action: () => setSortOrder("asc"), icon: ArrowDownAZ },
+          { label: t("sqlLibrary.sortNameDesc"), action: () => setSortOrder("desc"), icon: ArrowUpAZ },
+        ],
+      },
       { label: "", separator: true },
       { label: t("sqlFileTree.renameFolder"), action: () => openRenameFolderDialog(target), icon: Pencil },
       { label: t("sqlFileTree.deleteFolder"), action: () => openDeleteFolderDialog(target), icon: Trash2, variant: "destructive" },
@@ -742,10 +908,8 @@ function clearContextTarget() {
         {{ t("sqlFileTree.storageHelp") }}
       </HelpTooltip>
       <span class="flex-1" />
-      <LightTooltip :text="t('sidebar.locateActiveTab')" side="bottom" :delay="0" :close-delay="0" nowrap>
-        <Button variant="ghost" size="icon" class="h-5 w-5" :aria-label="t('sidebar.locateActiveTab')" :disabled="!activeFileTarget" @click="locateActiveFile">
-          <LocateFixed class="h-3 w-3" />
-        </Button>
+      <LightTooltip :text="t('sqlFileTree.locateActiveFile')" side="bottom" :delay="0" :close-delay="0" nowrap>
+        <SidebarLocateButton class="disabled:pointer-events-none disabled:opacity-50" :label="t('sqlFileTree.locateActiveFile')" :disabled="!currentFilePath || locatingFile || folders.some((folder) => folder.loading)" @locate="locateCurrentFile" />
       </LightTooltip>
       <LightTooltip :text="t('sqlFileTree.filterSettings')" side="bottom" :delay="0" :close-delay="0" nowrap>
         <Button
@@ -758,6 +922,12 @@ function clearContextTarget() {
           "
         >
           <Settings class="h-3 w-3" />
+        </Button>
+      </LightTooltip>
+      <LightTooltip :text="sortOrder === 'asc' ? t('sqlLibrary.sortNameAsc') : t('sqlLibrary.sortNameDesc')" side="bottom" :delay="0" :close-delay="0" nowrap>
+        <Button data-sql-file-sort-btn variant="ghost" size="icon" class="h-5 w-5" @click="toggleSortOrder">
+          <ArrowDownAZ v-if="sortOrder === 'asc'" class="h-3 w-3" />
+          <ArrowUpAZ v-else class="h-3 w-3" />
         </Button>
       </LightTooltip>
       <LightTooltip v-if="folders.length > 0" :text="t('sqlFileTree.refreshAll')" side="bottom" :delay="0" :close-delay="0" nowrap>
@@ -775,6 +945,16 @@ function clearContextTarget() {
           <X class="h-3 w-3" />
         </Button>
       </LightTooltip>
+    </div>
+
+    <div v-if="folders.length > 0" class="border-b shrink-0 px-2 py-1">
+      <div class="relative">
+        <Search class="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+        <input data-sql-file-search v-model="searchText" autocapitalize="off" autocorrect="off" spellcheck="false" class="w-full h-6 pl-7 pr-6 text-[13px] rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring" :placeholder="t('grid.search')" />
+        <button v-if="searchText" type="button" class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" @click="searchText = ''">
+          <X class="h-3 w-3" />
+        </button>
+      </div>
     </div>
 
     <CustomContextMenu :items="contextMenuItems" @close="clearContextTarget">
@@ -812,7 +992,7 @@ function clearContextTarget() {
                   onContextMenu($event);
                 "
               >
-                <ChevronRight v-if="folder.collapsed" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <ChevronRight v-if="!isFolderContentVisible(folder)" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <ChevronDown v-else class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <FolderOpen class="h-3.5 w-3.5 shrink-0 text-amber-500" />
                 <span class="truncate shrink-0" :title="folder.path">{{ folderName(folder.path) }}</span>
@@ -843,19 +1023,23 @@ function clearContextTarget() {
                   </Button>
                 </LightTooltip>
               </div>
-              <div v-show="!folder.collapsed">
+              <div v-show="isFolderContentVisible(folder)">
                 <div v-if="folder.loading" class="px-3 py-2 text-xs text-muted-foreground">
                   {{ t("sqlFileTree.loading") }}
                 </div>
                 <div v-else-if="folder.entries.length === 0" class="px-3 py-2 text-xs text-muted-foreground">
                   {{ t("sqlFileTree.noSqlFiles") }}
                 </div>
+                <div v-else-if="searchQuery && getProcessedEntries(folder.path).length === 0" data-sql-file-empty-search class="px-3 py-2 text-xs text-muted-foreground">
+                  {{ t("grid.noSearchResults") }}
+                </div>
                 <div v-else>
                   <div
                     data-sql-file-row="true"
-                    v-for="{ entry, depth } in flatTree(folder.entries, folder.expanded)"
+                    v-for="{ entry, depth } in flatTree(getProcessedEntries(folder.path), getEffectiveExpanded(folder))"
                     :key="entry.path"
                     :data-sql-file-path="entry.path"
+                    :aria-current="activePath === entry.path ? 'true' : undefined"
                     class="flex cursor-default select-none items-center gap-1 px-2 py-1 text-sm"
                     :class="[entry.is_dir ? 'rounded-sm' : 'rounded-none', isPathHighlighted(entry.path) ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/40']"
                     :style="{ paddingLeft: depth * 16 + 8 + 'px' }"
@@ -871,9 +1055,9 @@ function clearContextTarget() {
                     "
                   >
                     <template v-if="entry.is_dir">
-                      <ChevronRight v-if="!folder.expanded.has(entry.path)" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <ChevronRight v-if="!getEffectiveExpanded(folder).has(entry.path)" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       <ChevronDown v-else class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <FolderClosed v-if="!folder.expanded.has(entry.path)" class="h-4 w-4 shrink-0 text-amber-500" />
+                      <FolderClosed v-if="!getEffectiveExpanded(folder).has(entry.path)" class="h-4 w-4 shrink-0 text-amber-500" />
                       <FolderOpen v-else class="h-4 w-4 shrink-0 text-amber-500" />
                     </template>
                     <template v-else>

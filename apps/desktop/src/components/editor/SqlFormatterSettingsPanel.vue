@@ -54,7 +54,7 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const { toast } = useToast();
 
-const activeMode = ref<"form" | "json">("form");
+const activeMode = defineModel<"form" | "json">("mode", { default: "form" });
 const fileInputRef = ref<HTMLInputElement>();
 const jsonEditorRef = ref<HTMLDivElement>();
 const jsonDraft = ref(serializeSqlFormatterConfig(props.modelValue));
@@ -102,8 +102,8 @@ const indentStyleOptions: { value: SqlFormatterIndentStyle; labelKey: string }[]
 ];
 
 const layoutStyleOptions: { value: SqlFormatterLayoutStyle; labelKey: string }[] = [
-  { value: "dbx", labelKey: "settings.sqlFormatterLayoutStyleDbx" },
   { value: "classic", labelKey: "settings.sqlFormatterLayoutStyleClassic" },
+  { value: "dbx", labelKey: "settings.sqlFormatterLayoutStyleDbx" },
 ];
 
 const tabWidthOptions: SqlFormatterTabWidth[] = [2, 4];
@@ -758,7 +758,7 @@ onBeforeUnmount(() => {
         </div>
       </TabsContent>
 
-      <TabsContent value="json" class="m-0 flex min-h-0 flex-col gap-3 pt-2">
+      <TabsContent value="json" data-settings-search-id="formatter-json" class="m-0 flex min-h-0 flex-col gap-3 pt-2">
         <div class="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" size="sm" @click="formatJsonDraft">
             <WandSparkles class="mr-2 h-4 w-4" />

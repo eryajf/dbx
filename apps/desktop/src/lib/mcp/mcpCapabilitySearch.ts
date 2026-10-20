@@ -29,6 +29,12 @@ export interface McpCapabilityBrowserState {
 
 export type McpCapabilityViewMode = "manage" | "overview";
 
+export type McpCapabilityNavigationTarget = { kind: "tool"; toolName: string } | { kind: "advanced" };
+
+export interface McpCapabilityNavigator {
+  revealSearchTarget(target?: McpCapabilityNavigationTarget): void;
+}
+
 export function initialMcpCapabilityBrowserState(): McpCapabilityBrowserState {
   return { selected: "database", search: "", onlyEnabled: false, viewMode: "manage" };
 }

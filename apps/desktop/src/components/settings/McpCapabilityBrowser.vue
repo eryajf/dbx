@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Search, X, RefreshCw, Loader2 } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import McpCapabilitiesPanel from "./McpCapabilitiesPanel.vue";
 import McpPluginCapabilities from "./McpPluginCapabilities.vue";
 import type { McpToolCatalog, McpToolCatalogToolset, PluginMcpGrant, PluginMcpView } from "@/types/mcpCatalog";
 import { mcpCapabilityCategories, mcpCapabilityCategoryId, mcpToolAllowed, mcpToolsetAccessLevels, mcpToolsetHasCoverage, mcpToolsetState, summarizeMcpToolsetCoverage, type McpCoverageConnection, type McpCapabilityCategoryId } from "@/lib/mcp/mcpToolCatalog";
-import { initialMcpCapabilityBrowserState, mcpCategoryTitle, mcpToolsetTitle, searchMcpCapabilities, type McpCapabilityBrowserState, type McpCapabilitySearchItem } from "@/lib/mcp/mcpCapabilitySearch";
+import { initialMcpCapabilityBrowserState, mcpCategoryTitle, mcpToolsetTitle, searchMcpCapabilities, type McpCapabilityBrowserState, type McpCapabilityNavigationTarget, type McpCapabilityNavigator, type McpCapabilitySearchItem } from "@/lib/mcp/mcpCapabilitySearch";
 import { pluginMcpEnabled, pluginMcpExposedCount, pluginMcpPendingTools } from "@/lib/mcp/pluginMcpGrant";
 
 const props = withDefaults(
@@ -74,6 +74,7 @@ const overviewHasContent = computed(() => overviewCategories.value.some((categor
 const collapsedOverviewCategories = ref(new Set<McpCapabilityCategoryId>());
 const builtinFilter = ref("");
 const pluginFilter = ref("");
+const pendingToolNavigation = ref<{ toolName: string } | null>(null);
 const filteredCategories = computed(() => {
   const query = builtinFilter.value.trim().toLocaleLowerCase();
   if (!query) return categories.value;
@@ -102,6 +103,42 @@ function focusSearch() {
   rootElement.value?.querySelector?.<HTMLInputElement>("[data-mcp-global-search]")?.focus();
 }
 
+function revealSearchTarget(target?: McpCapabilityNavigationTarget) {
+  pendingToolNavigation.value = null;
+  if (!target) return;
+  builtinFilter.value = "";
+  pluginFilter.value = "";
+  batchChanged.value = false;
+  state.value = {
+    ...initialMcpCapabilityBrowserState(),
+    ...(target.kind === "advanced" ? { selected: "advanced" as const } : { search: target.toolName }),
+  };
+  pendingToolNavigation.value = target.kind === "tool" ? { toolName: target.toolName } : null;
+}
+
+// A settings result can arrive before the catalog. Keep the exact-name search
+// visible during loading/errors, then reveal the tool without changing grants.
+watch(
+  [pendingToolNavigation, () => props.catalog, () => props.loading, () => props.loadError],
+  async ([target, catalog, loading, loadError], _previous, onCleanup) => {
+    if (!target || !catalog || loading || loadError) return;
+    const toolset = catalog.toolsets.find((entry) => entry.tools.some((tool) => tool.name === target.toolName));
+    if (!toolset) return;
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+    });
+    state.value = { ...state.value, selected: mcpCapabilityCategoryId(toolset.id), search: "", onlyEnabled: false, viewMode: "manage" };
+    await nextTick();
+    if (cancelled || pendingToolNavigation.value !== target) return;
+    builtinPanel.value?.openDetail(toolset.id, "tools", target.toolName);
+    pendingToolNavigation.value = null;
+  },
+  { flush: "post" },
+);
+
+defineExpose<McpCapabilityNavigator>({ revealSearchTarget });
+
 function focusNavigationFilter(event: MouseEvent) {
   const target = event.currentTarget as HTMLElement | null;
   const eventTarget = event.target as HTMLElement | null;
@@ -112,6 +149,7 @@ function focusNavigationFilter(event: MouseEvent) {
 
 function select(value: unknown) {
   if (typeof value !== "string") return;
+  pendingToolNavigation.value = null;
   state.value = {
     ...state.value,
     selected: value as McpCapabilityBrowserState["selected"],
@@ -122,6 +160,7 @@ function select(value: unknown) {
 }
 
 function setViewMode(mode: "manage" | "overview") {
+  pendingToolNavigation.value = null;
   if (viewMode.value === mode) return;
   state.value = { ...state.value, viewMode: mode };
   batchChanged.value = false;
@@ -139,6 +178,7 @@ function overviewCategoryExpanded(categoryId: McpCapabilityCategoryId) {
 }
 
 function updateSearch(value: string | number) {
+  pendingToolNavigation.value = null;
   const clearing = state.value.search.length > 0 && String(value).length === 0;
   state.value = { ...state.value, search: String(value) };
   batchChanged.value = false;
