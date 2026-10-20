@@ -1,5 +1,5 @@
 import type { BackendError } from "@/lib/backend/errorUtils";
-import type { TransferContent, TransferMode, TransferObjectKind, TransferTableNameCase } from "@/lib/backend/tauri";
+import type { TransferColumnNameCase, TransferContent, TransferMode, TransferObjectKind, TransferTableNameCase } from "@/lib/backend/tauri";
 import type { SqlFormatDialect } from "@/lib/sql/sqlFormatter";
 import type { MultiDbExecutionTarget, MultiDbResultRunExecution } from "@/types/sqlExecution";
 import type { DatabaseType } from "@/types/generated/databaseTypes";
@@ -1598,6 +1598,8 @@ export interface QueryResultSourceColumnRef {
 
 export interface QueryResultRun {
   id: string;
+  /** Source connection retained when the editor switches to another connection. */
+  connectionId?: string;
   title: string;
   sequence: number;
   sql: string;
@@ -1690,6 +1692,12 @@ export interface TransactionLog {
   error?: string;
 }
 
+/**
+ * 1-based line and column range in SQL text.
+ * Both `start_column` and `end_column` are 1-based and inclusive.
+ * For example, a 1-character token at line 1, column 5 has:
+ * `{ start_line: 1, start_column: 5, end_line: 1, end_column: 5 }`.
+ */
 export interface SqlTextSpan {
   start_line: number;
   start_column: number;
@@ -2615,6 +2623,7 @@ export interface TransferTaskConfig {
   content: TransferContent;
   mode: TransferMode;
   targetTableNameCase: TransferTableNameCase;
+  targetColumnNameCase?: TransferColumnNameCase;
   quoteTargetColumnNames: boolean;
   batchSize: number;
   /** Per-operation timeout for this task. Undefined inherits each connection; 0 disables the limit. */
