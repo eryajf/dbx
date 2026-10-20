@@ -2,7 +2,9 @@ use std::{collections::HashMap, sync::Arc, sync::Mutex};
 
 use async_trait::async_trait;
 use dbx_core::{
-    agent_events::ToolResult, agent_tools::AgentSqlPermissions, models::connection::ConnectionConfig,
+    agent_events::ToolResult,
+    agent_tools::AgentSqlPermissions,
+    models::connection::{ConnectionConfig, DatabaseType},
     storage::McpGlobalPolicy,
 };
 use dbx_mcp::{with_legacy_discovery_fallback, DbxBackend, DbxMcpServer, McpScope};
@@ -328,6 +330,27 @@ fn test_connection(id: &str, name: &str) -> ConnectionConfig {
     .expect("test connection")
 }
 
+fn catalog_connections() -> Vec<ConnectionConfig> {
+    DatabaseType::ALL
+        .iter()
+        .enumerate()
+        .map(|(index, db_type)| {
+            serde_json::from_value(json!({
+                "id": format!("catalog-{index}"),
+                "name": format!("catalog-{db_type:?}"),
+                "db_type": db_type,
+                "host": "",
+                "port": 0,
+                "username": "",
+                "password": "",
+                "database": "",
+                "ssl": false
+            }))
+            .expect("catalog test connection")
+        })
+        .collect()
+}
+
 fn mysql_connection(id: &str, name: &str) -> ConnectionConfig {
     serde_json::from_value(json!({
         "id": id,
@@ -382,7 +405,7 @@ async fn list_results_include_complete_discriminator_for_modern_stdio_clients() 
     for hide_tools in [false, true] {
         let backend = PolicyBackend {
             policy: McpGlobalPolicy { allowed_tool_names: hide_tools.then(Vec::new), ..Default::default() },
-            connections: Vec::new(),
+            connections: hide_tools.then(Vec::new).unwrap_or_else(|| vec![test_connection("local", "local-db")]),
             group_paths: Ok(HashMap::new()),
         };
         let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
@@ -418,7 +441,15 @@ async fn list_results_include_complete_discriminator_for_modern_stdio_clients() 
 async fn list_results_preserve_legacy_stdio_shapes_after_initialize() {
     for requested_version in ["2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"] {
         let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
-        let server = DbxMcpServer::with_runtime_options(Arc::new(EmptyBackend), McpScope::default(), false);
+        let server = DbxMcpServer::with_runtime_options(
+            Arc::new(PolicyBackend {
+                policy: McpGlobalPolicy::default(),
+                connections: vec![test_connection("local", "local-db")],
+                group_paths: Ok(HashMap::new()),
+            }),
+            McpScope::default(),
+            false,
+        );
         let server_task =
             tokio::spawn(async move { server.serve(with_legacy_discovery_fallback(server_transport)).await });
         let mut client = BufReader::new(client_transport);
@@ -460,16 +491,25 @@ async fn list_results_preserve_legacy_stdio_shapes_after_initialize() {
 #[tokio::test]
 async fn initializes_lists_tools_and_calls_a_tool() {
     let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
-    let server = DbxMcpServer::with_runtime_options(Arc::new(EmptyBackend), McpScope::default(), false);
+    let server = DbxMcpServer::with_runtime_options(
+        Arc::new(PolicyBackend {
+            policy: McpGlobalPolicy { allow_dangerous_sql: true, ..Default::default() },
+            connections: catalog_connections(),
+            group_paths: Ok(HashMap::new()),
+        }),
+        McpScope::default(),
+        false,
+    );
     let server_task = tokio::spawn(async move { server.serve(server_transport).await });
     let client = ().serve(client_transport).await.expect("initialize MCP client");
 
     let tools = client.peer().list_tools(None).await.expect("list tools");
     let names = tools.tools.iter().map(|tool| tool.name.as_ref()).collect::<Vec<_>>();
+    // Includes the 22 product-provider tools (14 Nacos + 8 Consul).
     #[cfg(feature = "mq-admin")]
-    assert_eq!(names.len(), 25);
+    assert_eq!(names.len(), 47);
     #[cfg(not(feature = "mq-admin"))]
-    assert_eq!(names.len(), 23);
+    assert_eq!(names.len(), 45);
     #[cfg(feature = "mq-admin")]
     assert!(names.contains(&"dbx_peek_messages"));
     #[cfg(not(feature = "mq-admin"))]
@@ -513,11 +553,11 @@ async fn initializes_lists_tools_and_calls_a_tool() {
         panic!("connections resource should be text");
     };
     assert_eq!(mime_type.as_deref(), Some("text/markdown"));
-    assert_eq!(text, "No connections configured in DBX.");
+    assert!(text.contains("catalog-"), "{text}");
 
     let result = client.peer().call_tool(CallToolRequestParams::new("dbx_list_connections")).await.expect("call tool");
     let response = result.content[0].as_text().expect("text response");
-    assert_eq!(response.text, "No connections configured in DBX.");
+    assert!(response.text.contains("catalog-"), "{}", response.text);
 
     client.cancel().await.expect("close MCP client");
     server_task.abort();

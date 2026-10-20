@@ -6,6 +6,7 @@ import type { MongoDumpFormat, MongoDumpSourceInput, MongoDumpCatalog, MongoRest
 import type { MongoRestoreUpload, MongoSourceReadOptions } from "./mongodbDumpTypes";
 import type { DamengDumpKind, DamengDumpRequest, DamengDumpProgress } from "./damengDumpTypes";
 import type { UserSkillRootSettings, UserSkillsListResult, UserSkillsReadResult } from "@/types/userSkills";
+import type { McpAccessPolicy, McpAccessRule, McpSubScopeMode, McpToolCatalog, PluginMcpGrant, PluginMcpView } from "@/types/mcpCatalog";
 import type { DatabaseBackupCommand, DatabaseBackupBackgroundStatus } from "@/lib/backup/backgroundDatabaseBackup";
 
 export function databaseBackupCommand<T = unknown>(command: DatabaseBackupCommand): Promise<T> {
@@ -338,6 +339,7 @@ export interface McpGlobalPolicy {
   readOnly: boolean;
   allowDangerousSql: boolean;
   promptHighRiskSql: boolean;
+  callConfirmation?: "off" | "full" | "high_risk" | null;
   allowedConnectionIds: string[] | null;
   allowedGroupIds: string[];
   allowedToolNames: string[] | null;
@@ -345,6 +347,7 @@ export interface McpGlobalPolicy {
   groupPolicies: McpGroupPolicy[];
   configured: boolean;
   queryTimeoutSecs: number | null;
+  pluginToolsMode: "auto" | "flat" | "lazy";
 }
 
 export interface McpGroupPolicy {
@@ -885,6 +888,34 @@ export async function loadMcpGlobalPolicy(): Promise<McpGlobalPolicy> {
 
 export async function saveMcpGlobalPolicy(policy: Omit<McpGlobalPolicy, "configured">): Promise<void> {
   return invoke("save_mcp_global_policy", { policy });
+}
+
+export async function loadMcpToolCatalog(): Promise<McpToolCatalog> {
+  return invoke("load_mcp_tool_catalog");
+}
+
+export async function loadMcpAccessPolicy(): Promise<McpAccessPolicy> {
+  return invoke("load_mcp_access_policy");
+}
+
+export async function setMcpPluginScopeRule(connectionId: string, kind: string, value: string | null, rule: McpAccessRule | null, subScope: McpSubScopeMode | null): Promise<McpAccessPolicy> {
+  return invoke("set_mcp_plugin_scope_rule", { connectionId, kind, value, rule, subScope });
+}
+
+export async function listPluginMcpViews(): Promise<PluginMcpView[]> {
+  return invoke("list_plugin_mcp_views");
+}
+
+export async function loadPluginMcpView(pluginId: string): Promise<PluginMcpView> {
+  return invoke("load_plugin_mcp_view", { pluginId });
+}
+
+export async function listMcpPluginScopes(pluginId: string, connectionId: string): Promise<{ values: string[] }> {
+  return invoke("list_mcp_plugin_scopes", { pluginId, connectionId });
+}
+
+export async function savePluginMcpGrant(pluginId: string, grant: PluginMcpGrant, approveCurrent: boolean): Promise<PluginMcpView> {
+  return invoke("save_plugin_mcp_grant", { pluginId, grant, approveCurrent });
 }
 
 export interface McpHttpServerSettings {

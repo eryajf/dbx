@@ -45,7 +45,8 @@ describe("MCP execution permission selection", () => {
       { labelKey: "settings.mcpCapabilityScopedMutation", read_only: false, safe_write: true, high_risk_write: true },
       { labelKey: "settings.mcpCapabilityBroadMutation", read_only: false, safe_write: false, high_risk_write: true },
       { labelKey: "settings.mcpCapabilitySchemaAdmin", read_only: false, safe_write: false, high_risk_write: true },
-      { labelKey: "settings.mcpCapabilityConnectionManagement", read_only: false, safe_write: true, high_risk_write: true },
+      { labelKey: "settings.mcpCapabilityConnectionCreate", read_only: false, safe_write: true, high_risk_write: true },
+      { labelKey: "settings.mcpCapabilityConnectionRemove", read_only: false, safe_write: false, high_risk_write: true },
     ]);
   });
 });
@@ -120,8 +121,11 @@ describe("MCP tool permission selection", () => {
     expect(toggleMcpAllowedToolName(["dbx_execute_query"], "dbx_execute_batch", true)).toEqual(["dbx_execute_query", "dbx_execute_batch"]);
     expect(toggleMcpAllowedToolName(["dbx_execute_query", "dbx_execute_batch"], "dbx_execute_batch", false)).toEqual(["dbx_execute_query"]);
     expect(MCP_TOOL_OPTIONS.find((tool) => tool.name === "dbx_execute_batch")?.labelKey).toBe("settings.mcpToolExecuteBatch");
-    expect(settingsDialogSource).toContain("const mcpToolOptions = MCP_TOOL_OPTIONS;");
-    expect(settingsDialogSource).toContain("toggleMcpAllowedToolName(mcpAllowedToolNames.value, name, allowed)");
+    // Tool switches moved to the capability tab: single tools and whole toolsets
+    // both still stage the flat allowlist.
+    expect(settingsDialogSource).toContain("setMcpToolsEnabled(mcpAllowedToolNames.value, mcpToolCatalog.value, [name], allowed)");
+    expect(settingsDialogSource).toContain("setMcpToolsetEnabled(mcpAllowedToolNames.value, toolset, allowed, mcpToolCatalog.value)");
+    expect(settingsDialogSource).toContain('@set:tool="onMcpToolAllowedChange"');
   });
 });
 
@@ -133,10 +137,15 @@ describe("MCP policy settings state", () => {
     expect(isMcpPolicyMutationBlocked({ loading: false, saving: false, loadError: "" })).toBe(false);
   });
 
-  it("guards the mutation entry point and wires the shared disabled state to policy controls", () => {
-    expect(settingsDialogSource).toContain("if (mcpPolicyControlsDisabled.value) return;");
+  it("wires the shared disabled state to policy controls and loads policy before editing", () => {
+    // Mutation guards are exercised by the dialog integration and panel interaction tests.
+    expect(settingsDialogSource).toContain("<McpDefaultAccessPanel");
+    expect(settingsDialogSource).toContain('@set:mode="onMcpExecutionModeChange"');
+    expect(settingsDialogSource).toContain('@set:confirmation="onMcpHighRiskConfirmationChange"');
     expect(settingsDialogSource).toContain(':disabled="mcpPolicyControlsDisabled"');
-    expect(settingsDialogSource).toContain('@update:scope="onMcpResourceScopeChange"');
+    // The access-control tree replaced the wizard; its edits route through the staged draft.
+    expect(settingsDialogSource).toContain('@set:scope-mode="onMcpTreeScopeMode"');
+    expect(settingsDialogSource).toContain('@set:connection-level="onMcpConnectionExecutionModeChange"');
 
     const loadingStart = settingsDialogSource.indexOf("mcpPolicyLoading.value = true;");
     const policyLoad = settingsDialogSource.indexOf("await settingsStore.initMcpGlobalPolicy(true);");
