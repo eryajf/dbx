@@ -59,12 +59,8 @@ describe("McpDefaultAccessPanel", () => {
       const row = rows.find((candidate) => candidate.querySelector("th")?.textContent === label)!;
       return Array.from(row.querySelectorAll("td")).map((cell) => cell.textContent?.trim());
     };
-    expect(permissions("settings.mcpCapabilityConnectionCreate")).toEqual([
-      "settings.mcpCapabilityBlocked", "settings.mcpCapabilityAllowed", "settings.mcpCapabilityAllowed",
-    ]);
-    expect(permissions("settings.mcpCapabilityConnectionRemove")).toEqual([
-      "settings.mcpCapabilityBlocked", "settings.mcpCapabilityBlocked", "settings.mcpCapabilityAllowed",
-    ]);
+    expect(permissions("settings.mcpCapabilityConnectionCreate")).toEqual(["settings.mcpCapabilityBlocked", "settings.mcpCapabilityAllowed", "settings.mcpCapabilityAllowed"]);
+    expect(permissions("settings.mcpCapabilityConnectionRemove")).toEqual(["settings.mcpCapabilityBlocked", "settings.mcpCapabilityBlocked", "settings.mcpCapabilityAllowed"]);
   });
 
   it("supports arrow, Home and End navigation with focus on the selected radio", async () => {

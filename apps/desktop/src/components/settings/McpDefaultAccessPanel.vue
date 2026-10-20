@@ -34,7 +34,6 @@ async function onModeKeydown(event: KeyboardEvent, mode: McpExecutionMode) {
   // The parent can reject full access in its confirmation dialog.
   group?.querySelector<HTMLElement>(`[data-mcp-execution-mode="${props.mode}"]`)?.focus();
 }
-
 </script>
 
 <template>

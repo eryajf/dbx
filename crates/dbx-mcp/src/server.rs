@@ -1113,11 +1113,8 @@ impl DbxMcpServer {
                 }
             }
         }
-        let resolved_access = access.resolve(
-            &resolved.group_ids,
-            &connection.id,
-            scope_kind.and_then(|kind| scope_value.as_deref().map(|value| (kind, value))),
-        );
+        let resolved_access =
+            access.resolve(&resolved.group_ids, &connection.id, scope_kind.zip(scope_value.as_deref()));
         let effective_level = dbx_core::mcp_catalog::descriptor(tool)
             .and_then(|descriptor| access.toolset_ceiling(&connection.id, descriptor.toolset))
             .map_or(resolved_access.level, |ceiling| resolved_access.level.min(ceiling));
@@ -1206,7 +1203,7 @@ impl DbxMcpServer {
                 let refreshed_scope = refreshed_access.resolve(
                     &refreshed.group_ids,
                     &refreshed.connection.id,
-                    scope_kind.and_then(|kind| scope_value.as_deref().map(|value| (kind, value))),
+                    scope_kind.zip(scope_value.as_deref()),
                 );
                 let refreshed_level = dbx_core::mcp_catalog::descriptor(tool)
                     .and_then(|descriptor| {
@@ -6246,6 +6243,7 @@ fn plugin_entry_has_allowed_connection(
 /// for plugin calls just as it is for built-in product calls: connection
 /// visibility, connection access, selected/none sub-scope admission, and the
 /// connection's toolset ceiling are all evaluated before the sidecar runs.
+#[allow(clippy::result_large_err)] // Keep the MCP error response, as in the other scope guards.
 fn ensure_plugin_scope(
     access: &dbx_core::mcp_access::McpAccessPolicy,
     entry: &crate::plugin_tools::PluginToolEntry,

@@ -102,7 +102,10 @@ describe("McpPluginScopeEditor", () => {
     const input = findOne(mounted.root, (node) => node.props["data-stub"] === "Input");
     (input.props["onUpdate:modelValue"] as (value: string) => void)(" staging ");
     await nextTick();
-    dispatch(findOne(mounted.root, (node) => node.props["data-mcp-plugin-scope-add"] === "k1"), "click");
+    dispatch(
+      findOne(mounted.root, (node) => node.props["data-mcp-plugin-scope-add"] === "k1"),
+      "click",
+    );
     await nextTick();
     expect(save).not.toHaveBeenCalled();
     const scope = findOne(mounted.root, (node) => node.props["data-mcp-plugin-scope-value"] === "staging");
@@ -116,7 +119,11 @@ describe("McpPluginScopeEditor", () => {
     const input = findOne(mounted.root, (node) => node.props["data-stub"] === "Input");
     (input.props["onUpdate:modelValue"] as (value: string) => void)("prod");
     await nextTick();
-    const add = () => dispatch(findOne(mounted.root, (node) => node.props["data-mcp-plugin-scope-add"] === "k1"), "click");
+    const add = () =>
+      dispatch(
+        findOne(mounted.root, (node) => node.props["data-mcp-plugin-scope-add"] === "k1"),
+        "click",
+      );
     add();
     await vi.waitFor(() => expect(hostText(mounted.root)).toContain("scope save failed"));
     expect(input.props.modelValue).toBe("prod");
@@ -132,7 +139,12 @@ describe("McpPluginScopeEditor", () => {
 
   it("rejects a second scope mutation while the first save is pending", async () => {
     let finish!: (value: McpAccessPolicy) => void;
-    const save = vi.fn(() => new Promise<McpAccessPolicy>((resolve) => { finish = resolve; }));
+    const save = vi.fn(
+      () =>
+        new Promise<McpAccessPolicy>((resolve) => {
+          finish = resolve;
+        }),
+    );
     const { mounted } = mountEditor(save);
     const mode = selects(mounted.root)[0].props["onUpdate:modelValue"] as (value: string) => void;
     mode("none");
@@ -148,18 +160,24 @@ describe("McpPluginScopeEditor", () => {
   it.each(["inherit", "full"])("preserves scope visibility and ceilings when changing access to %s", async (access) => {
     const restricted: McpAccessPolicy = {
       ...policy,
-      rules: [
-        policy.rules[0],
-        { target: { kind: "scope", connectionId: "k1", scope: "namespace", value: "staging" }, visible: false, access: "read", ceiling: "read", toolsetCeilings: { admin: "none" } },
-      ],
+      rules: [policy.rules[0], { target: { kind: "scope", connectionId: "k1", scope: "namespace", value: "staging" }, visible: false, access: "read", ceiling: "read", toolsetCeilings: { admin: "none" } }],
     };
     const save = vi.fn(async () => restricted);
     const mounted = mountComponent(McpPluginScopeEditor, { connectionId: "k1", kind: "namespace", title: "Namespace", policy: restricted, save });
     (selects(mounted.root)[1].props["onUpdate:modelValue"] as (value: string) => void)(access);
     await nextTick();
-    expect(save).toHaveBeenCalledExactlyOnceWith("k1", "namespace", "staging", {
-      visible: false, ceiling: "read", toolsetCeilings: { admin: "none" }, ...(access === "full" ? { access: "full" } : {}),
-    }, null);
+    expect(save).toHaveBeenCalledExactlyOnceWith(
+      "k1",
+      "namespace",
+      "staging",
+      {
+        visible: false,
+        ceiling: "read",
+        toolsetCeilings: { admin: "none" },
+        ...(access === "full" ? { access: "full" } : {}),
+      },
+      null,
+    );
     mounted.unmount();
   });
 
