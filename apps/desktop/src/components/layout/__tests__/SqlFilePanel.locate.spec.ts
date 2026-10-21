@@ -119,7 +119,8 @@ describe("SQL file panel locate active file", () => {
     expect(row!.classList.contains("bg-accent")).toBe(true);
     expect(row!.parentElement!.parentElement!.style.display).not.toBe("none");
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", inline: "nearest" });
-    expect(scrollIntoView.mock.contexts[0]).toBe(row);
+    const locateScrollIndex = scrollIntoView.mock.calls.findIndex(([options]) => options.block === "center");
+    expect(scrollIntoView.mock.contexts[locateScrollIndex]).toBe(row);
     expect(openFile).not.toHaveBeenCalled();
     expect(queryStore.activeTabId).toBe(tabId);
   });
