@@ -9009,7 +9009,7 @@ mod tests {
                 selector: ConnectionSelector { connection_id: Some("nacos".into()), connection_name: None },
             }))
             .await;
-        let values: serde_json::Value = serde_json::from_str(&result_text(&result)).unwrap();
+        let values: serde_json::Value = serde_json::from_str(result_text(&result)).unwrap();
         assert_eq!(values, json!([{ "namespace": "dev" }]));
     }
 
@@ -9171,11 +9171,12 @@ mod tests {
         let (server, backend) = setup(confirm.clone(), Some(true), false);
         let ok = call(&server).await;
         assert_eq!(ok.is_error, Some(false), "{}", result_text(&ok));
-        let approvals = backend.tool_approvals.lock().unwrap();
-        assert_eq!(approvals.len(), 1);
-        assert_eq!(approvals[0].plugin.as_deref(), Some("Terminal"));
-        assert!(approvals[0].detail.contains("rm x"));
-        drop(approvals);
+        {
+            let approvals = backend.tool_approvals.lock().unwrap();
+            assert_eq!(approvals.len(), 1);
+            assert_eq!(approvals[0].plugin.as_deref(), Some("Terminal"));
+            assert!(approvals[0].detail.contains("rm x"));
+        }
         assert_eq!(backend.plugin_tool_calls.lock().unwrap().len(), 1);
 
         // Denied, no desktop, or revoked while the dialog was open: never runs.
@@ -9552,10 +9553,12 @@ mod tests {
             }))
             .await;
         assert_eq!(result.is_error, Some(false), "{}", result_text(&result));
-        let approvals = backend.tool_approvals.lock().unwrap();
-        assert_eq!(approvals.len(), 1);
-        assert_eq!(approvals[0].kind, crate::approval::ToolApprovalKind::ProductTool);
-        assert!(approvals[0].detail.contains("config/app"));
+        {
+            let approvals = backend.tool_approvals.lock().unwrap();
+            assert_eq!(approvals.len(), 1);
+            assert_eq!(approvals[0].kind, crate::approval::ToolApprovalKind::ProductTool);
+            assert!(approvals[0].detail.contains("config/app"));
+        }
         assert_eq!(backend.product_calls.lock().unwrap()[0].args["cas"], 3);
 
         // A policy change while the confirmation dialog is open wins over the

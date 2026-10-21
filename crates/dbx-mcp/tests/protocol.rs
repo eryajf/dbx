@@ -15,53 +15,6 @@ use rmcp::{
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
 
-struct EmptyBackend;
-
-#[async_trait]
-impl DbxBackend for EmptyBackend {
-    async fn load_mcp_global_policy(&self) -> Result<McpGlobalPolicy, String> {
-        Ok(McpGlobalPolicy::default())
-    }
-
-    async fn load_connections(&self) -> Result<Vec<ConnectionConfig>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn execute_agent_tool(
-        &self,
-        _connection: &ConnectionConfig,
-        _database: &str,
-        tool_name: &str,
-        _arguments: Value,
-        _permissions: AgentSqlPermissions,
-    ) -> ToolResult {
-        ToolResult {
-            tool_call_id: "protocol-test".to_string(),
-            tool_name: tool_name.to_string(),
-            content: "ok".to_string(),
-            is_error: false,
-            explain_data: None,
-        }
-    }
-
-    async fn add_connection_for_mcp(&self, config: ConnectionConfig) -> Result<ConnectionConfig, String> {
-        Ok(config)
-    }
-
-    async fn duplicate_connection_for_mcp(
-        &self,
-        _source_id: &str,
-        _copy_id: &str,
-        _copy_name: &str,
-    ) -> Result<ConnectionConfig, String> {
-        Err("not exercised".to_string())
-    }
-
-    async fn remove_connection_for_mcp(&self, _connection_id: &str) -> Result<bool, String> {
-        Ok(true)
-    }
-}
-
 struct PolicyBackend {
     policy: McpGlobalPolicy,
     connections: Vec<ConnectionConfig>,
