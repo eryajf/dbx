@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch } from "vue";
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { FolderOpen, FolderClosed, FileCode, FolderPlus, ChevronRight, ChevronDown, X, Trash2, RefreshCw, FolderSearch, Copy, Play, ChevronsUpDown, ChevronsDownUp, Settings, FilePlus, Pencil, Search, ArrowDownAZ, ArrowUpAZ } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
@@ -18,14 +18,17 @@ import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { translateBackendError } from "@/i18n/backend-errors";
 import { copyToClipboard } from "@/lib/common/clipboard";
 import { forgetExternalSqlFileTarget, forgetExternalSqlFolderTargets, moveExternalSqlFileTarget, moveExternalSqlFolderTargets, resolveExternalSqlFileTargetForActiveTab } from "@/lib/sql/externalSqlFileTarget";
-import { externalSqlFileOpenErrorMessage, externalSqlEditorMaxBytes, formatSqlFileSize, isExternalSqlFileTooLargeError, isSqlFilePath, normalizeExternalSqlPath, relocateExternalSqlPathWithinFolder } from "@/lib/sql/sqlFileOpen";
+import { externalSqlFileOpenErrorMessage, externalSqlEditorMaxBytes, formatSqlFileSize, isExternalSqlFileTooLargeError, isSqlFilePath, normalizeExternalSqlPath, queryTabExternalFilePath, relocateExternalSqlPathWithinFolder } from "@/lib/sql/sqlFileOpen";
 import * as api from "@/lib/backend/api";
 import type { SqlFileEntry } from "@/lib/backend/api";
 import { getSqlFileFilter, getSqlFileFolderPaths, saveSqlFileFilter, saveSqlFileFolderPaths, notifySqlFileFoldersChanged } from "@/lib/sqlFile/sqlFileFolders";
 import { filterAndSortSqlFileEntries, getSqlFileSortOrder, saveSqlFileSortOrder, type SqlFileSortOrder } from "@/lib/sql/sqlFileTreeFilter";
 import { orderedListRangeAnchorIndex, orderedListSelectionIntent, type OrderedListSelectionItem } from "@/lib/selection/orderedListSelection";
 
+const props = defineProps<{ locateRequest?: { id: number; path: string } | null }>();
+
 const emit = defineEmits<{
+  "locate-handled": [id: number];
   close: [];
 }>();
 
@@ -48,7 +51,7 @@ const fileTree = ref<HTMLElement | null>(null);
 const locatingFile = ref(false);
 const currentFilePath = computed(() => {
   const tab = queryStore.tabs.find((tab) => tab.id === queryStore.activeTabId);
-  return tab?.mode === "query" ? tab.externalSqlPath : undefined;
+  return queryTabExternalFilePath(tab);
 });
 const filterSettingsOpen = ref(false);
 const fileFilterDraft = ref(getSqlFileFilter());
@@ -109,20 +112,19 @@ function findFileAncestors(entries: SqlFileEntry[], path: string): string[] | nu
   return null;
 }
 
-const activeFileTarget = computed(() => {
-  const tab = queryStore.tabs.find((tab) => tab.id === queryStore.activeTabId);
-  if (!tab?.externalSqlPath) return null;
-  const path = normalizeExternalSqlPath(tab.externalSqlPath);
+function findFileTarget(filePath: string) {
+  const path = normalizeExternalSqlPath(filePath);
   for (const folder of folders.value) {
     if (folder.loading) continue;
     const ancestors = findFileAncestors(folder.entries, path);
     if (ancestors) return { folder, path, ancestors };
   }
   return null;
-});
+}
 
-async function locateActiveFile() {
-  const target = activeFileTarget.value;
+async function locateFileTarget(path: string) {
+  if (disposed) return;
+  const target = findFileTarget(path);
   if (!target) return;
   if (searchText.value) {
     const isVisibleNow = visibleItems.value.some((item) => item.type === "file" && normalizeExternalSqlPath(item.id) === target.path);
@@ -198,9 +200,13 @@ async function addFolder(folderPath: string) {
 
 async function locateCurrentFile() {
   const path = currentFilePath.value;
-  if (!path || locatingFile.value) return;
-  if (activeFileTarget.value) {
-    await locateActiveFile();
+  if (path) await enqueueFileLocate(path);
+}
+
+async function locateFile(path: string) {
+  if (disposed) return;
+  if (findFileTarget(path)) {
+    await locateFileTarget(path);
     return;
   }
   if (!isTauriRuntime()) {
@@ -219,11 +225,12 @@ async function locateCurrentFile() {
       if (!parentPath) return;
       if (await addFolder(parentPath)) return;
     }
-    if (!activeFileTarget.value) {
+    if (disposed) return;
+    if (!findFileTarget(path)) {
       toast(t("sqlFileTree.activeFileNotFound"), 5000);
       return;
     }
-    await locateActiveFile();
+    await locateFileTarget(path);
   } finally {
     locatingFile.value = false;
   }
@@ -478,11 +485,40 @@ function folderName(path: string): string {
   return parts.pop() || path;
 }
 
+let disposed = false;
+const foldersInitialized = ref(false);
+let locateQueue: Promise<void> = Promise.resolve();
+
+function enqueueFileLocate(path: string): Promise<void> {
+  // Keep scans serialized, while retaining the requested path across focus changes.
+  locateQueue = locateQueue
+    .then(() => locateFile(path))
+    .catch((error) => {
+      if (!disposed) toast(t("sqlFileTree.loadFailed", { message: translateBackendError(t, error) }), 5000);
+    });
+  return locateQueue;
+}
+
+watch([foldersInitialized, () => props.locateRequest], async ([initialized, request]) => {
+  if (!initialized || !request) return;
+  await enqueueFileLocate(request.path);
+  if (!disposed) emit("locate-handled", request.id);
+});
+
+onBeforeUnmount(() => {
+  disposed = true;
+});
+
 onMounted(async () => {
+  // Restoring folders must not persist a partially loaded list. Register all
+  // roots before scanning so closing the panel cannot discard saved roots.
   const saved = loadSavedFolders();
+  folders.value = saved.map((path) => ({ path, entries: [], expanded: new Set<string>(), loading: true, collapsed: false }));
   for (const path of saved) {
-    await addFolder(path);
+    if (disposed) return;
+    await loadFolderEntries(path);
   }
+  if (!disposed) foldersInitialized.value = true;
 });
 
 type TreeEntry = { entry: SqlFileEntry; depth: number };
