@@ -90,7 +90,17 @@ import { parseRecentConnectionIds, rankRecentConnections, RECENT_CONNECTION_IDS_
 import { resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
 import { normalizeSqliteNamespace } from "@/lib/database/sqliteNamespace";
 import { findTreeNodeById, resolveNewQueryTarget, resolveNewQueryInitialSql, type NewQueryContextSource } from "@/lib/sql/newQueryContext";
-import { isSqlObjectNavigationRoutineType, normalizeOracleNavigationTarget, sqlObjectNavigationSourceKind, sqlObjectNavigationSourceName, sqlObjectNavigationSourceSchema, sqlObjectNavigationTableType, type SqlObjectNavigationTarget } from "@/lib/sql/sqlNavigation";
+import {
+  isSqlObjectNavigationRoutineType,
+  normalizeOracleNavigationTarget,
+  sqlObjectNavigationContextTarget,
+  sqlObjectNavigationSourceKind,
+  sqlObjectNavigationSourceName,
+  sqlObjectNavigationSourceSchema,
+  type SqlObjectNavigationContext,
+  type SqlObjectNavigationTarget,
+} from "@/lib/sql/sqlNavigation";
+import { isObjectDependencySection, type ObjectDependencyTarget } from "@/lib/database/objectDependencyDetails";
 import { buildEditableObjectSource, buildExecutableObjectSourceStatements, executeObjectSourceSave } from "@/lib/table/objectSourceEditor";
 import { assertSourceIdentity, beginSourceSave } from "@/lib/table/objectSourceIdentity";
 import { loadEditableObjectSourceForEditor } from "@/lib/table/objectSourceLoad";
@@ -522,6 +532,7 @@ const queryEditorDdlTarget = ref<{ connectionId: string; database: string; catal
 const queryEditorObjectSourceTarget = ref<{
   connectionId: string;
   database: string;
+  catalog?: string;
   schema?: string;
   name: string;
   objectType: ObjectSourceKind;
@@ -1025,6 +1036,8 @@ const blockDangerousRedisCommands = computed({
 });
 const databaseRequiredSignal = ref(0);
 const databaseRequiredTabId = ref<string | null>(null);
+const connectionRequiredSignal = ref(0);
+const connectionRequiredTabId = ref<string | null>(null);
 const pendingToolbarExecutionSnapshot = ref<SqlExecutionSnapshot & { tabId?: string }>();
 const sqlExecutionDangerStore = useSqlExecutionDangerStore();
 const productionSafetyStore = useProductionSafetyStore();
@@ -1035,6 +1048,14 @@ function promptActiveDatabaseSelection(tabId?: string) {
   databaseRequiredTabId.value = tab.id;
   databaseRequiredSignal.value += 1;
   toast(t("editor.selectDatabaseRequired"), 2500);
+}
+
+function promptActiveConnectionSelection(tabId?: string) {
+  const tab = tabId ? queryStore.tabs.find((candidate) => candidate.id === tabId) : activeTab.value;
+  if (!tab) return;
+  connectionRequiredTabId.value = tab.id;
+  connectionRequiredSignal.value += 1;
+  toast(t("editor.selectConnectionRequired"), 2500);
 }
 
 const {
@@ -1065,6 +1086,7 @@ const {
   activeOutputView,
   blockDangerousRedisCommands,
   onMissingDatabase: promptActiveDatabaseSelection,
+  onMissingConnection: promptActiveConnectionSelection,
   requestDangerConfirmation: (request) => sqlExecutionDangerStore.requestConfirmation(request),
   onExecutionStarted: (editorViewportRequestId) => contentAreaRef.value?.acceptQueryEditorExecutionViewport(editorViewportRequestId),
   onExecutionCancelled: (editorViewportRequestId) => contentAreaRef.value?.cancelQueryEditorExecutionViewport(editorViewportRequestId),
@@ -1147,6 +1169,7 @@ provide(EDITOR_TOOLBAR_ACTIONS, {
   explainMode,
   blockDangerousRedisCommands,
   databaseRequiredSignalFor: (tabId: string) => (databaseRequiredTabId.value === tabId ? databaseRequiredSignal.value : 0),
+  connectionRequiredSignalFor: (tabId: string) => (connectionRequiredTabId.value === tabId ? connectionRequiredSignal.value : 0),
   captureExecutionSnapshot: captureActiveEditorExecutionSnapshot,
   toolbarExecute: requestActiveEditorExecute,
   toolbarExecuteInNewResultTab: requestActiveEditorExecuteInNewResultTab,
@@ -2655,7 +2678,7 @@ async function handleSaveTab(tabId: string) {
 
 async function openSaveSqlDialog(tabId?: string) {
   const tab = tabId ? queryStore.tabs.find((candidate) => candidate.id === tabId) : activeTab.value;
-  if (!tab || !canSaveSqlTab(tab)) return;
+  if (!tab || !canSaveSqlTab(tab) || isObjectDependencySection(tab)) return;
   saveSqlDialogTabId.value = tab.id;
   if (tab.objectSource) {
     await saveActiveObjectSource(tab);
@@ -3309,7 +3332,7 @@ async function newQuery(options: NewQueryOptions = {}) {
     includeDatabaseName: settingsStore.editorSettings.generateSqlIncludeDatabaseName,
     quoteIdentifiers: settingsStore.editorSettings.generateSqlQuoteIdentifiers,
   });
-  const tabId = queryStore.createTab(conn.id, target.database, undefined, "query", target.schema, initialSql, target.catalog);
+  const tabId = queryStore.createTab(conn.id, target.database, undefined, "query", target.schema, initialSql, target.catalog, { schemaQualifiesSql: target.schemaQualifiesSql === true });
   if (initialSql) {
     const prefilledTab = queryStore.tabs.find((t) => t.id === tabId);
     if (prefilledTab) {
@@ -3383,13 +3406,18 @@ async function openConnectionQuery(connectionId: string) {
     }
     return;
   }
-  const tabId = queryStore.createTab(connectionId, initialTarget.database);
+  // The quick-start page opens a query directly, bypassing newQuery() and its
+  // default-schema fallback. Pass the configured schema here too, otherwise an
+  // Oracle connection with a default schema opens the editor without a session
+  // schema and unqualified tables resolve against the session default (#11844).
+  const tabId = queryStore.createTab(connectionId, initialTarget.database, undefined, "query", initialTarget.schema);
   try {
     await connectionStore.ensureConnected(connectionId);
     const options = await getDatabaseOptions(connectionId);
     const target = quickConnectionOpenTarget(connection, options);
     if (target.kind === "query") {
       queryStore.updateDatabase(tabId, target.database);
+      if (target.schema) queryStore.updateSchema(tabId, target.schema);
     }
   } catch (e: any) {
     toast(
@@ -3411,21 +3439,14 @@ async function openSavedSqlFromWelcome(fileId: string) {
   toast(t("welcome.fileOpened", { name: file.name }), 2000);
 }
 
-function tableTargetFromActiveTab(table: string | SqlObjectNavigationTarget) {
-  const tab = activeTab.value;
+function tableTargetFromActiveTab(table: string | SqlObjectNavigationTarget, context?: SqlObjectNavigationContext) {
+  const tab = context ?? activeTab.value;
   if (!tab) return null;
   const connectionId = tab.connectionId;
   const catalog = tab.tableMeta?.catalog || tab.catalog;
   if (typeof table !== "string") {
     // Structured targets already separate qualifiers; reparsing would corrupt quoted object names that contain dots.
-    return {
-      connectionId,
-      database: table.database || tab.database,
-      catalog,
-      schema: table.schema || tab.schema,
-      tableName: table.name,
-      tableType: table.type ? sqlObjectNavigationTableType(table) : undefined,
-    };
+    return sqlObjectNavigationContextTarget(table, tab);
   }
 
   let database = tab.database;
@@ -3450,13 +3471,13 @@ function tableTargetFromActiveTab(table: string | SqlObjectNavigationTarget) {
   return { connectionId, database, catalog, schema, tableName: rawTableName, tableType: undefined };
 }
 
-async function onClickTable(table: SqlObjectNavigationTarget) {
+async function onClickTable(table: SqlObjectNavigationTarget, context?: SqlObjectNavigationContext) {
   // Procedures/functions/packages open source (same as sidebar view-source), not table data/DDL.
   if (isSqlObjectNavigationRoutineType(table.type)) {
-    await onOpenObjectSource(table, false);
+    await onOpenObjectSource(table, false, context);
     return;
   }
-  const target = tableTargetFromActiveTab(table);
+  const target = tableTargetFromActiveTab(table, context);
   if (!target) return;
   const objectType = sqlObjectNavigationSourceKind(table);
   if (objectType) {
@@ -3500,13 +3521,17 @@ function onEditTableStructure(table: SqlObjectNavigationTarget) {
   queryStore.openTableStructure(target.connectionId, target.database, target.schema, target.tableName, undefined, undefined, target.catalog);
 }
 
-function onOpenObjectSource(table: SqlObjectNavigationTarget, initialEditing: boolean) {
-  const provisionalTarget = tableTargetFromActiveTab(table);
+function onOpenDependencyObject(context: ObjectDependencyTarget, target: SqlObjectNavigationTarget) {
+  return onClickTable(target, context);
+}
+
+function onOpenObjectSource(table: SqlObjectNavigationTarget, initialEditing: boolean, context?: SqlObjectNavigationContext) {
+  const provisionalTarget = tableTargetFromActiveTab(table, context);
   if (!provisionalTarget) return;
   const databaseType = effectiveDatabaseTypeForConnection(connectionStore.getConfig(provisionalTarget.connectionId));
   // Oracle-family: unquoted → UPPER; quoted mixed-case keeps written case for ALL_SOURCE lookup.
   const navigation = databaseType === "oracle" || databaseType === "dameng" || databaseType === "oceanbase-oracle" || databaseType === "yashandb" || databaseType === "oscar" ? normalizeOracleNavigationTarget(table) : table;
-  const target = tableTargetFromActiveTab(navigation);
+  const target = tableTargetFromActiveTab(navigation, context);
   const objectType = sqlObjectNavigationSourceKind(navigation);
   if (!target || !objectType) return;
   const sourceName = sqlObjectNavigationSourceName(navigation);
@@ -3532,6 +3557,7 @@ function onOpenObjectSource(table: SqlObjectNavigationTarget, initialEditing: bo
     queryEditorObjectSourceTarget.value = {
       connectionId: target.connectionId,
       database: target.database,
+      catalog: target.catalog,
       schema: sourceSchema,
       name: sourceName,
       objectType,
@@ -3557,6 +3583,9 @@ async function changeActiveConnection(tabId: string, connectionId: string) {
   if (!tab) return;
   const connection = connectionStore.getConfig(connectionId);
   if (!connection) return;
+  if (connectionRequiredTabId.value === tab.id) {
+    connectionRequiredTabId.value = null;
+  }
   const initialDatabase = resolveDefaultDatabase(connection, []);
   queryStore.updateConnection(tab.id, connectionId, initialDatabase);
   let isCurrentTarget = queryStore.createExecutionTargetGuard(tab.id);
@@ -3631,7 +3660,8 @@ async function clearActiveDefaultDatabase(tabId?: string) {
 function changeActiveSchema(tabId: string, schema: string | undefined) {
   const tab = resolveToolbarTab(tabId);
   if (!tab) return;
-  queryStore.updateSchema(tab.id, schema);
+  // 工具栏选择是显式执行作用域：SQL Server 未限定表名会按它改写（#8951）。
+  queryStore.updateSchema(tab.id, schema, { schemaQualifiesSql: true });
   if (tab.externalSqlPath) rememberExternalSqlFileTarget(tab.externalSqlPath, { connectionId: tab.connectionId, database: tab.database, catalog: tab.catalog, schema });
 }
 
@@ -4633,6 +4663,13 @@ async function handleKeydown(e: KeyboardEvent) {
     return;
   }
   if (isRefreshDataShortcut(e, shortcuts)) {
+    const target = e.target instanceof Element ? e.target : null;
+    const sidebarFocused = isSidebarFocusedTarget(target, lastFocusedSidebarSurface.value);
+    if (sidebarFocused && appSidebarRef.value?.refreshSidebar?.()) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     contentAreaRef.value?.refreshData();
@@ -5277,6 +5314,7 @@ onUnmounted(() => {
             @collapse="setSidebarOpen(false)"
             @open-settings="(initialTab) => openSettings(initialTab ?? 'appearance')"
             @add-to-ai="addToAi"
+            @open-dependency-object="onOpenDependencyObject"
             @mousedown="rememberSidebarSearchSurface"
             @focusin="rememberSidebarSearchSurface"
           />
@@ -5284,7 +5322,7 @@ onUnmounted(() => {
           <div
             data-editor-content
             v-show="isSpecialPageActive || (!isAiPanelMaximized && !isHistoryPanelMaximized) || isZenMode"
-            :class="isDetachedWindowContext ? 'flex-1 min-w-0 overflow-hidden bg-background' : isClassicLayout ? 'flex-1 min-w-0 overflow-hidden' : 'flex-1 min-w-0 overflow-hidden rounded-md border border-border/80 bg-background'"
+            :class="isDetachedWindowContext ? 'flex-1 min-w-0 overflow-hidden bg-background' : isClassicLayout ? 'flex-1 min-w-0 overflow-hidden' : 'flex-1 min-w-0 overflow-hidden dbx-panel bg-background'"
             @mousedown="rememberEditorContentSurface"
             @focusin="rememberEditorContentSurface"
           >
@@ -5478,6 +5516,7 @@ onUnmounted(() => {
                     @edit-table-structure="(_tabId: string, target: SqlObjectNavigationTarget) => onEditTableStructure(target)"
                     @view-table-ddl="(_tabId: string, target: SqlObjectNavigationTarget) => onViewTableDdl(target)"
                     @open-object-source="(_tabId: string, target: SqlObjectNavigationTarget, initialEditing: boolean) => onOpenObjectSource(target, initialEditing)"
+                    @open-dependency-object="onOpenDependencyObject"
                     @open-object-table="
                       (tabId: string, target: { tableName: string; schema?: string; tableType?: string; catalog?: string; comment?: string | null }) => {
                         const tab = queryStore.tabs.find((candidate) => candidate.id === tabId) ?? activeTab;
@@ -5494,7 +5533,7 @@ onUnmounted(() => {
                       }
                     "
                     @open-database-search-target="(_tabId: string, target: any) => openDatabaseSearchTarget(target)"
-                    @object-schema-change="(tabId: string, schema: string | undefined) => queryStore.updateSchema(tabId, schema)"
+                    @object-schema-change="(tabId: string, schema: string | undefined) => queryStore.updateSchema(tabId, schema, { schemaQualifiesSql: true })"
                     @object-browser-viewport-change="(tabId: string, viewport: any) => queryStore.updateObjectBrowserViewport(tabId, viewport)"
                     @object-browser-search-change="(tabId: string, query: string) => queryStore.updateObjectBrowserSearch(tabId, query)"
                     @object-browser-filter-change="(tabId: string, filter: ObjectBrowserFilter) => queryStore.updateObjectBrowserFilter(tabId, filter)"
@@ -5582,7 +5621,7 @@ onUnmounted(() => {
           <div
             v-if="!isDetachedWindowContext && showAiPanel"
             v-show="!isSpecialPageActive && !isHistoryPanelMaximized && !isZenMode"
-            :class="[isClassicLayout ? 'h-full relative z-30 isolate bg-background' : 'h-full relative z-30 isolate rounded-md border border-border/80 bg-background', isAiPanelMaximized ? 'min-w-0 flex-1' : 'min-w-[240px] max-w-full']"
+            :class="[isClassicLayout ? 'h-full relative z-30 isolate bg-background' : 'h-full relative z-30 isolate dbx-panel bg-background', isAiPanelMaximized ? 'min-w-0 flex-1' : 'min-w-[240px] max-w-full']"
             :style="isAiPanelMaximized ? {} : { width: aiPanelWidth + 'px' }"
           >
             <div v-if="!isAiPanelMaximized" class="panel-resize-handle panel-resize-handle--left" @pointerdown="startAiPanelResize" />
@@ -5611,7 +5650,7 @@ onUnmounted(() => {
           <div
             v-if="!isDetachedWindowContext && showHistory"
             v-show="!isSpecialPageActive && !isAiPanelMaximized && !isZenMode"
-            :class="[isClassicLayout ? 'h-full relative z-30 isolate bg-background' : 'h-full relative z-30 isolate rounded-md border border-border/80 bg-background', isHistoryPanelMaximized ? 'min-w-0 flex-1' : 'min-w-[240px] max-w-full']"
+            :class="[isClassicLayout ? 'h-full relative z-30 isolate bg-background' : 'h-full relative z-30 isolate dbx-panel bg-background', isHistoryPanelMaximized ? 'min-w-0 flex-1' : 'min-w-[240px] max-w-full']"
             :style="isHistoryPanelMaximized ? {} : { width: historyWidth + 'px', maxWidth: 'calc(100% - 240px)' }"
           >
             <div v-if="!isHistoryPanelMaximized" class="panel-resize-handle panel-resize-handle--left" @pointerdown="startHistoryResize" />
@@ -5633,7 +5672,7 @@ onUnmounted(() => {
           <div
             v-if="!isDetachedWindowContext && showSqlLibraryPanel"
             v-show="!isSpecialPageActive && !isAiPanelMaximized && !isHistoryPanelMaximized && !isZenMode"
-            :class="isClassicLayout ? 'h-full shrink-0 relative z-30 isolate bg-background' : 'h-full shrink-0 relative z-30 isolate rounded-md border border-border/80 bg-background'"
+            :class="isClassicLayout ? 'h-full shrink-0 relative z-30 isolate bg-background' : 'h-full shrink-0 relative z-30 isolate dbx-panel bg-background'"
             :style="{ width: sqlLibraryWidth + 'px' }"
           >
             <div class="panel-resize-handle panel-resize-handle--left" @pointerdown="startSqlLibraryResize" />
@@ -5647,7 +5686,7 @@ onUnmounted(() => {
           <div
             v-if="!isDetachedWindowContext && showSqlFilePanel"
             v-show="!isSpecialPageActive && !isAiPanelMaximized && !isHistoryPanelMaximized && !isZenMode"
-            :class="isClassicLayout ? 'h-full shrink-0 relative z-30 isolate bg-background' : 'h-full shrink-0 relative z-30 isolate rounded-md border border-border/80 bg-background'"
+            :class="isClassicLayout ? 'h-full shrink-0 relative z-30 isolate bg-background' : 'h-full shrink-0 relative z-30 isolate dbx-panel bg-background'"
             :style="{ width: sqlFilePanelWidth + 'px' }"
           >
             <div class="panel-resize-handle panel-resize-handle--left" @pointerdown="startSqlFilePanelResize" />
@@ -5890,6 +5929,7 @@ onUnmounted(() => {
         v-model:open="showQueryEditorObjectSourceDialog"
         :connection-id="queryEditorObjectSourceTarget.connectionId"
         :database="queryEditorObjectSourceTarget.database"
+        :catalog="queryEditorObjectSourceTarget.catalog"
         :schema="queryEditorObjectSourceTarget.schema"
         :name="queryEditorObjectSourceTarget.name"
         :signature="queryEditorObjectSourceTarget.signature"
@@ -5900,6 +5940,7 @@ onUnmounted(() => {
         :dialect="queryEditorObjectSourceDialect"
         :format-dialect="queryEditorObjectSourceFormatDialect"
         @saved="onQueryEditorObjectSourceSaved"
+        @open-object="onOpenDependencyObject"
       />
     </TooltipProvider>
     <div id="dbx-query-editor-tooltip-root" class="fixed left-0 top-0 z-[70] h-0 w-0 overflow-visible" :style="editorFontFamilyStyle" />

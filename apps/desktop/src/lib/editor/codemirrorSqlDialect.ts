@@ -1,9 +1,18 @@
+import { styleTags, tags } from "@lezer/highlight";
 import type { SQLDialect } from "@codemirror/lang-sql";
 import { SQL_REGION_DOLLAR_QUOTES, SQL_REGION_IDENTIFIER_POLICIES, SQL_REGION_IDENTIFIER_SPECS, SQL_REGION_COMMENT_POLICIES, SQL_REGION_COMMENT_SPECS, SQL_REGION_STRING_POLICIES, SQL_REGION_STRING_SPECS, type SqlRegionDialectSpec } from "./sqlRegionDialectPolicy";
 import type { DatabaseType } from "@/types/database";
 import { driverProfileSqlBuiltinTerms } from "@/lib/database/driverProfileExtensions";
 
-export type CodeMirrorSqlDialectName = "mysql" | "postgres" | "sqlserver" | "clickhouse" | "soql";
+// In SQL, quoted identifiers (e.g. `col`, "col", [col]) represent column, table,
+// and schema names — not string literals (#12122). CodeMirror's SQL grammar tags
+// QuotedIdentifier as special(string) by default, which themes highlight as a
+// string literal. We retag QuotedIdentifier as tags.name so all themes (both DBX
+// custom/IDE themes and standard third-party themes) highlight quoted identifiers
+// identically to unquoted identifiers.
+const SQL_DIALECT_LANGUAGE_PROPS = [styleTags({ QuotedIdentifier: tags.name })];
+
+export type CodeMirrorSqlDialectName = "mysql" | "postgres" | "sqlserver" | "oracle" | "clickhouse" | "soql";
 
 export function supportsQueryEditorSqlLanguage(databaseType?: DatabaseType): boolean {
   return databaseType !== "qdrant";
@@ -343,6 +352,12 @@ function standardSqlKeywordSyntaxTerms(langSql: CodeMirrorSqlLanguageModule): st
 
 function codeMirrorBaseDialect(langSql: CodeMirrorSqlLanguageModule, dialectName: CodeMirrorSqlDialectName, databaseType?: DatabaseType): SQLDialect {
   if (databaseType) {
+    if (databaseType === "kingbase") {
+      if (dialectName === "oracle") return langSql.PLSQL;
+      if (dialectName === "mysql") return langSql.MySQL;
+      if (dialectName === "sqlserver") return langSql.MSSQL;
+      return langSql.PostgreSQL;
+    }
     if (databaseType === "clickhouse") return langSql.StandardSQL;
     if (MYSQL_CODEMIRROR_DATABASE_TYPES.has(databaseType)) return langSql.MySQL;
     if (POSTGRES_CODEMIRROR_DATABASE_TYPES.has(databaseType)) return langSql.PostgreSQL;
@@ -354,7 +369,15 @@ function codeMirrorBaseDialect(langSql: CodeMirrorSqlLanguageModule, dialectName
     return langSql.StandardSQL;
   }
   if (dialectName === "clickhouse") return langSql.StandardSQL;
+  if (dialectName === "oracle") return langSql.PLSQL;
   return dialectName === "postgres" ? langSql.PostgreSQL : dialectName === "sqlserver" ? langSql.MSSQL : langSql.MySQL;
+}
+
+// Kingbase keeps its physical connection type while its lexer follows the selected mode.
+function sqlPolicyDatabaseType(dialectName: CodeMirrorSqlDialectName, databaseType?: DatabaseType): DatabaseType | undefined {
+  if (databaseType !== "kingbase") return databaseType;
+  if (dialectName === "mysql" || dialectName === "sqlserver" || dialectName === "postgres") return dialectName;
+  return dialectName === "oracle" ? "gaussdb" : databaseType;
 }
 
 // Share the nesting decision between the syntax tree and custom region scanner.
@@ -366,6 +389,7 @@ function sqlCommentDialectSpec(dialectName: CodeMirrorSqlDialectName, databaseTy
 
 /** Preserve literal boundaries for regions even when highlighting parses routine bodies as SQL. */
 export function sqlRegionDialectSpec(dialect: SQLDialect, dialectName: CodeMirrorSqlDialectName = "mysql", databaseType?: DatabaseType): SqlRegionDialectSpec {
+  databaseType = sqlPolicyDatabaseType(dialectName, databaseType);
   const policy = databaseType ? SQL_REGION_DOLLAR_QUOTES[databaseType] : "dialect";
   const regionDollarQuotes = policy === "dialect" ? (dialectName === "postgres" || dialectName === "clickhouse" ? "tagged" : "none") : policy;
   return {
@@ -392,6 +416,8 @@ export function createDbxCodeMirrorSqlDialect(langSql: CodeMirrorSqlLanguageModu
       caseInsensitiveIdentifiers: true,
       identifierQuotes: "",
       doubleDollarQuotedStrings: false,
+    }).configureLanguage({
+      props: SQL_DIALECT_LANGUAGE_PROPS,
     });
   }
   const baseDialect = codeMirrorBaseDialect(langSql, dialectName, databaseType);
@@ -409,8 +435,9 @@ export function createDbxCodeMirrorSqlDialect(langSql: CodeMirrorSqlLanguageModu
   const commonKeywords = isClickHouse ? DBX_COMMON_SQL_KEYWORDS.toLowerCase() : DBX_COMMON_SQL_KEYWORDS;
   const baseBuiltin = isSqlServer ? sqlServerBuiltinSyntaxTerms(baseDialect.spec.builtin || "") : baseDialect.spec.builtin || "";
 
-  const commentSpec = sqlCommentDialectSpec(dialectName, databaseType);
-  const identifierSpec = databaseType ? SQL_REGION_IDENTIFIER_SPECS[SQL_REGION_IDENTIFIER_POLICIES[databaseType]] : {};
+  const policyDatabaseType = sqlPolicyDatabaseType(dialectName, databaseType);
+  const commentSpec = sqlCommentDialectSpec(dialectName, policyDatabaseType);
+  const identifierSpec = policyDatabaseType ? SQL_REGION_IDENTIFIER_SPECS[SQL_REGION_IDENTIFIER_POLICIES[policyDatabaseType]] : {};
   return langSql.SQLDialect.define({
     ...baseDialect.spec,
     // Use the same supported delimiters and line comments as region scanning.
@@ -442,5 +469,7 @@ export function createDbxCodeMirrorSqlDialect(langSql: CodeMirrorSqlLanguageModu
       : {}),
     ...(isPlsql ? { doubleQuotedStrings: false } : {}),
     doubleDollarQuotedStrings: false,
+  }).configureLanguage({
+    props: SQL_DIALECT_LANGUAGE_PROPS,
   });
 }

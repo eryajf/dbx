@@ -1,6 +1,9 @@
+import { EditorState } from "@codemirror/state";
+import { sqlRegionDialect, sqlRegionFoldRanges } from "@/lib/editor/sqlRegionFoldRanges";
+import { analyzeSqlStatements } from "@/lib/sql/sqlStatementAnalysis";
 import { describe, expect, it } from "vitest";
 import * as langSql from "@codemirror/lang-sql";
-import { createDbxCodeMirrorSqlDialect, postgresKeywordSyntaxTerms, sqlServerBuiltinSyntaxTerms } from "@/lib/editor/codemirrorSqlDialect";
+import { createDbxCodeMirrorSqlDialect, sqlRegionDialectSpec, postgresKeywordSyntaxTerms, sqlServerBuiltinSyntaxTerms } from "@/lib/editor/codemirrorSqlDialect";
 import type { DatabaseType } from "@/types/database";
 
 function nodeNameAt(dialect: langSql.SQLDialect, statement: string, word: string): string | undefined {
@@ -14,6 +17,30 @@ function nodeNameAt(dialect: langSql.SQLDialect, statement: string, word: string
 }
 
 describe("codemirrorSqlDialect", () => {
+  it.each([
+    ["oracle", "SELECT NVL(\"name\", 'n/a') FROM t", '"name"', "QuotedIdentifier"],
+    ["mysql", "SELECT IFNULL(`name`, 'n/a') FROM t", "`name`", "QuotedIdentifier"],
+    ["postgres", "SELECT now(), data #>> '{name}' FROM t", "now", "Builtin"],
+    ["sqlserver", "SELECT GETDATE() FROM #temp", "#temp", "SpecialVar"],
+  ] as const)("uses the %s lexer for Kingbase without replacing its physical type", (mode, sql, token, expected) => {
+    expect(nodeNameAt(createDbxCodeMirrorSqlDialect(langSql, mode, "kingbase"), sql, token)).toBe(expected);
+  });
+
+  it.each([
+    ["mysql", "`", "`"],
+    ["sqlserver", "[", "]"],
+    ["postgres", '"', '"'],
+    ["oracle", '"', '"'],
+  ] as const)("keeps region markers inside Kingbase %s identifiers out of foreground and background folds", (mode, open, close) => {
+    const sql = [`SELECT ${open}name`, "-- region hidden", "value", "-- endregion", `${close};`, "-- region visible", "SELECT 1;", "-- endregion"].join("\n");
+    const dialect = createDbxCodeMirrorSqlDialect(langSql, mode, "kingbase");
+    const state = EditorState.create({ doc: sql, extensions: [langSql.sql({ dialect }), sqlRegionDialect.of(sqlRegionDialectSpec(dialect, mode, "kingbase"))] });
+    expect([...sqlRegionFoldRanges(state).keys()]).toEqual([6]);
+    const background = analyzeSqlStatements({ sql, databaseType: "kingbase", syntaxDialect: mode, includeFolds: true });
+    expect(background.folds?.has(2)).toBe(false);
+    expect(background.folds?.get(6)).toEqual(sqlRegionFoldRanges(state).get(6));
+  });
+
   it("keeps common PostgreSQL identifier names out of keyword highlighting", () => {
     const keywords = new Set(postgresKeywordSyntaxTerms(langSql.PostgreSQL.spec.keywords || "").split(/\s+/));
 
@@ -144,5 +171,27 @@ describe("codemirrorSqlDialect", () => {
     const doubleQuoteStatement = 'SELECT "escaped\\"quote", col FROM tbl';
     expect(nodeNameAt(dialect, doubleQuoteStatement, '"escaped\\"quote"')).toBe("String");
     expect(nodeNameAt(dialect, doubleQuoteStatement, "col")).toBe("Identifier");
+  });
+
+  it("tags QuotedIdentifier as tags.name so quoted columns/tables match unquoted identifiers (#12122)", async () => {
+    const { highlightTree, tags } = await import("@lezer/highlight");
+    const { HighlightStyle } = await import("@codemirror/language");
+
+    const style = HighlightStyle.define([
+      { tag: tags.keyword, color: "keyword" },
+      { tag: tags.string, color: "string" },
+      { tag: tags.name, color: "identifier" },
+    ]);
+
+    const mysqlDialect = createDbxCodeMirrorSqlDialect(langSql, "mysql", "mysql");
+    const doc = "SELECT `quoted_col`, plain_col, 'literal_string' FROM `tbl`";
+    const tree = mysqlDialect.language.parser.parse(doc);
+    const classes = new Map<string, string>();
+    highlightTree(tree, style, (from, to, cls) => classes.set(doc.slice(from, to), cls));
+
+    expect(classes.get("`quoted_col`")).toBeDefined();
+    expect(classes.get("`quoted_col`")).toBe(classes.get("plain_col"));
+    expect(classes.get("`quoted_col`")).toBe(classes.get("`tbl`"));
+    expect(classes.get("`quoted_col`")).not.toBe(classes.get("'literal_string'"));
   });
 });

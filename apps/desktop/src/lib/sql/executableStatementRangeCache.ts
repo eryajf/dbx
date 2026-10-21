@@ -2,7 +2,7 @@ import { sqlBlockCommentEnd } from "./sqlBlockComments";
 import { RangeSet, RangeValue, type ChangeSet, type Text } from "@codemirror/state";
 import type { DatabaseType } from "@/types/database";
 import type { SqlParameterOptions } from "@/lib/sql/sqlParameters";
-import { executableStatementRanges, startsLineComment, type SqlTextRange } from "@/lib/sql/sqlStatementRanges";
+import { executableStatementRanges, startsLineComment, statementParsingDatabaseType, type SqlTextRange } from "@/lib/sql/sqlStatementRanges";
 import { cursorBelongsToTrailingStatementDelimiter } from "@/lib/sql/statementDelimiter";
 
 export interface ExecutableStatementRangeCache {
@@ -94,6 +94,7 @@ export function executableStatementRangeCacheForDoc(
 }
 
 function executableStartAfterLeadingDirective(sql: string, range: SqlTextRange, databaseType?: DatabaseType, parameterOptions?: SqlParameterOptions): number | null {
+  databaseType = statementParsingDatabaseType(databaseType, parameterOptions);
   const text = range.sql;
   const hasExecutableDirective = text.startsWith("/*+") || text.startsWith("/*@") || text.startsWith("/*&") || (databaseType === "mysql" && text.startsWith("/*proxy*/"));
   if (!hasExecutableDirective) return null;
@@ -133,10 +134,11 @@ export function executableStatementRangeAtCursor(cache: ExecutableStatementRange
   const lineContentStart = line.from + line.text.search(/\S|$/);
   // Only a potentially multiline MyBatis placeholder needs the whole document.
   // Ordinary cursor movement must not flatten a large document on every lookup.
+  const databaseType = statementParsingDatabaseType(cache.databaseType, cache.parameterOptions);
   const needsDocument = lineText.startsWith("#{");
   const commentSource = needsDocument ? cache.doc.toString() : line.text;
   const commentOffset = needsDocument ? lineContentStart : lineContentStart - line.from;
-  if (!lineText || startsLineComment(commentSource, commentOffset, cache.databaseType, cache.parameterOptions) || isCursorOnLeadingBlockComment(line.text, pos - line.from, cache.databaseType)) return null;
+  if (!lineText || startsLineComment(commentSource, commentOffset, databaseType, cache.parameterOptions) || isCursorOnLeadingBlockComment(line.text, pos - line.from, databaseType)) return null;
 
   for (let index = 0; index < cache.ranges.length; index += 1) {
     const range = cache.ranges[index];

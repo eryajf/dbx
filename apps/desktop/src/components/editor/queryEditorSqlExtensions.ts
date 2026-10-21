@@ -44,6 +44,8 @@ interface QueryEditorSqlExtensionsOptions {
   t: Composer["t"];
   sqlBehaviorDialect: () => QueryEditorProps["dialect"];
   sqlDriverProfile: ComputedRef<string | undefined>;
+  sqlFunctionDatabaseType?: () => DatabaseType | undefined;
+  sqlSyntaxDialect?: () => QueryEditorProps["syntaxDialect"];
   sqlStatementParameterOptions: () => SqlParameterOptions;
   queryEditorSelectionLanguage: () => "sql" | "text";
   cache: { value: ExecutableStatementRangeCache | null };
@@ -306,7 +308,7 @@ export function configureQueryEditorSqlExtensions(options: QueryEditorSqlExtensi
       const source = currentState.doc.sliceString(windowFrom, cursor);
       const signature = isGraphQueryDatabase(props.databaseType)
         ? getGraphFunctionSignatureHelp(source, cursor - windowFrom, props.databaseType, { truncatedPrefix: windowFrom > 0 })
-        : getSqlFunctionSignatureHelp(source, cursor - windowFrom, props.databaseType, sqlDriverProfile.value, { truncatedPrefix: windowFrom > 0 });
+        : getSqlFunctionSignatureHelp(source, cursor - windowFrom, options.sqlFunctionDatabaseType?.() ?? props.databaseType, sqlDriverProfile.value, { truncatedPrefix: windowFrom > 0 });
       if (!signature) return null;
       return {
         pos: cursor,
@@ -338,14 +340,15 @@ export function configureQueryEditorSqlExtensions(options: QueryEditorSqlExtensi
   const shellLineCommentHighlightPlugin = createShellLineCommentHighlight({ ViewPlugin, Decoration, highlightingFor, syntaxTree });
 
   codeMirrorRuntime.buildSqlLanguageExtension = () => {
-    const dialect = createDbxCodeMirrorSqlDialect(langSql, props.syntaxDialect ?? props.dialect, props.databaseType, sqlDriverProfile.value);
+    const syntaxDialect = options.sqlSyntaxDialect?.() ?? props.syntaxDialect ?? props.dialect;
+    const dialect = createDbxCodeMirrorSqlDialect(langSql, syntaxDialect, props.databaseType, sqlDriverProfile.value);
     return [
-      sqlRegionDialect.of(sqlRegionDialectSpec(dialect, props.syntaxDialect ?? props.dialect, props.databaseType)),
+      sqlRegionDialect.of(sqlRegionDialectSpec(dialect, syntaxDialect, props.databaseType)),
       isGraphQueryDatabase(props.databaseType) ? graphQueryLanguage(props.databaseType) : supportsQueryEditorSqlLanguage(props.databaseType) ? langSql.sql({ dialect }) : [],
       // Non-SQL editors (MongoDB shell) keep the SQL grammar for highlighting, so override the
       // comment marker that toggleLineComment reads from language data.
       Prec.highest(EditorState.languageData.of(() => [{ commentTokens: queryEditorCommentTokens(props.databaseType) }])),
-      Prec.highest(EditorState.languageData.of(() => queryEditorWordLanguageData(props.databaseType))),
+      Prec.highest(EditorState.languageData.of(() => queryEditorWordLanguageData(options.sqlFunctionDatabaseType?.() ?? props.databaseType))),
       // The SQL grammar does not tokenize `//`, so those comments are highlighted by hand.
       queryEditorLineCommentToken(props.databaseType) === "//" ? shellLineCommentHighlightPlugin : [],
     ];
