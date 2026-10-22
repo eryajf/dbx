@@ -443,11 +443,26 @@ async fn list_results_preserve_legacy_stdio_shapes_after_initialize() {
 
 #[tokio::test]
 async fn initializes_lists_tools_and_calls_a_tool() {
+    let connections = catalog_connections();
+    // The full catalog includes Salesforce writes only after an explicit
+    // per-connection DML opt-in; the global SQL ceiling is not that consent.
+    let connection_policies = connections
+        .iter()
+        .filter(|connection| connection.db_type == DatabaseType::Salesforce)
+        .map(|connection| {
+            serde_json::from_value(json!({
+                "connectionId": connection.id,
+                "executionModeConfigured": false,
+                "allowSalesforceDml": true
+            }))
+            .expect("Salesforce catalog policy")
+        })
+        .collect();
     let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
     let server = DbxMcpServer::with_runtime_options(
         Arc::new(PolicyBackend {
-            policy: McpGlobalPolicy { allow_dangerous_sql: true, ..Default::default() },
-            connections: catalog_connections(),
+            policy: McpGlobalPolicy { allow_dangerous_sql: true, connection_policies, ..Default::default() },
+            connections,
             group_paths: Ok(HashMap::new()),
         }),
         McpScope::default(),
@@ -511,6 +526,53 @@ async fn initializes_lists_tools_and_calls_a_tool() {
     let result = client.peer().call_tool(CallToolRequestParams::new("dbx_list_connections")).await.expect("call tool");
     let response = result.content[0].as_text().expect("text response");
     assert!(response.text.contains("catalog-"), "{}", response.text);
+
+    client.cancel().await.expect("close MCP client");
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn salesforce_write_tools_require_explicit_connection_opt_in() {
+    let connection = catalog_connections()
+        .into_iter()
+        .find(|connection| connection.db_type == DatabaseType::Salesforce)
+        .expect("Salesforce catalog connection");
+    let connection_id = connection.id.clone();
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server = DbxMcpServer::with_runtime_options(
+        Arc::new(PolicyBackend {
+            policy: McpGlobalPolicy { allow_dangerous_sql: true, ..Default::default() },
+            connections: vec![connection],
+            group_paths: Ok(HashMap::new()),
+        }),
+        McpScope::default(),
+        false,
+    );
+    let server_task = tokio::spawn(async move { server.serve(server_transport).await });
+    let client = ().serve(client_transport).await.expect("initialize MCP client");
+
+    let tools = client.peer().list_tools(None).await.expect("list tools");
+    let names = tools.tools.iter().map(|tool| tool.name.as_ref()).collect::<Vec<_>>();
+    assert!(names.contains(&"dbx_salesforce_current_user"));
+    assert!(names.contains(&"dbx_execute_query"));
+    assert!(!names.contains(&"dbx_salesforce_prepare_write"));
+    assert!(!names.contains(&"dbx_salesforce_apply_write"));
+
+    // Hiding tools is not sufficient: a client that already knows the name
+    // must still be denied when it sends a valid write request directly.
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new("dbx_salesforce_prepare_write").with_arguments(
+            json!({"connection_id": connection_id, "op": "insert", "object": "Account", "fields": {"Name": "Acme"}})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ))
+        .await
+        .expect("receive denied write result");
+    assert_eq!(result.is_error, Some(true));
+    let response = result.content[0].as_text().expect("text response");
+    assert!(response.text.contains("SALESFORCE_DML_DISABLED"), "{}", response.text);
 
     client.cancel().await.expect("close MCP client");
     server_task.abort();
