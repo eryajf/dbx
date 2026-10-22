@@ -208,6 +208,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          sudo python3 "$GITHUB_WORKSPACE/.github/scripts/configure-ubuntu-apt.py" /etc/apt
           sudo timeout --kill-after=30s 10m apt-get \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \
@@ -907,6 +908,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          sudo python3 "$GITHUB_WORKSPACE/.github/scripts/configure-ubuntu-apt.py" /etc/apt
           sudo timeout --kill-after=30s 10m apt-get \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \
@@ -1018,6 +1020,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          sudo python3 "$GITHUB_WORKSPACE/.github/scripts/configure-ubuntu-apt.py" /etc/apt
           sudo timeout --kill-after=30s 10m apt-get \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \
@@ -1506,6 +1509,7 @@ jobs:
       - name: Install system dependencies
         if: matrix.driver == 'duckdb'
         run: |
+          sudo python3 "$GITHUB_WORKSPACE/.github/scripts/configure-ubuntu-apt.py" /etc/apt
           sudo timeout --kill-after=30s 10m apt-get \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \
