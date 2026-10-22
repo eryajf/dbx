@@ -75,7 +75,7 @@ import { useVisibilityChange } from "@/composables/useVisibilityChange";
 import { useExternalSqlFileChanges } from "@/composables/useExternalSqlFileChanges";
 import { useWebDavAutoUpload } from "@/composables/useWebDavAutoUpload";
 import { useSnippetAutoUpload } from "@/composables/useSnippetAutoUpload";
-import { readSyncMethod, readWebDavAutoUploadConfig, readWebDavBackupSelection, recordWebDavSyncSuccess } from "@/lib/webdav/webdavAutoUploadConfig";
+import { readSyncMethod, readWebDavAutoUploadConfig, readWebDavBackupSelection, recordWebDavSyncSuccess, writeWebDavLastUploadAt, webDavSyncTarget } from "@/lib/webdav/webdavAutoUploadConfig";
 import { useScheduledDatabaseBackups } from "@/composables/useScheduledDatabaseBackups";
 import { appShellMinSizeStyleForScale, shouldDrawDesktopWindowFrame, shouldDrawLinuxFloatingFrame, useWindowControls } from "@/composables/useWindowControls";
 import { createOpenTabsRestorationBarrier, initializeDesktopOpenTabs, initializeOpenTabs, type OpenTabsRestorationBarrier } from "@/lib/app/openTabsStartup";
@@ -106,7 +106,7 @@ import { buildEditableObjectSource, buildExecutableObjectSourceStatements, execu
 import { assertSourceIdentity, beginSourceSave } from "@/lib/table/objectSourceIdentity";
 import { loadEditableObjectSourceForEditor } from "@/lib/table/objectSourceLoad";
 import { schemaAfterConnectionSwitch } from "@/lib/schema/connectionSchemaInitialization";
-import { resolveHistorySqlRestoreTarget } from "@/lib/history/historyRestoreTarget";
+import { canReuseTabForHistoryRestore, resolveHistorySqlRestoreTarget } from "@/lib/history/historyRestoreTarget";
 import { resolveExecutableSql, resolveExecutableSqlWithBackend, type SqlExecutionOverride, type SqlExecutionSnapshot } from "@/lib/sql/sqlExecutionTarget";
 import { uuid } from "@/lib/common/utils";
 import { getPlatform, isMacOS, isWindows } from "@/lib/backend/platform";
@@ -141,6 +141,7 @@ import {
   isDisconnectAllActiveConnectionsShortcut,
   isEditTableStructureShortcut,
   isExecuteSqlInNewResultTabShortcut,
+  isExecuteAllSqlShortcut,
   isExecuteSqlShortcut,
   isDefaultQueryShortcutTarget,
   isFocusSearchShortcut,
@@ -169,9 +170,11 @@ import {
   isToggleZenModeShortcut,
   isZoomInShortcut,
   isZoomOutShortcut,
+  saveShortcutSurface,
   switchToTabIndexFromShortcut,
   tabSwitcherDirectionFromShortcut,
 } from "@/lib/editor/keyboardShortcuts";
+import { DBX_VIM_ACTION_EVENT, type DbxVimActionEvent } from "@/lib/editor/vimDbxActions";
 import { canSaveSqlTab } from "@/lib/tabs/sqlTabSaveTarget";
 import { initialTabSwitcherSelection, moveTabSwitcherSelection, tabSwitcherOrder } from "@/lib/tabs/tabSwitcher";
 import { createModifierDoubleTapShortcutController, isModifierDoubleTapShortcut, matchesModifierDoubleTapShortcut } from "@/lib/editor/modifierDoubleTapShortcut";
@@ -1009,21 +1012,26 @@ async function refreshAgentDriverUpdateCount() {
 }
 
 function restoreHistorySql(sql: string, entry: HistoryEntry) {
-  const tab = activeTab.value;
-  if (tab?.mode === "query") {
-    queryStore.updateSql(tab.id, sql);
-    return;
-  }
-
   const target = resolveHistorySqlRestoreTarget({
     entry,
-    activeTab: tab,
+    activeTab: activeTab.value,
     firstConnectionId: connectionStore.connections[0]?.id,
+    connections: connectionStore.connections,
     getConfig: (connectionId) => connectionStore.getConfig(connectionId),
   });
   if (!target) return;
-  const tabId = queryStore.createTab(target.connectionId, target.database, t("tabs.sql"), "query", target.schema);
-  queryStore.updateSql(tabId, sql);
+
+  const tab = activeTab.value;
+  if (tab && canReuseTabForHistoryRestore(tab, target)) {
+    queryStore.updateSql(tab.id, sql);
+  } else {
+    queryStore.createTab(target.connectionId, target.database, undefined, "query", target.schema, sql, undefined, { forceNew: true });
+  }
+
+  if (target.connectionId) {
+    connectionStore.activeConnectionId = target.connectionId;
+    connectionStore.ensureConnected(target.connectionId).catch(() => {});
+  }
 }
 
 const executableSql = computed(() => {
@@ -1055,6 +1063,8 @@ const blockDangerousRedisCommands = computed({
 });
 const databaseRequiredSignal = ref(0);
 const databaseRequiredTabId = ref<string | null>(null);
+const connectionRequiredSignal = ref(0);
+const connectionRequiredTabId = ref<string | null>(null);
 const pendingToolbarExecutionSnapshot = ref<SqlExecutionSnapshot & { tabId?: string }>();
 const sqlExecutionDangerStore = useSqlExecutionDangerStore();
 const productionSafetyStore = useProductionSafetyStore();
@@ -1065,6 +1075,14 @@ function promptActiveDatabaseSelection(tabId?: string) {
   databaseRequiredTabId.value = tab.id;
   databaseRequiredSignal.value += 1;
   toast(t("editor.selectDatabaseRequired"), 2500);
+}
+
+function promptActiveConnectionSelection(tabId?: string) {
+  const tab = tabId ? queryStore.tabs.find((candidate) => candidate.id === tabId) : activeTab.value;
+  if (!tab) return;
+  connectionRequiredTabId.value = tab.id;
+  connectionRequiredSignal.value += 1;
+  toast(t("editor.selectConnectionRequired"), 2500);
 }
 
 const {
@@ -1095,6 +1113,7 @@ const {
   activeOutputView,
   blockDangerousRedisCommands,
   onMissingDatabase: promptActiveDatabaseSelection,
+  onMissingConnection: promptActiveConnectionSelection,
   requestDangerConfirmation: (request) => sqlExecutionDangerStore.requestConfirmation(request),
   onExecutionStarted: (editorViewportRequestId) => contentAreaRef.value?.acceptQueryEditorExecutionViewport(editorViewportRequestId),
   onExecutionCancelled: (editorViewportRequestId) => contentAreaRef.value?.cancelQueryEditorExecutionViewport(editorViewportRequestId),
@@ -1118,6 +1137,14 @@ function requestActiveEditorExecute(source?: "pointer" | "keyboard", tabId?: str
   }
   if (contentAreaRef.value?.requestQueryEditorExecute?.(targetTabId)) return;
   void tryExecute(undefined, targetTabId ? { tabId: targetTabId } : undefined);
+}
+
+function requestActiveEditorExecuteAll(_source?: "pointer" | "keyboard", tabId?: string) {
+  pendingToolbarExecutionSnapshot.value = undefined;
+  const targetTabId = tabId ?? activeTab.value?.id;
+  if (contentAreaRef.value?.requestQueryEditorExecuteAll?.(targetTabId)) return;
+  const tab = targetTabId ? queryStore.tabs.find((t) => t.id === targetTabId) : activeTab.value;
+  void tryExecute(tab?.sql ?? undefined, targetTabId ? { tabId: targetTabId } : undefined);
 }
 
 function requestActiveEditorExecuteInNewResultTab(source?: "pointer" | "keyboard", tabId?: string) {
@@ -1177,8 +1204,10 @@ provide(EDITOR_TOOLBAR_ACTIONS, {
   explainMode,
   blockDangerousRedisCommands,
   databaseRequiredSignalFor: (tabId: string) => (databaseRequiredTabId.value === tabId ? databaseRequiredSignal.value : 0),
+  connectionRequiredSignalFor: (tabId: string) => (connectionRequiredTabId.value === tabId ? connectionRequiredSignal.value : 0),
   captureExecutionSnapshot: captureActiveEditorExecutionSnapshot,
   toolbarExecute: requestActiveEditorExecute,
+  toolbarExecuteAll: requestActiveEditorExecuteAll,
   toolbarExecuteInNewResultTab: requestActiveEditorExecuteInNewResultTab,
   cancelExecution: (tabId: string) => cancelActiveExecution(tabId),
   explain: (tabId: string) => tryExplain(undefined, { tabId }),
@@ -1353,6 +1382,9 @@ async function openImmediateSync() {
     const includeSecrets = Boolean((selection?.includeSecrets ?? secretsStatus.enabled) && secretsStatus.enabled && secretsStatus.hasSavedPassphrase);
     const summary = await api.webdavSyncUpload(webDavConfig, settingsStore.editorSettings, undefined, includeSecrets, selection);
     recordWebDavSyncSuccess(webDavConfig);
+    const currentConfig = readWebDavAutoUploadConfig();
+    const isCurrent = Boolean(currentConfig.enabled && currentConfig.webDavConfig && webDavSyncTarget(currentConfig.webDavConfig) === webDavSyncTarget(webDavConfig));
+    writeWebDavLastUploadAt(webDavConfig, Date.now(), isCurrent);
     toast(t("settings.syncUploadSuccess", { bytes: summary.bytes, path: summary.remotePath }), 3000);
   } catch (error: any) {
     toast(error?.message || String(error), 5000);
@@ -3338,6 +3370,7 @@ async function newQuery(options: NewQueryOptions = {}) {
     identifierQuote: connectionStore.connectionIdentifierQuote?.(target.connectionId),
     includeDatabaseName: settingsStore.editorSettings.generateSqlIncludeDatabaseName,
     quoteIdentifiers: settingsStore.editorSettings.generateSqlQuoteIdentifiers,
+    keywordCase: settingsStore.editorSettings.sqlFormatter.keywordCase,
   });
   const tabId = queryStore.createTab(conn.id, target.database, undefined, "query", target.schema, initialSql, target.catalog, { schemaQualifiesSql: target.schemaQualifiesSql === true });
   if (initialSql) {
@@ -3590,6 +3623,9 @@ async function changeActiveConnection(tabId: string, connectionId: string) {
   if (!tab) return;
   const connection = connectionStore.getConfig(connectionId);
   if (!connection) return;
+  if (connectionRequiredTabId.value === tab.id) {
+    connectionRequiredTabId.value = null;
+  }
   const initialDatabase = resolveDefaultDatabase(connection, []);
   queryStore.updateConnection(tab.id, connectionId, initialDatabase);
   let isCurrentTarget = queryStore.createExecutionTargetGuard(tab.id);
@@ -4576,6 +4612,35 @@ async function closeActiveSurface() {
     queryStore.closeTab(queryStore.activeTabId);
   }
 }
+// App-scoped `:dbx` actions. Editor-scoped ones are handled (and stopped) in
+// QueryEditor before the event bubbles up to window.
+function handleVimDbxAppAction(event: Event) {
+  const { action } = (event as DbxVimActionEvent).detail;
+  switch (action) {
+    case "newQuery":
+      void newQuery();
+      break;
+    case "closeTab":
+      void closeActiveSurface();
+      break;
+    case "closeOtherTabs":
+      appTabBarRef.value?.closeOtherActiveTabs();
+      break;
+    case "closeAllTabs":
+      appTabBarRef.value?.closeAllTabs();
+      break;
+    case "reopenClosedTab":
+      queryStore.reopenClosedTab();
+      break;
+    case "openSettings":
+      openSettings();
+      break;
+    default:
+      return;
+  }
+  event.preventDefault();
+}
+
 async function handleKeydown(e: KeyboardEvent) {
   if (e.defaultPrevented) return;
 
@@ -4780,11 +4845,30 @@ async function handleKeydown(e: KeyboardEvent) {
   if (isSaveShortcut(e, shortcuts) && e.target instanceof Element && isObjectSourceSaveShortcutTarget(e.target)) {
     return;
   }
-  if (activeTab.value?.mode === "query" && !showSaveSqlDialog.value && isSaveShortcut(e, shortcuts)) {
-    e.preventDefault();
-    e.stopPropagation();
-    void openSaveSqlDialog();
-    return;
+  if (isSaveShortcut(e, shortcuts)) {
+    // The settings page, plugin center and driver store keep the previously active
+    // query tab activated, so the active tab alone cannot decide who Ctrl+S belongs
+    // to. Without the surface check the shortcut popped the save-SQL dialog on top of
+    // the settings page and silently dropped the edited draft (#13020).
+    const saveShortcutTarget = saveShortcutSurface({
+      settingsPageOpen: showSettingsPage.value,
+      pluginCenterOpen: showPluginCenter.value,
+      driverStoreOpen: showDriverStore.value,
+      activeTabMode: activeTab.value?.mode ?? null,
+      saveSqlDialogOpen: showSaveSqlDialog.value,
+    });
+    if (saveShortcutTarget === "settings") {
+      e.preventDefault();
+      e.stopPropagation();
+      void settingsPageRef.value?.applySettingsFromShortcut();
+      return;
+    }
+    if (saveShortcutTarget === "query") {
+      e.preventDefault();
+      e.stopPropagation();
+      void openSaveSqlDialog();
+      return;
+    }
   }
   // CodeMirror ignores keydown events after an IME composition changes the
   // document, so this app-level fallback must share the editor shortcut guard.
@@ -4799,6 +4883,12 @@ async function handleKeydown(e: KeyboardEvent) {
     e.preventDefault();
     e.stopPropagation();
     if (!e.repeat && !activeTab.value.isExecuting && !contentAreaRef.value?.shouldBlockQueryEditorExecutionShortcut?.(e)) requestActiveEditorExecuteInNewResultTab();
+    return;
+  }
+  if (activeTab.value?.mode === "query" && isExecuteAllSqlShortcut(e, shortcuts) && e.target instanceof Element && e.target.closest("[data-query-editor-root]")) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.repeat && !activeTab.value.isExecuting && !contentAreaRef.value?.shouldBlockQueryEditorExecutionShortcut?.(e)) requestActiveEditorExecuteAll();
     return;
   }
   if (activeTab.value?.mode === "query" && isExecuteSqlShortcut(e, shortcuts) && e.target instanceof Element && e.target.closest("[data-query-editor-root]")) {
@@ -5127,6 +5217,7 @@ onMounted(async () => {
   window.addEventListener("keydown", handleTabSwitcherKeydownCapture, true);
   window.addEventListener("keydown", handleAuxiliarySearchKeydownCapture, true);
   window.addEventListener("keydown", handleKeydown);
+  window.addEventListener(DBX_VIM_ACTION_EVENT, handleVimDbxAppAction);
   window.addEventListener("keyup", handleKeyup, true);
   window.addEventListener("blur", handleTabSwitcherWindowBlur);
   document.addEventListener("visibilitychange", handleTabSwitcherVisibilityChange);
@@ -5224,6 +5315,7 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handleTabSwitcherKeydownCapture, true);
   window.removeEventListener("keydown", handleAuxiliarySearchKeydownCapture, true);
   window.removeEventListener("keydown", handleKeydown);
+  window.removeEventListener(DBX_VIM_ACTION_EVENT, handleVimDbxAppAction);
   window.removeEventListener("keyup", handleKeyup, true);
   window.removeEventListener("blur", handleTabSwitcherWindowBlur);
   document.removeEventListener("visibilitychange", handleTabSwitcherVisibilityChange);

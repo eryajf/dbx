@@ -60,6 +60,7 @@ import {
   buildInstalledUpdateIndex,
   buildMarketplacePluginListings,
   compareVersions,
+  fetchPluginInstallCounts,
   filterMarketplacePluginListings,
   formatMarketplaceReleasedDate,
   marketplaceHomepageUrl,
@@ -69,6 +70,7 @@ import {
   type InstalledPluginUpdateEntry,
   type MarketplacePluginListing,
   type MarketplacePluginSortMode,
+  type PluginInstallCounts,
   type PluginSourceChange,
 } from "@/lib/plugins/pluginMarketplace";
 import { isBatchSelectableListing, runBatch, type BatchOutcome } from "@/lib/plugins/pluginBatch";
@@ -185,7 +187,7 @@ const marketplaceRepositoryId = ref("all");
 const marketplaceDetailKey = ref("");
 const marketplaceDetailOpen = ref(false);
 const marketplaceViewMode = ref<"grid" | "list">(safeLocalStorageGet(MARKETPLACE_VIEW_MODE_STORAGE_KEY) === "list" ? "list" : "grid");
-const MARKETPLACE_SORT_MODES: MarketplacePluginSortMode[] = ["name", "recently-updated", "recently-listed", "updates-first"];
+const MARKETPLACE_SORT_MODES: MarketplacePluginSortMode[] = ["name", "installs", "recently-updated", "recently-listed", "updates-first"];
 // "name" stays the default: the batch specs select listings positionally, so a persisted
 // value must be re-validated against the known modes before it may change the order.
 const marketplaceSortMode = ref<MarketplacePluginSortMode>(
@@ -234,7 +236,9 @@ const selectedConnection = computed(() => providerConnections.value.find((connec
 const marketplaceListings = computed(() => buildMarketplacePluginListings(catalogResults.value, installedPlugins.value, appLocale.value));
 const filteredMarketplaceListings = computed(() => filterMarketplacePluginListings(marketplaceListings.value, marketplaceQuery.value, marketplaceRepositoryId.value).filter((listing) => !marketplacePublisher.value || listing.plugin.publisher === marketplacePublisher.value));
 // Render order only: batch selection and update execution keep the builder's name order.
-const sortedMarketplaceListings = computed(() => sortMarketplacePluginListings(filteredMarketplaceListings.value, marketplaceSortMode.value));
+const pluginInstallCounts = ref<PluginInstallCounts>({});
+let installCountRequest = 0;
+const sortedMarketplaceListings = computed(() => sortMarketplacePluginListings(filteredMarketplaceListings.value, marketplaceSortMode.value, pluginInstallCounts.value));
 const selectedMarketplaceListing = computed(() => marketplaceListings.value.find((listing) => listing.key === marketplaceDetailKey.value) || null);
 const detailOpening = ref(false);
 const detailChooseEntry = ref(false);
@@ -560,8 +564,31 @@ async function refresh(preferredPluginId = props.focusTarget?.pluginId || select
   }
 }
 
+function listingInstallCount(pluginId: string): number {
+  const value = pluginInstallCounts.value[pluginId];
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function formatInstallCount(count: number): string {
+  try {
+    return new Intl.NumberFormat(appLocale.value).format(count);
+  } catch {
+    return String(count);
+  }
+}
+
+// Stats stay decorative: a slow or failed request must not hold the catalog,
+// and a newer refresh or unmount drops the stale response.
+function loadPluginInstallCounts() {
+  const request = ++installCountRequest;
+  void fetchPluginInstallCounts().then((counts) => {
+    if (request === installCountRequest && counts) pluginInstallCounts.value = counts;
+  });
+}
+
 async function refreshMarketplace() {
   marketplaceLoading.value = true;
+  loadPluginInstallCounts();
   let loaded = false;
   try {
     catalogResults.value = await api.fetchPluginMarketplaceCatalogs();
@@ -1373,6 +1400,7 @@ onMounted(() => {
 watch(marketplaceViewMode, (mode) => safeLocalStorageSet(MARKETPLACE_VIEW_MODE_STORAGE_KEY, mode));
 watch(marketplaceSortMode, (mode) => safeLocalStorageSet(MARKETPLACE_SORT_MODE_STORAGE_KEY, mode));
 onBeforeUnmount(() => {
+  installCountRequest += 1;
   detailSessionGeneration += 1;
   window.clearTimeout(recentlyCompletedTimer);
   window.removeEventListener(COMPONENT_PLUGINS_UPDATED_EVENT, handleComponentPluginsUpdated);
@@ -1442,6 +1470,7 @@ onBeforeUnmount(() => {
                 <SelectTrigger data-plugin-marketplace-sort class="h-8 min-w-0 flex-1 text-xs @min-[54rem]:w-32 @min-[54rem]:flex-none" :aria-label="t('pluginPlatform.sortBy')"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="name">{{ t("pluginPlatform.sortByName") }}</SelectItem>
+                  <SelectItem value="installs">{{ t("pluginPlatform.sortByInstalls") }}</SelectItem>
                   <SelectItem value="recently-updated">{{ t("pluginPlatform.sortByRecentlyUpdated") }}</SelectItem>
                   <SelectItem value="recently-listed">{{ t("pluginPlatform.sortByRecentlyListed") }}</SelectItem>
                   <SelectItem value="updates-first">{{ t("pluginPlatform.sortByUpdatesFirst") }}</SelectItem>
@@ -1595,20 +1624,23 @@ onBeforeUnmount(() => {
                 <TooltipContent side="bottom" class="max-w-md whitespace-pre-wrap break-words">{{ listing.description || t("pluginPlatform.noDescription") }}</TooltipContent>
               </Tooltip>
               <div class="marketplace-footer mt-auto flex items-center justify-between gap-3 pt-4">
-                <div class="flex min-w-0 flex-1 items-baseline gap-1.5 text-[11px] text-muted-foreground">
-                  <span v-if="listing.status === 'unsupported'" class="min-w-0 truncate">{{ t("pluginPlatform.unsupportedTarget", { target: listing.target }) }}</span>
-                  <!-- Versions are stated only in this footer (no separate badge above): the update case
-                       keeps installed and catalog latest in one sentence so neither reads as the other,
-                       and the plain install state leads with the full catalog version that never shrinks
-                       while license and release date absorb the truncation. -->
-                  <span v-else-if="listing.installed && listing.status === 'update'" class="min-w-0 truncate">{{ t("pluginPlatform.installedVersionUpdatable", { installed: listing.installed.manifest.version, latest: listing.plugin.latestVersion }) }}</span>
-                  <span v-else-if="listing.installed" class="min-w-0 truncate">{{ t("pluginPlatform.installedVersion", { version: listing.installed.manifest.version }) }}</span>
-                  <template v-else>
-                    <span class="shrink-0 font-medium">v{{ listing.plugin.latestVersion }}</span>
-                    <span class="min-w-0 truncate"
-                      >{{ listing.plugin.license || t("pluginPlatform.licenseUnknown") }}<span v-if="listing.latestVersionReleasedAt"> · {{ formatMarketplaceReleasedDate(listing.latestVersionReleasedAt, appLocale) }}</span></span
-                    >
-                  </template>
+                <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div class="flex min-w-0 items-baseline gap-1.5 text-[11px] text-muted-foreground">
+                    <span v-if="listing.status === 'unsupported'" class="min-w-0 truncate">{{ t("pluginPlatform.unsupportedTarget", { target: listing.target }) }}</span>
+                    <!-- Versions are stated only in this footer (no separate badge above): the update case
+                         keeps installed and catalog latest in one sentence so neither reads as the other,
+                         and the plain install state leads with the full catalog version that never shrinks
+                         while license and release date absorb the truncation. -->
+                    <span v-else-if="listing.installed && listing.status === 'update'" class="min-w-0 truncate">{{ t("pluginPlatform.installedVersionUpdatable", { installed: listing.installed.manifest.version, latest: listing.plugin.latestVersion }) }}</span>
+                    <span v-else-if="listing.installed" class="min-w-0 truncate">{{ t("pluginPlatform.installedVersion", { version: listing.installed.manifest.version }) }}</span>
+                    <template v-else>
+                      <span class="shrink-0 font-medium">v{{ listing.plugin.latestVersion }}</span>
+                      <span class="min-w-0 truncate"
+                        >{{ listing.plugin.license || t("pluginPlatform.licenseUnknown") }}<span v-if="listing.latestVersionReleasedAt"> · {{ formatMarketplaceReleasedDate(listing.latestVersionReleasedAt, appLocale) }}</span></span
+                      >
+                    </template>
+                  </div>
+                  <div v-if="listingInstallCount(listing.plugin.id)" class="text-[11px] tabular-nums text-muted-foreground">{{ t("pluginPlatform.installCount", { count: formatInstallCount(listingInstallCount(listing.plugin.id)) }) }}</div>
                 </div>
                 <button
                   type="button"
@@ -1663,6 +1695,7 @@ onBeforeUnmount(() => {
                   >
                   <span class="shrink-0">· v{{ listing.plugin.latestVersion }}</span>
                   <span v-if="listing.latestVersionReleasedAt" class="shrink-0">· {{ formatMarketplaceReleasedDate(listing.latestVersionReleasedAt, appLocale) }}</span>
+                  <span v-if="listingInstallCount(listing.plugin.id)" class="shrink-0 tabular-nums">· {{ t("pluginPlatform.installCount", { count: formatInstallCount(listingInstallCount(listing.plugin.id)) }) }}</span>
                   <button
                     v-if="listing.plugin.source"
                     type="button"
@@ -2148,7 +2181,7 @@ onBeforeUnmount(() => {
                   <h3 class="text-sm font-semibold">{{ t("pluginPlatform.pluginDetailsIntroduction") }}</h3>
                   <p class="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{{ selectedMarketplaceListing.description || t("pluginPlatform.noDescription") }}</p>
                 </section>
-                <div class="grid gap-3 text-xs @min-[40rem]:grid-cols-3">
+                <div class="grid grid-cols-2 gap-3 text-xs @min-[40rem]:grid-cols-4">
                   <div class="rounded-lg border p-3">
                     <div class="text-muted-foreground">{{ t("pluginPlatform.pluginDetailsVersion") }}</div>
                     <div class="mt-1 font-medium">v{{ selectedMarketplaceListing.plugin.latestVersion }}</div>
@@ -2160,6 +2193,10 @@ onBeforeUnmount(() => {
                   <div class="rounded-lg border p-3">
                     <div class="text-muted-foreground">{{ t("pluginPlatform.pluginDetailsReleaseDate") }}</div>
                     <div class="mt-1 font-medium">{{ formatMarketplaceReleasedDate(selectedMarketplaceListing.latestVersionReleasedAt, appLocale) || "—" }}</div>
+                  </div>
+                  <div class="rounded-lg border p-3">
+                    <div class="text-muted-foreground">{{ t("pluginPlatform.sortByInstalls") }}</div>
+                    <div class="mt-1 font-medium tabular-nums">{{ listingInstallCount(selectedMarketplaceListing.plugin.id) ? formatInstallCount(listingInstallCount(selectedMarketplaceListing.plugin.id)) : "—" }}</div>
                   </div>
                 </div>
                 <div v-if="selectedMarketplaceListing.plugin.tags.length" class="flex flex-wrap gap-1.5">
