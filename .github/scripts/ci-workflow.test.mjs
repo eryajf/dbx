@@ -289,6 +289,16 @@ test("Linux Rust dependency installs bound apt mirror stalls", () => {
   }
 });
 
+test("desktop system dependencies remain available for application and workspace tests", () => {
+  const install = job("rust-test").match(/      - name: Install system dependencies\n([\s\S]*?)(?=\n      - name:)/)?.[1];
+  assert.ok(install, "missing system dependency install step");
+  const condition = install.match(/^        if: (.+)$/m)?.[1];
+  assert.ok(condition, "missing dependency install condition");
+  const shouldInstall = new Function("matrix", `return (${condition});`);
+  for (const group of ["application", "workspace"]) assert.equal(shouldInstall({ group }), true, group);
+  for (const group of ["foundation", "drivers"]) assert.equal(shouldInstall({ group }), false, group);
+});
+
 test("Rust test jobs install pinned nextest and retain separate doctests", () => {
   const pluginDevHost = readFileSync(new URL("../workflows/plugin-dev-host.yml", import.meta.url), "utf8");
   const pluginRelease = readFileSync(new URL("../workflows/plugin-cli-release.yml", import.meta.url), "utf8");
