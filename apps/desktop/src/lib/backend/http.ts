@@ -2410,6 +2410,10 @@ export async function loadMcpAccessPolicy(): Promise<McpAccessPolicy> {
   return get("/api/app-settings/mcp-access-policy");
 }
 
+export async function resetInvalidMcpAccessPolicy(): Promise<void> {
+  return post("/api/app-settings/mcp-access-policy/recover", {});
+}
+
 export async function setMcpPluginScopeRule(connectionId: string, kind: string, value: string | null, rule: McpAccessRule | null, subScope: McpSubScopeMode | null): Promise<McpAccessPolicy> {
   const res = await fetch(apiUrl("/api/app-settings/mcp-access-policy/plugin-scope"), {
     method: "PUT",

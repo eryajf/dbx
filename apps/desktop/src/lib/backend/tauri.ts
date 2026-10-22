@@ -915,6 +915,10 @@ export async function loadMcpAccessPolicy(): Promise<McpAccessPolicy> {
   return invoke("load_mcp_access_policy");
 }
 
+export async function resetInvalidMcpAccessPolicy(): Promise<void> {
+  return invoke("reset_invalid_mcp_access_policy");
+}
+
 export async function setMcpPluginScopeRule(connectionId: string, kind: string, value: string | null, rule: McpAccessRule | null, subScope: McpSubScopeMode | null): Promise<McpAccessPolicy> {
   return invoke("set_mcp_plugin_scope_rule", { connectionId, kind, value, rule, subScope });
 }

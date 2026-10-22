@@ -1937,7 +1937,7 @@ impl DbxMcpServer {
 
     #[tool(
         name = "dbx_nacos_register_instance",
-        description = "Register a Nacos service instance.",
+        description = "Register a persistent Nacos service instance (ephemeral=false).",
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn nacos_register_instance(
@@ -1964,7 +1964,7 @@ impl DbxMcpServer {
 
     #[tool(
         name = "dbx_nacos_deregister_instance",
-        description = "Deregister a Nacos service instance.",
+        description = "Deregister a Nacos service instance. Defaults to persistent (ephemeral=false), matching dbx_nacos_register_instance; pass ephemeral=true for an ephemeral instance.",
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false)
     )]
     async fn nacos_deregister_instance(
@@ -2023,7 +2023,7 @@ impl DbxMcpServer {
 
     #[tool(
         name = "dbx_consul_kv_put",
-        description = "Write one Consul KV key. Pass cas (ModifyIndex from dbx_consul_kv_get) to avoid overwriting a concurrent change.",
+        description = "Write one Consul KV key. cas is required: use 0 to create only when absent, or the ModifyIndex from dbx_consul_kv_get to update without overwriting a concurrent change.",
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn consul_kv_put(&self, Parameters(request): Parameters<ConsulKvPutRequest>) -> CallToolResult {
@@ -4738,6 +4738,11 @@ impl DbxMcpServer {
     /// Resolves the plugin exposure mode at call time. Environment variables
     /// are an explicit override; otherwise the persisted v1/v2 setting wins.
     async fn effective_plugin_tools_mode(&self, policy: Option<&McpGlobalPolicy>) -> PluginToolsMode {
+        // Scoped routers have no lazy meta routes. This takes precedence over
+        // both saved settings and environment overrides, for lists and calls.
+        if self.scope.enabled() {
+            return PluginToolsMode::Flat;
+        }
         if let Some(mode) = PluginToolsMode::from_env_override() {
             return mode;
         }
@@ -9075,6 +9080,46 @@ mod tests {
         for expected in ["dbx_plugin_list", "dbx_plugin_tools", "dbx_plugin_call"] {
             assert!(names.contains(&expected), "{expected} missing in {names:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn scoped_plugin_modes_always_advertise_and_dispatch_flat_tools() {
+        use dbx_core::mcp_access::McpPluginToolsMode;
+        for mode in [McpPluginToolsMode::Lazy, McpPluginToolsMode::Auto, McpPluginToolsMode::Flat] {
+            let tools = (0..41)
+                .map(|i| json!({"name": format!("t{i}"), "annotations": {"readOnlyHint": true}}))
+                .collect::<Vec<_>>();
+            let backend = Arc::new(FakeBackend {
+                connections: vec![
+                    plugin_connection("only", "Allowed", "io.dbx.big"),
+                    plugin_connection("outside", "Outside", "io.dbx.big"),
+                ],
+                policy: McpGlobalPolicy { plugin_tools_mode: mode, ..Default::default() },
+                plugin_providers: vec![plugin_provider("io.dbx.big", "Big", json!({"tools": tools}))],
+                ..Default::default()
+            });
+            let server = DbxMcpServer::with_plugin_tools_mode(
+                backend,
+                McpScope { connection_ids: vec!["only".into()], ..Default::default() },
+                false,
+                PluginToolsMode::Auto,
+            );
+            let tools = server.policy_filtered_tools().await;
+            assert_eq!(tools.iter().filter(|tool| tool.name.starts_with("dbx_big__")).count(), 41);
+            assert!(!tools.iter().any(|tool| tool.name == "dbx_plugin_call"));
+            let result = server.call_plugin_tool_dispatch("dbx_big__t0", json!({})).await.unwrap();
+            assert_ne!(result.is_error, Some(true), "{}", result_text(&result));
+            let denied =
+                server.call_plugin_tool_dispatch("dbx_big__t0", json!({"connectionId": "outside"})).await.unwrap();
+            assert_eq!(denied.is_error, Some(true));
+        }
+        let server = DbxMcpServer::with_plugin_tools_mode(
+            Arc::new(FakeBackend::default()),
+            McpScope { database: Some("db".into()), ..Default::default() },
+            false,
+            PluginToolsMode::Lazy,
+        );
+        assert_eq!(server.effective_plugin_tools_mode(None).await, PluginToolsMode::Flat);
     }
 
     #[tokio::test]

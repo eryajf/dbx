@@ -375,6 +375,67 @@ pub fn saved_grant<'a>(grants: &'a HashMap<String, PluginMcpGrant>, plugin_id: &
     grants.get(plugin_id)
 }
 
+/// Resolve a scope kind from the actual provider, not a global list: plugins
+/// may declare custom kinds but cannot write rules for another connection.
+fn validate_scope_kind(
+    db_type: crate::models::connection::DatabaseType,
+    plugin_id: Option<&str>,
+    manifest: Option<&PluginManifest>,
+    kind: &str,
+) -> Result<(), String> {
+    let expected = if let Some(plugin_id) = plugin_id {
+        manifest
+            .filter(|manifest| manifest.id == plugin_id)
+            .and_then(|manifest| manifest.mcp_contribution())
+            .and_then(|mcp| mcp.scope.as_ref())
+            .map(|scope| scope.kind.as_str())
+    } else if db_type == crate::models::connection::DatabaseType::Nacos {
+        Some("namespace")
+    } else {
+        None
+    };
+    if kind == "database" || expected != Some(kind) {
+        return Err("MCP_SCOPE_INVALID: This scope kind is not supported by the connection's provider".to_string());
+    }
+    Ok(())
+}
+
+pub async fn set_scope_rule(
+    state: &crate::connection::AppState,
+    connection_id: &str,
+    kind: &str,
+    value: Option<&str>,
+    rule: Option<crate::mcp_access::McpAccessRule>,
+    sub_scope: Option<crate::mcp_access::McpSubScopeMode>,
+) -> Result<crate::mcp_access::McpAccessPolicy, String> {
+    let connection = state
+        .storage
+        .load_connections()
+        .await?
+        .into_iter()
+        .find(|connection| connection.id == connection_id.trim())
+        .ok_or_else(|| "CONNECTION_NOT_FOUND: connection is not available".to_string())?;
+    let manifest = match connection.plugin_id.as_deref() {
+        Some(id) => state
+            .plugins
+            .list_installed()?
+            .into_iter()
+            .find(|plugin| plugin.manifest.id == id)
+            .map(|plugin| plugin.manifest),
+        None => None,
+    };
+    validate_scope_kind(connection.db_type, connection.plugin_id.as_deref(), manifest.as_ref(), kind.trim())?;
+    if rule.as_ref().is_some_and(|rule| {
+        rule.sub_scope.is_some() || rule.sub_scope_kind.is_some() || !rule.toolset_ceilings.is_empty()
+    }) {
+        return Err("MCP_SCOPE_INVALID: Child scope rules cannot change connection settings".to_string());
+    }
+    if rule.is_some() && value.is_none_or(|value| value.trim().is_empty()) {
+        return Err("MCP_SCOPE_INVALID: A scope value is required for a rule".to_string());
+    }
+    state.storage.set_mcp_plugin_scope_rule(&connection.id, kind.trim(), value, rule, sub_scope).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +460,73 @@ mod tests {
             "contributions": contributions
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn scope_kinds_must_match_the_connection_provider_including_custom_plugins() {
+        use crate::models::connection::DatabaseType;
+        let custom = manifest(json!({"scope": {"kind": "workspace", "title": "Workspace", "argument": "workspace"}}));
+        assert!(validate_scope_kind(DatabaseType::Mysql, None, None, "topic").is_err());
+        assert!(validate_scope_kind(DatabaseType::Nacos, None, None, "namespace").is_ok());
+        assert!(validate_scope_kind(DatabaseType::Nacos, None, None, "topic").is_err());
+        assert!(validate_scope_kind(DatabaseType::Mysql, Some("io.dbx.example"), Some(&custom), "workspace").is_ok());
+        assert!(validate_scope_kind(DatabaseType::Mysql, Some("other"), Some(&custom), "workspace").is_err());
+        assert!(validate_scope_kind(DatabaseType::Mysql, Some("io.dbx.example"), None, "workspace").is_err());
+        assert!(validate_scope_kind(DatabaseType::Mysql, Some("io.dbx.example"), Some(&custom), "database").is_err());
+    }
+
+    #[tokio::test]
+    async fn scope_service_rejects_invalid_provider_and_child_fields_without_mutation() {
+        use crate::mcp_access::{McpAccessRule, McpSubScopeMode};
+        use crate::models::connection::{ConnectionConfig, DatabaseType};
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::persistence::test_storage::open(&dir.path().join("state.db")).await.unwrap();
+        let state = crate::connection::AppState::new_with_plugin_and_agent_dir_and_app_version(
+            storage,
+            dir.path().join("plugins"),
+            dir.path().join("agents"),
+            "test",
+        );
+        let connections = [DatabaseType::Mysql, DatabaseType::Nacos]
+            .into_iter()
+            .enumerate()
+            .map(|(i, db_type)| {
+                serde_json::from_value::<ConnectionConfig>(json!({
+                    "id": i.to_string(), "name": "Test", "db_type": db_type,
+                    "host": "localhost", "port": 3306, "username": "", "password": "", "database": ""
+                }))
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        state.storage.save_connections(&connections).await.unwrap();
+        let before = state.storage.load_mcp_access_policy().await.unwrap();
+        for (id, kind) in [("missing", "namespace"), ("0", "topic"), ("1", "topic")] {
+            assert!(set_scope_rule(&state, id, kind, None, None, Some(McpSubScopeMode::None)).await.is_err());
+        }
+        assert!(set_scope_rule(
+            &state,
+            "1",
+            "namespace",
+            Some("team"),
+            Some(McpAccessRule { sub_scope: Some(McpSubScopeMode::All), ..Default::default() }),
+            None
+        )
+        .await
+        .is_err());
+        assert!(set_scope_rule(&state, "1", "namespace", None, Some(McpAccessRule::default()), None).await.is_err());
+        assert_eq!(state.storage.load_mcp_access_policy().await.unwrap(), before);
+        let saved = set_scope_rule(
+            &state,
+            "1",
+            "namespace",
+            Some("team"),
+            Some(McpAccessRule { visible: Some(true), ..Default::default() }),
+            Some(McpSubScopeMode::Selected),
+        )
+        .await
+        .unwrap();
+        assert!(saved.sub_scope_visible("1", "namespace", "team"));
+        assert!(!saved.sub_scope_visible("1", "namespace", "other"));
     }
 
     /// Author opt-in with all three tools declared.

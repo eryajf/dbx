@@ -31,10 +31,16 @@ function declaration(name: string): string {
 
 const exposedNames = [
   "mcpAccessPolicy",
+  "mcpAccessPolicyError",
+  "mcpAccessPolicyLoading",
+  "mcpPolicyRecovering",
+  "mcpPolicyRecoveryConfirmation",
+  "recoverMcpAccessPolicy",
   "mcpInstalledPluginsForScopes",
   "loadMcpPluginScopeContext",
   "mcpPolicyConfirmation",
   "confirmMcpPolicyChange",
+  "onMcpPolicyConfirmationOpenChange",
   "onMcpTreeScopeMode",
   "onMcpTreeDatabaseScope",
   "onMcpTreeDatabaseAllowed",
@@ -128,11 +134,17 @@ const plugin: PluginMcpView = {
 };
 
 interface SettingsHarness {
+  mcpAccessPolicyError: Ref<string>;
+  mcpAccessPolicyLoading: Ref<boolean>;
+  mcpPolicyRecovering: Ref<boolean>;
+  mcpPolicyRecoveryConfirmation: Ref<boolean>;
+  recoverMcpAccessPolicy: () => Promise<void>;
   mcpAccessPolicy: Ref<McpAccessPolicy | null>;
   mcpInstalledPluginsForScopes: Ref<Array<{ manifest: { id: string } }>>;
   loadMcpPluginScopeContext: () => Promise<void>;
   mcpPolicyConfirmation: Ref<{ message: string; apply: () => void } | null>;
-  confirmMcpPolicyChange: () => void;
+  confirmMcpPolicyChange: () => void | Promise<void>;
+  onMcpPolicyConfirmationOpenChange: (open: boolean) => void;
   onMcpTreeScopeMode: (mode: "all" | "custom") => void;
   onMcpTreeDatabaseScope: (id: string, scope: "all" | "selected" | "none") => void;
   onMcpTreeDatabaseAllowed: (id: string, database: string, allowed: boolean) => void;
@@ -174,6 +186,7 @@ interface SettingsHarness {
 
 function createHarness(initial: Partial<McpGlobalPolicy> = {}) {
   const loadMcpAccessPolicy = vi.fn(async (): Promise<McpAccessPolicy> => ({ version: 2, defaultAccess: "read", rules: [] }));
+  const resetInvalidMcpAccessPolicy = vi.fn(async () => {});
   const listPlugins = vi.fn(async (): Promise<Array<{ manifest: { id: string } }>> => []);
   const persistedPlugin = ref<PluginMcpView>(structuredClone(plugin));
   const listPluginMcpViews = vi.fn(async () => [structuredClone(plugin)]);
@@ -186,6 +199,7 @@ function createHarness(initial: Partial<McpGlobalPolicy> = {}) {
     mcpGlobalPolicy: normalizeMcpGlobalPolicy(initial),
     editorSettings: { sidebarObjectDisplay: "all" },
     desktopSettings: { ...DEFAULT_DESKTOP_SETTINGS },
+    initMcpGlobalPolicy: vi.fn(async () => {}),
     updateDesktopSettings: vi.fn(async (patch: object) => {
       Object.assign(settingsStore.desktopSettings, patch);
     }),
@@ -230,6 +244,7 @@ function createHarness(initial: Partial<McpGlobalPolicy> = {}) {
     savePluginMcpGrant,
     listPluginMcpViews,
     loadMcpAccessPolicy,
+    resetInvalidMcpAccessPolicy,
     listPlugins,
     shouldConfirmEditorSettingsDialogClose,
     emit,
@@ -237,6 +252,7 @@ function createHarness(initial: Partial<McpGlobalPolicy> = {}) {
     toast,
     t: (key: string) => key,
     mcpPolicyControlsDisabled: ref(false),
+    mcpPolicyLoadError: ref(""),
     hasApplyBlocker: ref(false),
     historyRetention: { save: vi.fn(async () => {}) },
     mcpHistoryRetention: { save: vi.fn(async () => {}) },
@@ -285,6 +301,7 @@ function createHarness(initial: Partial<McpGlobalPolicy> = {}) {
     savePluginMcpGrant,
     listPluginMcpViews,
     loadMcpAccessPolicy,
+    resetInvalidMcpAccessPolicy,
     listPlugins,
     persistedPlugin,
     emit,
@@ -1106,5 +1123,53 @@ describe("EditorSettingsDialog MCP capability persistence integration", () => {
     expect(harness.mcpCustomToolInput.value).toBe("dbx_custom__inspect");
     expect(harness.mcpPolicyHasUnsavedChanges()).toBe(false);
     expect(harness.settingsStore.updateMcpGlobalPolicy).not.toHaveBeenCalled();
+  });
+});
+
+describe("MCP policy corruption recovery", () => {
+  it("uses the in-app confirmation on desktop as well as web", () => {
+    expect(declaration("recoverMcpAccessPolicy")).not.toContain("window.confirm");
+    expect(dialogSource).toContain(':open="mcpPolicyConfirmationDialog.open"');
+    expect(declaration("mcpPolicyConfirmationDialog")).toContain("mcpPolicyRecoveryConfirmation.value");
+    expect(declaration("confirmMcpPolicyChange")).toContain("return recoverMcpAccessPolicy()");
+  });
+  it("shows access-policy errors and clears stale permission data", async () => {
+    const h = createHarness();
+    h.mcpAccessPolicy.value = { version: 2, defaultAccess: "full", rules: [] };
+    h.loadMcpAccessPolicy.mockRejectedValueOnce(new Error("MCP_POLICY_UNAVAILABLE: invalid MCP access policy"));
+    await h.loadMcpPluginScopeContext();
+    expect(h.mcpAccessPolicy.value).toBeNull();
+    expect(h.mcpAccessPolicyError.value).toContain("invalid MCP access policy");
+    expect(h.mcpAccessPolicyLoading.value).toBe(false);
+    await h.loadMcpPluginScopeContext();
+    expect(h.mcpAccessPolicyError.value).toBe("");
+  });
+
+  it("does not treat plugin discovery failure as policy corruption", async () => {
+    const h = createHarness();
+    h.listPlugins.mockRejectedValueOnce(new Error("plugin unavailable"));
+    await h.loadMcpPluginScopeContext();
+    expect(h.mcpAccessPolicy.value?.defaultAccess).toBe("read");
+    expect(h.mcpAccessPolicyError.value).toBe("");
+  });
+
+  it("requires explicit confirmation and reloads the saved policy after recovery", async () => {
+    const h = createHarness();
+    h.mcpPolicyRecoveryConfirmation.value = true;
+    h.onMcpPolicyConfirmationOpenChange(false);
+    await h.recoverMcpAccessPolicy();
+    expect(h.resetInvalidMcpAccessPolicy).not.toHaveBeenCalled();
+    h.mcpPolicyRecoveryConfirmation.value = true;
+    const pending = h.confirmMcpPolicyChange();
+    await h.recoverMcpAccessPolicy(); // A second confirm cannot start another reset.
+    await pending;
+    expect(h.resetInvalidMcpAccessPolicy).toHaveBeenCalledOnce();
+    expect(h.settingsStore.initMcpGlobalPolicy).toHaveBeenCalledWith(true);
+    expect(h.mcpPolicyRecovering.value).toBe(false);
+    h.resetInvalidMcpAccessPolicy.mockRejectedValueOnce(new Error("backup failed"));
+    h.mcpPolicyRecoveryConfirmation.value = true;
+    await h.recoverMcpAccessPolicy();
+    expect(h.mcpAccessPolicyError.value).toBe("backup failed");
+    expect(h.mcpPolicyRecovering.value).toBe(false);
   });
 });

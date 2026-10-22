@@ -401,6 +401,7 @@ export const saveMcpGlobalPolicy = forward("saveMcpGlobalPolicy");
 export const loadMcpToolCatalog = forward("loadMcpToolCatalog");
 export const listPluginMcpViews = forward("listPluginMcpViews");
 export const loadMcpAccessPolicy = forward("loadMcpAccessPolicy");
+export const resetInvalidMcpAccessPolicy = forward("resetInvalidMcpAccessPolicy");
 export const setMcpPluginScopeRule = forward("setMcpPluginScopeRule");
 export const loadPluginMcpView = forward("loadPluginMcpView");
 export const listMcpPluginScopes = forward("listMcpPluginScopes");

@@ -373,3 +373,15 @@ describe("database access transfer dialog", () => {
     h.mounted.unmount();
   });
 });
+
+it("restores the selected draft after an accidental all or none toggle", async () => {
+  const h = mountDialog({ value: selected(["aaa", "ops"]) });
+  await settle();
+  for (const scope of ["all", "none"]) {
+    await h.choose("data-mcp-database-mode", undefined, scope);
+    expect(h.changes.mock.lastCall![0].allowedDatabases).toEqual([]);
+    await h.choose("data-mcp-database-mode", undefined, "selected");
+    expect(h.changes).toHaveBeenLastCalledWith(selected(["aaa", "ops"]));
+  }
+  h.mounted.unmount();
+});

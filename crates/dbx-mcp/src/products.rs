@@ -165,6 +165,20 @@ struct ConsulKvPutArgs {
     cas: Option<i64>,
 }
 
+impl ConsulKvPutArgs {
+    fn options(&self) -> Result<dbx_core::agent_kv::KvPutOptions, String> {
+        use dbx_core::agent_kv::{KvPutOptions, KvWriteMode};
+        match self.cas {
+            Some(0) => Ok(KvPutOptions { write_mode: Some(KvWriteMode::Create), ..Default::default() }),
+            Some(revision) if revision > 0 => {
+                Ok(KvPutOptions { expected_mod_revision: Some(revision.into()), ..Default::default() })
+            }
+            Some(_) => Err("INVALID_ARGUMENTS: cas must be non-negative".to_string()),
+            None => Err("CONSUL_CAS_REQUIRED: Pass cas=0 to create, or the current ModifyIndex to update".to_string()),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConsulKvDeleteArgs {
@@ -206,7 +220,7 @@ async fn dispatch_consul(
     operation: &str,
     args: &Value,
 ) -> Result<Value, String> {
-    use dbx_core::agent_kv::{KvDeleteOptions, KvPutOptions, KvValue, KvValueEncoding};
+    use dbx_core::agent_kv::{KvDeleteOptions, KvValue, KvValueEncoding};
     use dbx_core::consul;
     let read_options = |filter: Option<String>| consul::ConsulReadOptions { filter, ..Default::default() };
     match operation {
@@ -220,11 +234,11 @@ async fn dispatch_consul(
         "kv_get" => to_json(consul::consul_get_core(state, id, &parse::<ConsulKvKeyArgs>(args)?.key).await?),
         "kv_put" => {
             let args = parse::<ConsulKvPutArgs>(args)?;
+            let options = args.options()?;
             let value = KvValue {
                 encoding: if args.base64 { KvValueEncoding::Base64 } else { KvValueEncoding::Utf8 },
                 data: args.value,
             };
-            let options = KvPutOptions { expected_mod_revision: args.cas.map(Into::into), ..Default::default() };
             to_json(consul::consul_put_core(state, id, &args.key, value, options).await?)
         }
         "kv_delete" => {
@@ -267,6 +281,20 @@ async fn dispatch_consul(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consul_put_preserves_create_only_and_revision_preconditions() {
+        use dbx_core::agent_kv::KvWriteMode;
+        let create = parse::<ConsulKvPutArgs>(&json!({"key":"new", "value":"v", "cas":0})).unwrap().options().unwrap();
+        assert!(matches!(create.write_mode, Some(KvWriteMode::Create)));
+        assert!(create.expected_mod_revision.is_none());
+        let update = parse::<ConsulKvPutArgs>(&json!({"key":"old", "value":"v", "cas":7})).unwrap().options().unwrap();
+        assert_eq!(update.expected_mod_revision.unwrap().as_str(), "7");
+        assert!(update.write_mode.is_none());
+        for cas in [json!(null), json!(-1)] {
+            assert!(parse::<ConsulKvPutArgs>(&json!({"key":"k", "value":"v", "cas":cas})).unwrap().options().is_err());
+        }
+    }
 
     #[test]
     fn product_metadata_matches_the_onboarding_spec() {

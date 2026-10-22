@@ -1470,6 +1470,7 @@ async fn serve() -> Result<(), String> {
         )
         .route("/app-settings/mcp-tool-catalog", get(routes::app_settings::load_mcp_tool_catalog))
         .route("/app-settings/mcp-access-policy", get(routes::app_settings::load_mcp_access_policy))
+        .route("/app-settings/mcp-access-policy/recover", post(routes::app_settings::reset_invalid_mcp_access_policy))
         .route("/app-settings/mcp-access-policy/plugin-scope", put(routes::app_settings::set_mcp_plugin_scope_rule))
         .route("/app-settings/plugin-mcp", get(routes::app_settings::list_plugin_mcp_views))
         .route("/app-settings/plugin-mcp/view", post(routes::app_settings::load_plugin_mcp_view))

@@ -187,13 +187,21 @@ pub async fn set_mcp_plugin_scope_rule(
     State(state): State<Arc<WebState>>,
     Json(body): Json<SetMcpPluginScopeRuleRequest>,
 ) -> Result<Json<dbx_core::mcp_access::McpAccessPolicy>, AppError> {
-    state
-        .app
-        .storage
-        .set_mcp_plugin_scope_rule(&body.connection_id, &body.kind, body.value.as_deref(), body.rule, body.sub_scope)
-        .await
-        .map(Json)
-        .map_err(AppError::bad_request)
+    dbx_core::plugin_mcp::set_scope_rule(
+        &state.app,
+        &body.connection_id,
+        &body.kind,
+        body.value.as_deref(),
+        body.rule,
+        body.sub_scope,
+    )
+    .await
+    .map(Json)
+    .map_err(AppError::bad_request)
+}
+
+pub async fn reset_invalid_mcp_access_policy(State(state): State<Arc<WebState>>) -> Result<Json<()>, AppError> {
+    state.app.storage.reset_invalid_mcp_access_policy().await.map(Json).map_err(AppError::bad_request)
 }
 
 pub async fn save_mcp_global_policy(

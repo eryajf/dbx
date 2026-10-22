@@ -315,9 +315,16 @@ pub async fn set_mcp_plugin_scope_rule(
     sub_scope: Option<dbx_core::mcp_access::McpSubScopeMode>,
 ) -> Result<dbx_core::mcp_access::McpAccessPolicy, String> {
     let access =
-        state.storage.set_mcp_plugin_scope_rule(&connection_id, &kind, value.as_deref(), rule, sub_scope).await?;
+        dbx_core::plugin_mcp::set_scope_rule(&state, &connection_id, &kind, value.as_deref(), rule, sub_scope).await?;
     super::mcp_bridge::clear_mcp_sql_approvals();
     Ok(access)
+}
+
+#[tauri::command]
+pub async fn reset_invalid_mcp_access_policy(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.storage.reset_invalid_mcp_access_policy().await?;
+    super::mcp_bridge::clear_mcp_sql_approvals();
+    Ok(())
 }
 
 #[tauri::command]

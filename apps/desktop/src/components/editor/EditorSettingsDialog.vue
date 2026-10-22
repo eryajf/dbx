@@ -213,6 +213,7 @@ import {
   listPluginMcpViews,
   savePluginMcpGrant,
   loadMcpAccessPolicy,
+  resetInvalidMcpAccessPolicy,
   setMcpPluginScopeRule,
   listMcpPluginScopes,
   listDatabases as listMcpTreeDatabases,
@@ -4167,9 +4168,9 @@ const mcpGroupRows = computed(() => connectionGroupDestinationRows(connectionSto
 const mcpConnectionGroupIdPaths = computed(() => buildConnectionGroupIdPathMap(connectionStore.sidebarLayout));
 const mcpPolicyControlsDisabled = computed(() =>
   isMcpPolicyMutationBlocked({
-    loading: mcpPolicyLoading.value,
-    saving: mcpPolicySaving.value,
-    loadError: mcpPolicyLoadError.value,
+    loading: mcpPolicyLoading.value || mcpAccessPolicyLoading.value,
+    saving: mcpPolicySaving.value || mcpPolicyRecovering.value,
+    loadError: mcpPolicyLoadError.value || mcpAccessPolicyError.value,
   }),
 );
 
@@ -4244,6 +4245,7 @@ function requestMcpPolicyConfirmation(message: string, apply: () => void) {
 }
 
 function confirmMcpPolicyChange() {
+  if (mcpPolicyRecoveryConfirmation.value) return recoverMcpAccessPolicy();
   const pending = mcpPolicyConfirmation.value;
   mcpPolicyConfirmation.value = null;
   if (!mcpPolicyControlsDisabled.value) pending?.apply();
@@ -4396,6 +4398,21 @@ async function persistMcpPluginGrant(...args: Parameters<typeof savePluginMcpGra
 // Plugin sub-scope rules live only in the v2 policy; they are loaded with the
 // permissions tab and saved immediately by the tree's scope editor.
 const mcpAccessPolicy = ref<McpAccessPolicy | null>(null);
+const mcpAccessPolicyError = ref("");
+const mcpAccessPolicyLoading = ref(false);
+const mcpPolicyRecovering = ref(false);
+const mcpPolicyRecoveryConfirmation = ref(false);
+const mcpPolicyConfirmationDialog = computed(() => ({
+  open: mcpPolicyConfirmation.value !== null || mcpPolicyRecoveryConfirmation.value,
+  message: mcpPolicyRecoveryConfirmation.value ? t("settings.mcpPolicyRecoverConfirm") : mcpPolicyConfirmation.value?.message,
+  confirmLabel: mcpPolicyRecoveryConfirmation.value ? t("settings.mcpPolicyRecover") : t("common.confirm"),
+}));
+function onMcpPolicyConfirmationOpenChange(open: boolean) {
+  if (!open) {
+    mcpPolicyConfirmation.value = null;
+    mcpPolicyRecoveryConfirmation.value = false;
+  }
+}
 const mcpInstalledPluginsForScopes = ref<InstalledPlugin[]>([]);
 const mcpPluginScopeLoadRevision = ref(0);
 const mcpPluginScopes = computed(() => {
@@ -4410,15 +4427,45 @@ const mcpPluginScopes = computed(() => {
 async function loadMcpPluginScopeContext() {
   const revision = ++mcpPluginScopeLoadRevision.value;
   const policyAtStart = mcpAccessPolicy.value;
+  const pluginsRequest = listPlugins()
+    .then((plugins) => {
+      if (revision === mcpPluginScopeLoadRevision.value) mcpInstalledPluginsForScopes.value = plugins;
+    })
+    .catch((e: any) => {
+      console.warn("[DBX] MCP plugin scope discovery unavailable:", e?.message || e);
+    });
+  mcpAccessPolicyLoading.value = true;
   try {
-    const [access, plugins] = await Promise.all([loadMcpAccessPolicy(), listPlugins()]);
+    const access = await loadMcpAccessPolicy();
     if (revision !== mcpPluginScopeLoadRevision.value) return;
-    // An immediate scope save may finish while plugin discovery is pending.
-    // Its returned policy is newer than this refresh's snapshot.
     if (mcpAccessPolicy.value === policyAtStart) mcpAccessPolicy.value = access;
-    mcpInstalledPluginsForScopes.value = plugins;
+    mcpAccessPolicyError.value = "";
   } catch (e: any) {
-    console.warn("[DBX] MCP plugin scope context unavailable:", e?.message || e);
+    if (revision !== mcpPluginScopeLoadRevision.value) return;
+    if (mcpAccessPolicy.value !== policyAtStart) return;
+    // Do not render a stale/default permission tree as an authoritative view.
+    mcpAccessPolicy.value = null;
+    mcpAccessPolicyError.value = e?.message || String(e);
+  } finally {
+    if (revision === mcpPluginScopeLoadRevision.value) mcpAccessPolicyLoading.value = false;
+    await pluginsRequest;
+  }
+}
+
+async function recoverMcpAccessPolicy() {
+  if (!mcpPolicyRecoveryConfirmation.value || mcpPolicyRecovering.value || mcpPolicySaving.value) return;
+  mcpPolicyRecoveryConfirmation.value = false;
+  mcpPolicyRecovering.value = true;
+  try {
+    await resetInvalidMcpAccessPolicy();
+    await settingsStore.initMcpGlobalPolicy(true);
+    syncMcpPolicyBaseline(settingsStore.mcpGlobalPolicy);
+    mcpPolicyLoadError.value = "";
+    await loadMcpPluginScopeContext();
+  } catch (e: any) {
+    mcpAccessPolicyError.value = e?.message || String(e);
+  } finally {
+    mcpPolicyRecovering.value = false;
   }
 }
 
@@ -4774,6 +4821,7 @@ async function applyMcpDatabaseAccess(connectionId: string): Promise<void> {
   mcpPolicySaving.value = true;
   try {
     await settingsStore.updateMcpGlobalPolicy({ connectionPolicies });
+    await settingsStore.initMcpGlobalPolicy(true);
     const saved = normalizeMcpGlobalPolicy(settingsStore.mcpGlobalPolicy);
     const savedAccess = editableDatabaseAccess(saved, connectionId, layout, connections);
     // Advance only this scope's baseline. The connection's default permission,
@@ -5929,6 +5977,7 @@ watch(
         if (settingsStore.mcpGlobalPolicy.configured) localStorage.removeItem(MCP_READONLY_STORAGE_KEY);
         localStorage.removeItem(MCP_SCOPE_CONNECTION_STORAGE_KEY);
         syncMcpPolicyBaseline(settingsStore.mcpGlobalPolicy);
+        await loadMcpPluginScopeContext();
         await loadMcpHttpSettings();
       } catch (e: any) {
         mcpPolicyLoadError.value = e?.message || String(e);
@@ -5974,6 +6023,7 @@ watch(
       await scrollToInitialSettingsSection();
     } else {
       resetSettingsSearchState();
+      mcpPolicyRecoveryConfirmation.value = false;
       mcpCapabilityBrowserState.value = initialMcpCapabilityBrowserState();
       syncMcpPolicyBaseline(mcpPolicyBaseline.value);
     }
@@ -12882,8 +12932,13 @@ LIMIT 100;</pre>
                   <p v-if="mcpPolicyLoadError" class="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600 dark:text-red-400">
                     {{ t("settings.mcpPolicyLoadFailed", { error: mcpPolicyLoadError }) }}
                   </p>
-                  <McpDefaultAccessPanel data-settings-search-id="mcp-overrides" :mode="mcpExecutionMode" :disabled="mcpPolicyControlsDisabled" @set:mode="onMcpExecutionModeChange" />
-                  <section data-settings-search-id="mcp-connections" class="rounded-md border bg-background p-3 sm:p-4">
+                  <div v-if="mcpAccessPolicyError" role="alert" class="space-y-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+                    <p>{{ t("settings.mcpPolicyLoadFailed", { error: mcpAccessPolicyError }) }}</p>
+                    <Button variant="outline" size="sm" :disabled="mcpAccessPolicyLoading || mcpPolicyRecovering" @click="loadMcpPluginScopeContext">{{ t("settings.mcpPolicyRetry") }}</Button>
+                    <Button v-if="mcpAccessPolicyError.includes('invalid MCP access policy')" variant="outline" size="sm" :disabled="mcpPolicyRecovering || mcpPolicySaving" @click="mcpPolicyRecoveryConfirmation = true">{{ t("settings.mcpPolicyRecover") }}</Button>
+                  </div>
+                  <McpDefaultAccessPanel v-if="!mcpAccessPolicyError" data-settings-search-id="mcp-overrides" :mode="mcpExecutionMode" :disabled="mcpPolicyControlsDisabled" @set:mode="onMcpExecutionModeChange" />
+                  <section v-if="!mcpAccessPolicyError" data-settings-search-id="mcp-connections" class="rounded-md border bg-background p-3 sm:p-4">
                     <McpAccessTree
                       :policy="mcpPolicyDraft"
                       :layout="connectionStore.sidebarLayout"
@@ -12909,7 +12964,13 @@ LIMIT 100;</pre>
                       @plugin-scope-saved="mcpAccessPolicy = $event"
                     />
                   </section>
-                  <McpCallSafetyPanel data-settings-search-id="mcp-call-safety" :mode="mcpPolicyDraft.callConfirmation === 'high_risk' ? 'high_risk' : mcpPolicyDraft.promptHighRiskSql ? 'full' : 'off'" :disabled="mcpPolicyControlsDisabled" @set:confirmation="onMcpHighRiskConfirmationChange" />
+                  <McpCallSafetyPanel
+                    v-if="!mcpAccessPolicyError"
+                    data-settings-search-id="mcp-call-safety"
+                    :mode="mcpPolicyDraft.callConfirmation === 'high_risk' ? 'high_risk' : mcpPolicyDraft.promptHighRiskSql ? 'full' : 'off'"
+                    :disabled="mcpPolicyControlsDisabled"
+                    @set:confirmation="onMcpHighRiskConfirmationChange"
+                  />
                   <p class="text-xs text-muted-foreground">{{ t("settings.mcpPermissionsDraftHint") }}</p>
                 </TabsContent>
                 <div v-if="mcpManagementTab === 'access'" class="space-y-5 border-t border-border/60 pt-5 sm:ml-1">
@@ -13591,12 +13652,12 @@ LIMIT 100;</pre>
     </component>
 
     <DangerConfirmDialog
-      :open="mcpPolicyConfirmation !== null"
-      :message="mcpPolicyConfirmation?.message"
-      :confirm-label="t('common.confirm')"
+      :open="mcpPolicyConfirmationDialog.open"
+      :message="mcpPolicyConfirmationDialog.message"
+      :confirm-label="mcpPolicyConfirmationDialog.confirmLabel"
       :close-on-confirm="false"
       initial-focus="cancel"
-      @update:open="(value: boolean) => !value && (mcpPolicyConfirmation = null)"
+      @update:open="onMcpPolicyConfirmationOpenChange"
       @confirm="confirmMcpPolicyChange"
     />
 

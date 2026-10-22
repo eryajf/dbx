@@ -39,6 +39,7 @@ const rightChecked = ref<string[]>([]);
 const leftLimit = ref(100);
 const rightLimit = ref(100);
 const manualName = ref("");
+const selectedDraft = ref<McpDatabaseAccess | null>(null);
 const confirmation = ref<{ message: string; value: McpDatabaseAccess } | null>(null);
 let loadRevision = 0;
 const dirty = computed(() => !databaseAccessEqual(props.value, props.savedValue));
@@ -77,9 +78,13 @@ watch(
   [() => props.open, () => props.connection.id],
   ([open, id], previous) => {
     ++loadRevision;
-    if (!open) return;
+    if (!open) {
+      selectedDraft.value = null;
+      return;
+    }
     if (previous?.[1] !== id) {
       names.value = [];
+      selectedDraft.value = null;
       knownNames.value = [...props.value.allowedDatabases];
       loaded.value = false;
     }
@@ -142,7 +147,9 @@ function confirmChange() {
 }
 function changeScope(scope: McpDatabaseAccess["databaseScope"]) {
   if (scope === props.value.databaseScope) return;
-  change({ ...props.value, databaseScope: scope }, scope !== "selected" && props.value.databasePolicies.length ? t("settings.mcpDatabaseScopeClearsPermissionExceptions") : undefined);
+  if (props.value.databaseScope === "selected") selectedDraft.value = databaseAccess(props.value);
+  const value = scope === "selected" && selectedDraft.value ? selectedDraft.value : { ...props.value, databaseScope: scope };
+  change(value, scope !== "selected" && props.value.databasePolicies.length ? t("settings.mcpDatabaseScopeClearsPermissionExceptions") : undefined);
 }
 function check(side: string, name: string, checked: boolean) {
   if (locked.value) return;
@@ -185,6 +192,7 @@ async function apply() {
   saveError.value = "";
   try {
     await props.save(props.connection.id);
+    selectedDraft.value = null;
     applied.value = true;
   } catch (error) {
     saveError.value = t("settings.mcpToolsetApplyFailed", { error: error instanceof Error ? error.message : String(error) });

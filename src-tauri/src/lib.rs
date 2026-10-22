@@ -2175,6 +2175,7 @@ pub fn run() {
             commands::app_settings::save_mcp_global_policy,
             commands::app_settings::load_mcp_tool_catalog,
             commands::app_settings::load_mcp_access_policy,
+            commands::app_settings::reset_invalid_mcp_access_policy,
             commands::app_settings::set_mcp_plugin_scope_rule,
             commands::app_settings::list_plugin_mcp_views,
             commands::app_settings::load_plugin_mcp_view,

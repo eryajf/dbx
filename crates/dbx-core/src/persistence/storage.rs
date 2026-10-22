@@ -69,6 +69,25 @@ const MCP_GLOBAL_POLICY_KEY: &str = "mcp_global_policy";
 /// v1 key on every save; v1 keeps a never-wider projection for hosts that
 /// only read v1 (an older standalone `dbx-mcp`).
 const MCP_ACCESS_POLICY_KEY: &str = "mcp_access_policy";
+/// Decode the authoritative policy without falling back after corruption.
+fn saved_mcp_access_policy(
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Option<crate::mcp_access::McpAccessPolicy>, String> {
+    let Some(value) = settings.get(MCP_ACCESS_POLICY_KEY) else { return Ok(None) };
+    let mut access: crate::mcp_access::McpAccessPolicy =
+        serde_json::from_value(value.clone()).map_err(|e| format!("invalid MCP access policy: {e}"))?;
+    if access.version != crate::mcp_access::MCP_ACCESS_POLICY_VERSION {
+        return Err(format!("invalid MCP access policy version: {}", access.version));
+    }
+    if let Some(legacy) = settings
+        .get(MCP_GLOBAL_POLICY_KEY)
+        .and_then(|value| serde_json::from_value::<McpGlobalPolicy>(value.clone()).ok())
+    {
+        access.restore_legacy_salesforce_opt_ins(&legacy.normalized());
+    }
+    Ok(Some(access))
+}
+
 const MCP_HTTP_SERVER_SETTINGS_KEY: &str = "mcp_http_server_settings";
 const WEB_MCP_SETTINGS_KEY: &str = "web_mcp_settings";
 const MAX_RETRIES_KEY: &str = "max_retries";
@@ -5297,11 +5316,10 @@ impl Storage {
     /// the v1 key keeps serving older standalone `dbx-mcp` binaries.
     pub async fn load_enforced_mcp_policy(&self) -> Result<McpGlobalPolicyState, String> {
         let settings = self.load_app_settings_json().await.map_err(|e| format!("MCP_POLICY_UNAVAILABLE: {e}"))?;
-        let Some(value) = settings.get(MCP_ACCESS_POLICY_KEY) else {
+        let Some(access) = saved_mcp_access_policy(&settings).map_err(|e| format!("MCP_POLICY_UNAVAILABLE: {e}"))?
+        else {
             return self.load_mcp_global_policy().await;
         };
-        let access = serde_json::from_value::<crate::mcp_access::McpAccessPolicy>(value.clone())
-            .map_err(|e| format!("MCP_POLICY_UNAVAILABLE: invalid MCP access policy: {e}"))?;
         let policy = access.to_v1();
         Ok(McpGlobalPolicyState {
             configured: settings.contains_key(MCP_GLOBAL_POLICY_KEY),
@@ -5323,11 +5341,44 @@ impl Storage {
     /// lossless mapping of the saved v1 policy (or the default).
     pub async fn load_mcp_access_policy(&self) -> Result<crate::mcp_access::McpAccessPolicy, String> {
         let settings = self.load_app_settings_json().await.map_err(|e| format!("MCP_POLICY_UNAVAILABLE: {e}"))?;
-        if let Some(value) = settings.get(MCP_ACCESS_POLICY_KEY) {
-            return serde_json::from_value::<crate::mcp_access::McpAccessPolicy>(value.clone())
-                .map_err(|e| format!("MCP_POLICY_UNAVAILABLE: invalid MCP access policy: {e}"));
+        if let Some(access) = saved_mcp_access_policy(&settings).map_err(|e| format!("MCP_POLICY_UNAVAILABLE: {e}"))? {
+            return Ok(access);
         }
         Ok(crate::mcp_access::McpAccessPolicy::from_v1(&self.load_mcp_global_policy().await?.policy()))
+    }
+
+    /// Explicit recovery only: preserve corrupt data and reset access to deny
+    /// all. Ordinary saves and runtime reads must continue to fail closed.
+    pub async fn reset_invalid_mcp_access_policy(&self) -> Result<(), String> {
+        self.with_conn(|conn| {
+            let mut settings = app_settings_map_from_conn(conn)?;
+            if saved_mcp_access_policy(&settings).is_ok() {
+                return Err("MCP policy is valid; recovery is not required".to_string());
+            }
+            let backup_key = format!("mcp_policy_recovery_backup_{}", Uuid::new_v4());
+            settings.insert(
+                backup_key,
+                serde_json::json!({
+                    "v1": settings.get(MCP_GLOBAL_POLICY_KEY),
+                    "v2": settings.get(MCP_ACCESS_POLICY_KEY),
+                }),
+            );
+            let access = crate::mcp_access::McpAccessPolicy {
+                default_access: crate::mcp_access::McpAccessLevel::Read,
+                visibility: crate::mcp_access::McpVisibilityMode::Selected,
+                allowed_tool_names: Some(Vec::new()),
+                ..Default::default()
+            };
+            settings.insert(
+                MCP_GLOBAL_POLICY_KEY.to_string(),
+                serde_json::to_value(access.to_v1()).map_err(|e| e.to_string())?,
+            );
+            settings
+                .insert(MCP_ACCESS_POLICY_KEY.to_string(), serde_json::to_value(access).map_err(|e| e.to_string())?);
+            write_app_settings_map(conn, &settings)
+        })
+        .await
+        .map_err(|e| format!("MCP_POLICY_UNAVAILABLE: {e}"))
     }
 
     /// Saves a v2 policy together with its never-wider v1 projection in one
@@ -5367,9 +5418,8 @@ impl Storage {
             // Read, merge and write under the same storage lock: edits on two
             // connection rows must not overwrite one another's saved rules.
             let mut settings = app_settings_map_from_conn(conn)?;
-            let mut access = if let Some(value) = settings.get(MCP_ACCESS_POLICY_KEY) {
-                serde_json::from_value::<crate::mcp_access::McpAccessPolicy>(value.clone())
-                    .map_err(|e| e.to_string())?
+            let mut access = if let Some(access) = saved_mcp_access_policy(&settings)? {
+                access
             } else {
                 let policy = settings
                     .get(MCP_GLOBAL_POLICY_KEY)
@@ -5429,11 +5479,7 @@ impl Storage {
                 None => serde_json::Map::new(),
             };
             // Keep rules only v2 can express (plugin sub-scopes) across v1 saves.
-            let previous = settings
-                .get(MCP_ACCESS_POLICY_KEY)
-                .map(|value| serde_json::from_value::<crate::mcp_access::McpAccessPolicy>(value.clone()))
-                .transpose()
-                .map_err(|e| format!("invalid MCP access policy: {e}"))?;
+            let previous = saved_mcp_access_policy(&settings)?;
             let access = match previous {
                 Some(previous) => rebuilt.clone().with_v2_only_rules_from(&previous),
                 None => rebuilt.clone(),
@@ -14139,6 +14185,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_visibility_and_database_edits_do_not_grant_dml_or_keep_stale_scopes() {
+        let storage = crate::persistence::test_storage::open(&temp_db_path("mcp-review-roundtrip")).await.unwrap();
+        let mut policy =
+            McpGlobalPolicy { allowed_connection_ids: Some(vec!["sf".into(), "sql".into()]), ..Default::default() };
+        storage.save_mcp_global_policy(&policy).await.unwrap();
+        assert!(!crate::mcp_policy::connection_allows_salesforce_dml(
+            &storage.load_enforced_mcp_policy().await.unwrap().policy(),
+            "sf"
+        ));
+        policy.connection_policies.push(
+            serde_json::from_value(serde_json::json!({
+                "connectionId": "sql", "executionModeConfigured": false, "executionModePolicyVersion": 1,
+                "databaseScope": "selected", "allowedDatabases": ["one"]
+            }))
+            .unwrap(),
+        );
+        storage.save_mcp_global_policy(&policy).await.unwrap();
+        assert!(!storage.load_mcp_access_policy().await.unwrap().sub_scope_visible("sql", "database", "two"));
+        policy.connection_policies.clear();
+        storage.save_mcp_global_policy(&policy).await.unwrap();
+        assert!(storage.load_mcp_access_policy().await.unwrap().sub_scope_visible("sql", "database", "two"));
+        assert!(!crate::mcp_policy::connection_allows_salesforce_dml(
+            &storage.load_enforced_mcp_policy().await.unwrap().policy(),
+            "sf"
+        ));
+    }
+
+    #[tokio::test]
+    async fn mcp_legacy_salesforce_opt_in_migrates_from_saved_v1_evidence() {
+        use crate::mcp_access::{McpAccessPolicy, McpRuleTarget, SALESFORCE_WRITE_TOOLSET};
+        let storage = crate::persistence::test_storage::open(&temp_db_path("mcp-legacy-dml")).await.unwrap();
+        for allowed in [false, true] {
+            let legacy: McpGlobalPolicy = serde_json::from_value(serde_json::json!({
+                "readOnly": false,
+                "connectionPolicies": [{"connectionId": "sf", "allowSalesforceDml": allowed,
+                    "readOnly": false, "executionModeConfigured": true, "executionModePolicyVersion": 1}]
+            }))
+            .unwrap();
+            let mut old_v2 = McpAccessPolicy::from_v1(&legacy);
+            old_v2
+                .rules
+                .get_mut(&McpRuleTarget::Connection { id: "sf".into() })
+                .unwrap()
+                .toolset_ceilings
+                .remove(SALESFORCE_WRITE_TOOLSET);
+            let v1_json = serde_json::to_value(&legacy).unwrap();
+            let v2_json = serde_json::to_value(&old_v2).unwrap();
+            storage
+                .with_conn(move |conn| {
+                    let mut settings = app_settings_map_from_conn(conn)?;
+                    settings.insert(MCP_GLOBAL_POLICY_KEY.into(), v1_json);
+                    settings.insert(MCP_ACCESS_POLICY_KEY.into(), v2_json);
+                    write_app_settings_map(conn, &settings)
+                })
+                .await
+                .unwrap();
+            let access = storage.load_mcp_access_policy().await.unwrap();
+            assert_eq!(crate::mcp_policy::connection_allows_salesforce_dml(&access.to_v1(), "sf"), allowed);
+            storage.save_mcp_access_policy(&access).await.unwrap();
+            assert_eq!(
+                crate::mcp_policy::connection_allows_salesforce_dml(
+                    &storage.load_enforced_mcp_policy().await.unwrap().policy(),
+                    "sf"
+                ),
+                allowed
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_explicit_recovery_backs_up_corruption_and_denies_all_tools() {
+        let storage = crate::persistence::test_storage::open(&temp_db_path("mcp-recovery")).await.unwrap();
+        storage.save_mcp_global_policy(&McpGlobalPolicy::default()).await.unwrap();
+        assert!(storage.reset_invalid_mcp_access_policy().await.is_err());
+        storage
+            .with_conn(|conn| {
+                let mut settings = app_settings_map_from_conn(conn)?;
+                settings.insert(MCP_ACCESS_POLICY_KEY.into(), serde_json::json!({"broken": true}));
+                settings.insert("unrelated".into(), serde_json::json!(42));
+                write_app_settings_map(conn, &settings)
+            })
+            .await
+            .unwrap();
+        assert!(storage.load_enforced_mcp_policy().await.is_err());
+        storage.reset_invalid_mcp_access_policy().await.unwrap();
+        let access = storage.load_mcp_access_policy().await.unwrap();
+        assert!(!access.connection_visible(&[], "any"));
+        assert_eq!(access.allowed_tool_names, Some(vec![]));
+        let settings = storage.load_app_settings_json().await.unwrap();
+        assert_eq!(settings["unrelated"], 42);
+        let backup = settings.iter().find(|(key, _)| key.starts_with("mcp_policy_recovery_backup_")).unwrap().1;
+        assert_eq!(backup["v2"], serde_json::json!({"broken": true}));
+        assert!(backup["v1"].is_object());
+        let before = settings;
+        assert!(storage.reset_invalid_mcp_access_policy().await.is_err());
+        assert_eq!(storage.load_app_settings_json().await.unwrap(), before);
+    }
+
+    #[tokio::test]
     async fn mcp_v1_save_rejects_invalid_v2_without_overwriting_either_policy() {
         let path = temp_db_path("mcp-invalid-v2-draft");
         let storage = crate::persistence::test_storage::open(&path).await.unwrap();
@@ -14213,7 +14358,10 @@ mod tests {
             draft.connection_policies[0].allow_salesforce_dml = allowed;
             storage.save_mcp_global_policy(&draft).await.unwrap();
             let access = storage.load_mcp_access_policy().await.unwrap();
-            assert_eq!(access.toolset_ceiling("nacos", SALESFORCE_WRITE_TOOLSET).is_none(), allowed);
+            assert_eq!(
+                access.toolset_ceiling("nacos", SALESFORCE_WRITE_TOOLSET) == Some(McpAccessLevel::Full),
+                allowed
+            );
         }
         // Two independent row saves retain both changes.
         let (a, b) = tokio::join!(

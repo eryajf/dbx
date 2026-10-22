@@ -443,7 +443,11 @@ impl McpAccessPolicy {
     /// A toolset ceiling on the connection narrows the resolved level for
     /// calls of that toolset (e.g. Salesforce writes).
     pub fn toolset_ceiling(&self, connection_id: &str, toolset: &str) -> Option<McpAccessLevel> {
-        self.connection_rule(connection_id).and_then(|rule| rule.toolset_ceilings.get(toolset).copied())
+        self.connection_rule(connection_id)
+            .and_then(|rule| rule.toolset_ceilings.get(toolset).copied())
+            // Salesforce requires a separate, explicit opt-in. Visibility and
+            // inherited write access must never manufacture that permission.
+            .or_else(|| (toolset == SALESFORCE_WRITE_TOOLSET).then_some(McpAccessLevel::Read))
     }
 
     /// Whether a connection carries sub-scope rules, which makes cross-scope
@@ -494,9 +498,14 @@ impl McpAccessPolicy {
                         rule.ceiling = Some(connection_level);
                     }
                 }
-                if !connection.allow_salesforce_dml || connection.read_only {
-                    rule.toolset_ceilings.insert(SALESFORCE_WRITE_TOOLSET.to_string(), McpAccessLevel::Read);
-                }
+                rule.toolset_ceilings.insert(
+                    SALESFORCE_WRITE_TOOLSET.to_string(),
+                    if connection.allow_salesforce_dml && !connection.read_only {
+                        McpAccessLevel::Full
+                    } else {
+                        McpAccessLevel::Read
+                    },
+                );
             }
             let scope_target = |database: &str| McpRuleTarget::Scope {
                 connection_id: connection.connection_id.clone(),
@@ -560,6 +569,27 @@ impl McpAccessPolicy {
         strictest
     }
 
+    /// Earlier v2 snapshots represented an explicit Salesforce opt-in by an
+    /// absent ceiling. Recover it only from a saved v1 opt-in; an ambiguous
+    /// standalone or visibility-only v2 rule remains denied. Existing ceilings win.
+    pub(crate) fn restore_legacy_salesforce_opt_ins(&mut self, legacy: &McpGlobalPolicy) {
+        for connection in &legacy.connection_policies {
+            if connection.allow_salesforce_dml && !connection.read_only {
+                if let Some(rule) =
+                    self.rules.get_mut(&McpRuleTarget::Connection { id: connection.connection_id.clone() })
+                {
+                    // A legacy explicit connection policy always had a database
+                    // admission mode. Visibility alone is not opt-in evidence.
+                    if rule.sub_scope.is_some() {
+                        rule.toolset_ceilings
+                            .entry(SALESFORCE_WRITE_TOOLSET.to_string())
+                            .or_insert(McpAccessLevel::Full);
+                    }
+                }
+            }
+        }
+    }
+
     /// Projects the v2 policy onto v1 fields for hosts that only read v1
     /// (an older standalone `dbx-mcp`). The projection is never wider than
     /// v2: anything v1 cannot express collapses to the stricter reading —
@@ -583,7 +613,7 @@ impl McpAccessPolicy {
             database_scope: McpDatabaseScope::All,
             allowed_databases: Vec::new(),
             database_policies: Vec::new(),
-            allow_salesforce_dml: true,
+            allow_salesforce_dml: false,
         };
         for (target, rule) in &self.rules {
             match target {
@@ -638,7 +668,7 @@ impl McpAccessPolicy {
                     policy.allow_salesforce_dml = rule
                         .toolset_ceilings
                         .get(SALESFORCE_WRITE_TOOLSET)
-                        .is_none_or(|ceiling| *ceiling > McpAccessLevel::Read)
+                        .is_some_and(|ceiling| *ceiling > McpAccessLevel::Read)
                         && !policy.read_only;
                 }
                 McpRuleTarget::Scope { connection_id, scope, value } => {
@@ -827,17 +857,17 @@ impl McpAccessPolicy {
         for (target, rule) in &previous.rules {
             let McpRuleTarget::Connection { id } = target else { continue };
             let Some(mode) = rule.sub_scope else { continue };
-            let connection = self.rules.entry(target.clone()).or_default();
             let non_database_scope = rule.sub_scope_kind.as_deref().is_some_and(|kind| kind != "database")
                 || previous.rules.keys().any(|target| matches!(target, McpRuleTarget::Scope { connection_id, scope, .. } if connection_id == id && scope != "database"));
-            if non_database_scope || connection.sub_scope.is_none() {
+            if non_database_scope {
+                let connection = self.rules.entry(target.clone()).or_default();
                 connection.sub_scope = Some(mode);
                 connection.sub_scope_kind.clone_from(&rule.sub_scope_kind);
             }
         }
         for (target, rule) in &previous.rules {
             let McpRuleTarget::Connection { .. } = target else { continue };
-            if rule.toolset_ceilings.is_empty() {
+            if rule.toolset_ceilings.keys().all(|toolset| toolset == SALESFORCE_WRITE_TOOLSET) {
                 continue;
             }
             let connection = self.rules.entry(target.clone()).or_default();
@@ -894,6 +924,79 @@ mod tests {
             database_policies: Vec::new(),
             allow_salesforce_dml: false,
         }
+    }
+
+    #[test]
+    fn visibility_only_does_not_opt_in_to_salesforce_dml() {
+        for allowed in [None, Some(vec!["sf".to_string()])] {
+            let policy = McpGlobalPolicy { allowed_connection_ids: allowed, ..Default::default() };
+            let access = McpAccessPolicy::from_v1(&policy);
+            assert_eq!(access.toolset_ceiling("sf", SALESFORCE_WRITE_TOOLSET), Some(McpAccessLevel::Read));
+            assert!(!crate::mcp_policy::connection_allows_salesforce_dml(&access.to_v1(), "sf"));
+        }
+        for allowed in [false, true] {
+            let mut rule = connection_rule("sf");
+            rule.allow_salesforce_dml = allowed;
+            let policy = McpGlobalPolicy { connection_policies: vec![rule], ..Default::default() };
+            assert_eq!(
+                crate::mcp_policy::connection_allows_salesforce_dml(&McpAccessPolicy::from_v1(&policy).to_v1(), "sf"),
+                allowed
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_salesforce_opt_in_requires_explicit_v1_evidence_and_respects_ceiling() {
+        let mut access = McpAccessPolicy::default();
+        access.rules.insert(
+            McpRuleTarget::Connection { id: "sf".into() },
+            McpAccessRule { visible: Some(true), ..Default::default() },
+        );
+        let mut rule = connection_rule("sf");
+        let mut legacy = McpGlobalPolicy { connection_policies: vec![rule.clone()], ..Default::default() };
+        access.restore_legacy_salesforce_opt_ins(&legacy);
+        assert!(!crate::mcp_policy::connection_allows_salesforce_dml(&access.to_v1(), "sf"));
+        rule.allow_salesforce_dml = true;
+        legacy.connection_policies = vec![rule];
+        access.restore_legacy_salesforce_opt_ins(&legacy);
+        assert!(!crate::mcp_policy::connection_allows_salesforce_dml(&access.to_v1(), "sf"));
+        access.rules.get_mut(&McpRuleTarget::Connection { id: "sf".into() }).unwrap().sub_scope =
+            Some(McpSubScopeMode::All);
+        access.restore_legacy_salesforce_opt_ins(&legacy);
+        assert!(crate::mcp_policy::connection_allows_salesforce_dml(&access.to_v1(), "sf"));
+        access
+            .rules
+            .get_mut(&McpRuleTarget::Connection { id: "sf".into() })
+            .unwrap()
+            .toolset_ceilings
+            .insert(SALESFORCE_WRITE_TOOLSET.into(), McpAccessLevel::Read);
+        access.restore_legacy_salesforce_opt_ins(&legacy);
+        assert!(!crate::mcp_policy::connection_allows_salesforce_dml(&access.to_v1(), "sf"));
+    }
+
+    #[test]
+    fn removing_database_rule_reopens_databases_but_retains_plugin_admission() {
+        for mode in [McpDatabaseScope::Selected, McpDatabaseScope::None] {
+            let mut rule = connection_rule("sql");
+            rule.database_scope = mode;
+            rule.allowed_databases = vec!["one".into()];
+            let previous =
+                McpAccessPolicy::from_v1(&McpGlobalPolicy { connection_policies: vec![rule], ..Default::default() });
+            let next = McpAccessPolicy::from_v1(&McpGlobalPolicy::default()).with_v2_only_rules_from(&previous);
+            assert!(next.sub_scope_visible("sql", "database", "two"));
+            assert!(!next.rules.contains_key(&McpRuleTarget::Connection { id: "sql".into() }));
+        }
+        let mut previous = McpAccessPolicy::default();
+        previous.rules.insert(
+            McpRuleTarget::Connection { id: "plugin".into() },
+            McpAccessRule {
+                sub_scope: Some(McpSubScopeMode::None),
+                sub_scope_kind: Some("custom".into()),
+                ..Default::default()
+            },
+        );
+        let next = McpAccessPolicy::default().with_v2_only_rules_from(&previous);
+        assert!(!next.sub_scope_visible("plugin", "custom", "one"));
     }
 
     /// Deterministic pseudo-random generator so the equivalence sweep is reproducible.
@@ -1368,7 +1471,11 @@ mod tests {
         let mut previous = McpAccessPolicy::default();
         previous.rules.insert(
             McpRuleTarget::Connection { id: "k".into() },
-            McpAccessRule { sub_scope: Some(McpSubScopeMode::None), ..Default::default() },
+            McpAccessRule {
+                sub_scope: Some(McpSubScopeMode::None),
+                sub_scope_kind: Some("namespace".into()),
+                ..Default::default()
+            },
         );
         let rebuilt = McpAccessPolicy::from_v1(&McpGlobalPolicy::default()).with_v2_only_rules_from(&previous);
         assert_eq!(rebuilt.rules[&McpRuleTarget::Connection { id: "k".into() }].sub_scope, Some(McpSubScopeMode::None));
