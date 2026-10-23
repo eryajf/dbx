@@ -144,6 +144,7 @@ describe("ConnectionTree horizontal scrolling", () => {
         sidebarHorizontalWheelDelta,
         sidebarTreeRowHeight: ref(28),
         scheduleSidebarScrollMetricsUpdate: vi.fn(),
+        syncStickyRowHorizontalPosition: vi.fn(),
       });
     return { scroller, run };
   }
