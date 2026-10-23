@@ -1,10 +1,16 @@
+use dbx_core::sql::decode_sql_file_bytes;
 use regex::Regex;
 use serde::Serialize;
 use std::collections::HashSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_SCAN_DEPTH: usize = 10;
 const DEFAULT_FILE_FILTER: &str = r"(?i)\.(sql|ddl)$";
+const MAX_SEARCH_FILE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_SEARCH_FILE_MATCHES: usize = 100;
+const MAX_SEARCH_MATCHES: usize = 1000;
+const MAX_SEARCH_LINE_CHARS: usize = 200;
 
 /// Directories that are never interesting for SQL file browsing but are huge
 /// (often tens of thousands of entries), which makes a recursive scan take
@@ -33,6 +39,56 @@ pub struct SqlFileEntry {
     pub path: String,
     pub is_dir: bool,
     pub children: Vec<SqlFileEntry>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlFileSearchSegment {
+    text: String,
+    matched: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlFileSearchContext {
+    line_number: usize,
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlFileSearchMatch {
+    line_number: usize,
+    column: usize,
+    line_text: String,
+    segments: Vec<SqlFileSearchSegment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_before: Option<SqlFileSearchContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_after: Option<SqlFileSearchContext>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlFileSearchFile {
+    path: String,
+    matches: Vec<SqlFileSearchMatch>,
+    total_matches: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedSqlSearchFile {
+    path: String,
+    reason: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlFileSearchResult {
+    files: Vec<SqlFileSearchFile>,
+    skipped_files: Vec<SkippedSqlSearchFile>,
+    truncated: bool,
 }
 
 fn validate_file_name(file_name: &str) -> Result<&str, String> {
@@ -177,6 +233,17 @@ fn scan_sql_files_with_directories(
     file_filter: &Regex,
     include_empty_directories: bool,
 ) -> Vec<SqlFileEntry> {
+    scan_sql_files_with_diagnostics(dir, depth, visited, file_filter, include_empty_directories, None)
+}
+
+fn scan_sql_files_with_diagnostics(
+    dir: &Path,
+    depth: usize,
+    visited: &mut HashSet<String>,
+    file_filter: &Regex,
+    include_empty_directories: bool,
+    mut skipped_files: Option<&mut Vec<SkippedSqlSearchFile>>,
+) -> Vec<SqlFileEntry> {
     if depth > MAX_SCAN_DEPTH {
         return vec![];
     }
@@ -194,13 +261,35 @@ fn scan_sql_files_with_directories(
     let mut entries = Vec::new();
     let dir_entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(_) => return entries,
+        Err(_) => {
+            if let Some(skipped) = skipped_files.as_deref_mut() {
+                skipped.push(SkippedSqlSearchFile { path: dir.to_string_lossy().into_owned(), reason: "unreadable".to_string() });
+            }
+            return entries;
+        }
     };
 
-    for entry in dir_entries.flatten() {
+    for entry in dir_entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                if let Some(skipped) = skipped_files.as_deref_mut() {
+                    skipped.push(SkippedSqlSearchFile { path: dir.to_string_lossy().into_owned(), reason: "unreadable".to_string() });
+                }
+                continue;
+            }
+        };
         let file_type = match entry.file_type() {
             Ok(ft) => ft,
-            Err(_) => continue,
+            Err(_) => {
+                if let Some(skipped) = skipped_files.as_deref_mut() {
+                    skipped.push(SkippedSqlSearchFile {
+                        path: entry.path().to_string_lossy().into_owned(),
+                        reason: "unreadable".to_string(),
+                    });
+                }
+                continue;
+            }
         };
         let path = entry.path();
         let name = match path.file_name().and_then(|n| n.to_str()) {
@@ -212,8 +301,14 @@ fn scan_sql_files_with_directories(
             if is_pruned_dir(&name) {
                 continue;
             }
-            let children =
-                scan_sql_files_with_directories(&path, depth + 1, visited, file_filter, include_empty_directories);
+            let children = scan_sql_files_with_diagnostics(
+                &path,
+                depth + 1,
+                visited,
+                file_filter,
+                include_empty_directories,
+                skipped_files.as_deref_mut(),
+            );
             if include_empty_directories || !children.is_empty() {
                 entries.push(SqlFileEntry { name, path: path.to_string_lossy().to_string(), is_dir: true, children });
             }
@@ -262,6 +357,214 @@ pub async fn list_sql_files_in_folder(
     })
     .await
     .map_err(|e| format!("Failed to scan folder: {e}"))?
+}
+
+// Lowercasing can expand a character (for example, İ). Translate matching
+// offsets back to the original text before computing editor positions.
+fn original_search_range(text: &str, lower_start: usize, lower_end: usize) -> (usize, usize) {
+    let mut lower_offset = 0;
+    let mut original_start = None;
+    for (offset, character) in text.char_indices() {
+        let next_lower_offset = lower_offset + character.to_lowercase().map(char::len_utf8).sum::<usize>();
+        if original_start.is_none() && next_lower_offset > lower_start {
+            original_start = Some(offset);
+        }
+        if next_lower_offset >= lower_end {
+            return (original_start.unwrap_or(offset), offset + character.len_utf8());
+        }
+        lower_offset = next_lower_offset;
+    }
+    (original_start.unwrap_or(text.len()), text.len())
+}
+
+fn search_context(text: &str, line_number: usize) -> Option<SqlFileSearchContext> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let end = text.char_indices().nth(MAX_SEARCH_LINE_CHARS).map_or(text.len(), |(offset, _)| offset);
+    Some(SqlFileSearchContext {
+        line_number,
+        text: format!("{}{}", &text[..end], if end < text.len() { "..." } else { "" }),
+    })
+}
+
+fn search_snippet(line: &str, query: &str, first_match: usize, first_match_end: usize) -> (String, Vec<SqlFileSearchSegment>) {
+    let first_match_char = line[..first_match].chars().count();
+    let start_char = first_match_char.saturating_sub(20);
+    let start = line.char_indices().nth(start_char).map_or(line.len(), |(offset, _)| offset);
+    let end = line[start..]
+        .char_indices()
+        .nth(MAX_SEARCH_LINE_CHARS)
+        .map_or(line.len(), |(offset, _)| start + offset);
+    let snippet = &line[start..end];
+    let lower = snippet.to_lowercase();
+    let mut segments = Vec::new();
+    if start > 0 {
+        segments.push(SqlFileSearchSegment { text: "...".to_string(), matched: false });
+    }
+    let mut cursor = 0;
+    let mut lower_cursor = 0;
+    // A query itself can exceed the preview budget. Highlight the visible part
+    // of its first match even though the clipped preview lacks the full query.
+    if first_match_end > end {
+        let match_start = first_match - start;
+        if match_start > 0 {
+            segments.push(SqlFileSearchSegment { text: snippet[..match_start].to_string(), matched: false });
+        }
+        segments.push(SqlFileSearchSegment { text: snippet[match_start..].to_string(), matched: true });
+        cursor = snippet.len();
+        lower_cursor = lower.len();
+    }
+    while let Some(relative_start) = lower[lower_cursor..].find(query) {
+        let lower_start = lower_cursor + relative_start;
+        let lower_end = lower_start + query.len();
+        let (match_start, match_end) = original_search_range(snippet, lower_start, lower_end);
+        if match_start > cursor {
+            segments.push(SqlFileSearchSegment { text: snippet[cursor..match_start].to_string(), matched: false });
+        }
+        if match_end > cursor {
+            segments.push(SqlFileSearchSegment {
+                text: snippet[match_start.max(cursor)..match_end].to_string(),
+                matched: true,
+            });
+            cursor = match_end;
+        }
+        lower_cursor = lower_end;
+    }
+    if cursor < snippet.len() {
+        segments.push(SqlFileSearchSegment { text: snippet[cursor..].to_string(), matched: false });
+    }
+    if end < line.len() {
+        segments.push(SqlFileSearchSegment { text: "...".to_string(), matched: false });
+    }
+    let line_text = segments.iter().map(|segment| segment.text.as_str()).collect::<String>();
+    (line_text, segments)
+}
+
+fn search_sql_text(path: String, text: &str, query: &str, remaining_matches: &mut usize) -> SqlFileSearchFile {
+    let mut result = SqlFileSearchFile { path, matches: Vec::new(), total_matches: 0 };
+    let mut previous_line = None;
+    let mut lines = text.split('\n').enumerate().peekable();
+    while let Some((index, raw_line)) = lines.next() {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if let Some(lower_start) = line.to_lowercase().find(query) {
+            result.total_matches += 1;
+            if result.matches.len() < MAX_SEARCH_FILE_MATCHES && *remaining_matches > 0 {
+                let (start, end) = original_search_range(line, lower_start, lower_start + query.len());
+                let (line_text, segments) = search_snippet(line, query, start, end);
+                result.matches.push(SqlFileSearchMatch {
+                    line_number: index + 1,
+                    // CodeMirror/JavaScript positions count UTF-16 code units.
+                    column: line[..start].encode_utf16().count() + 1,
+                    line_text,
+                    segments,
+                    context_before: previous_line.and_then(|text| search_context(text, index)),
+                    context_after: lines.peek().and_then(|(_, text)| search_context(text, index + 2)),
+                });
+                *remaining_matches -= 1;
+            }
+        }
+        previous_line = Some(line);
+    }
+    result
+}
+
+fn read_sql_search_file(root: &Path, path: &Path) -> Result<String, &'static str> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| "unreadable")?;
+    if !metadata.file_type().is_file() {
+        return Err("notRegularFile");
+    }
+    let canonical = std::fs::canonicalize(path).map_err(|_| "unreadable")?;
+    if !canonical.starts_with(root) {
+        return Err("outsideRoot");
+    }
+    let file = std::fs::File::open(&canonical).map_err(|_| "unreadable")?;
+    let metadata = file.metadata().map_err(|_| "unreadable")?;
+    if !metadata.is_file() {
+        return Err("notRegularFile");
+    }
+    if metadata.len() > MAX_SEARCH_FILE_BYTES {
+        return Err("tooLarge");
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_SEARCH_FILE_BYTES + 1).read_to_end(&mut bytes).map_err(|_| "unreadable")?;
+    if bytes.len() as u64 > MAX_SEARCH_FILE_BYTES {
+        return Err("tooLarge");
+    }
+    decode_sql_file_bytes(&bytes).map_err(|_| "invalidEncoding")
+}
+
+fn search_sql_entries(
+    entries: Vec<SqlFileEntry>,
+    root: &Path,
+    query: &str,
+    visited_files: &mut HashSet<String>,
+    remaining_matches: &mut usize,
+    result: &mut SqlFileSearchResult,
+) {
+    for entry in entries {
+        if entry.is_dir {
+            search_sql_entries(entry.children, root, query, visited_files, remaining_matches, result);
+            continue;
+        }
+        // Preserve the same display-path identities as the tree, including on
+        // Windows. Overlapping roots must not consume the snippet budget twice.
+        if !visited_files.insert(entry.path.clone()) {
+            continue;
+        }
+        match read_sql_search_file(root, Path::new(&entry.path)) {
+            Ok(text) => {
+                let file = search_sql_text(entry.path, &text, query, remaining_matches);
+                if file.total_matches > 0 {
+                    result.truncated |= file.matches.len() < file.total_matches;
+                    result.files.push(file);
+                }
+            }
+            Err(reason) => result.skipped_files.push(SkippedSqlSearchFile { path: entry.path, reason: reason.to_string() }),
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn search_sql_file_contents(
+    roots: Vec<String>,
+    file_filter: Option<String>,
+    query: String,
+) -> Result<SqlFileSearchResult, String> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() || roots.is_empty() {
+        return Ok(SqlFileSearchResult::default());
+    }
+    let file_filter = compile_file_filter(file_filter.as_deref().unwrap_or(DEFAULT_FILE_FILTER))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut result = SqlFileSearchResult::default();
+        let mut visited_files = HashSet::new();
+        let mut remaining_matches = MAX_SEARCH_MATCHES;
+        for root in roots {
+            let canonical = match canonical_directory(Path::new(&root), "SQL root folder") {
+                Ok(path) => path,
+                _ => {
+                    result.skipped_files.push(SkippedSqlSearchFile { path: root, reason: "unreadable".to_string() });
+                    continue;
+                }
+            };
+            let entries = scan_sql_files_with_diagnostics(
+                Path::new(&root),
+                0,
+                &mut HashSet::new(),
+                &file_filter,
+                false,
+                Some(&mut result.skipped_files),
+            );
+            // Even after the preview budget is exhausted, scan every candidate
+            // so content-only files remain visible and line counts stay exact.
+            search_sql_entries(entries, &canonical, &query, &mut visited_files, &mut remaining_matches, &mut result);
+        }
+        result
+    })
+    .await
+    .map_err(|error| format!("Failed to search SQL files: {error}"))
 }
 
 #[tauri::command]

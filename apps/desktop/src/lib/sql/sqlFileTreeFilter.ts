@@ -1,8 +1,10 @@
 import type { SqlFileEntry } from "@/lib/backend/api";
 import { safeLocalStorageGet, safeLocalStorageSet } from "@/lib/backend/safeStorage";
+import { normalizeExternalSqlPath } from "@/lib/sql/sqlFileOpen";
 
 const SORT_ORDER_STORAGE_KEY = "dbx-sql-file-sort-order";
 export type SqlFileSortOrder = "asc" | "desc";
+export type SqlFileSearchMode = "name" | "content";
 export const DEFAULT_SQL_FILE_SORT_ORDER: SqlFileSortOrder = "asc";
 
 /** Read the sort order ("asc" or "desc") for external SQL files. */
@@ -61,9 +63,7 @@ function collectMatchingDescendantDirPaths(items: SqlFileEntry[], q: string, aut
       if (item.name.toLowerCase().includes(q)) {
         autoExpanded.add(item.path);
       }
-      if (item.children) {
-        collectMatchingDescendantDirPaths(item.children, q, autoExpanded);
-      }
+      collectMatchingDescendantDirPaths(item.children || [], q, autoExpanded);
     }
   }
 }
@@ -71,13 +71,14 @@ function collectMatchingDescendantDirPaths(items: SqlFileEntry[], q: string, aut
 /**
  * Filters and sorts SQL file entries based on a search query and sort order.
  * - If the query is empty, all entries are preserved and recursively sorted.
- * - If a directory's name matches the query, all of its contents are preserved (and recursively sorted),
+ * - In name mode, if a directory's name matches the query, all of its contents are preserved (and recursively sorted),
  *   and its path is added to `autoExpanded`.
  * - If a directory's name does not match, but some descendants do, the directory is kept with only the matching descendants,
  *   and its path is added to `autoExpanded`.
- * - If a file matches the query, it is kept.
+ * - Files match exclusively by name or by the supplied content hits, depending on the search mode.
+ * - Content mode keeps directories only as ancestors of matching files.
  */
-export function filterAndSortSqlFileEntries(entries: SqlFileEntry[], query: string, order: SqlFileSortOrder = "asc"): SqlFileFilterResult {
+export function filterAndSortSqlFileEntries(entries: SqlFileEntry[], query: string, order: SqlFileSortOrder = "asc", contentMatches: ReadonlySet<string> = new Set(), mode: SqlFileSearchMode = "name"): SqlFileFilterResult {
   const trimmed = query.trim();
   if (!trimmed) {
     const sorted = recursivelySortSqlFileEntries(entries, order);
@@ -105,12 +106,13 @@ export function filterAndSortSqlFileEntries(entries: SqlFileEntry[], query: stri
 
     for (const item of items) {
       if (!item.is_dir) {
-        if (item.name.toLowerCase().includes(q)) {
+        const matches = mode === "content" ? contentMatches.has(normalizeExternalSqlPath(item.path)) : item.name.toLowerCase().includes(q);
+        if (matches) {
           matchCount++;
           result.push(item);
         }
       } else {
-        const dirMatches = item.name.toLowerCase().includes(q);
+        const dirMatches = mode === "name" && item.name.toLowerCase().includes(q);
         if (dirMatches) {
           matchCount++;
           autoExpanded.add(item.path);
