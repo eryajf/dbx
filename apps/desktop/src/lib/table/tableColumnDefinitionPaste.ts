@@ -369,7 +369,8 @@ export function parseTableColumnDefinitions(text: string, existingNames: readonl
           const token = tokens[cursor++];
           if (!token || cursor > index || (token.kind !== "word" && token.kind !== "quoted_identifier")) fail("syntax", token ?? tokens[start]);
           const name = unquoteSqlSemanticIdentifier(token);
-          if (!name || name !== name.trim() || [...name].length > 64 || /[\u0000-\u001f\u007f]/.test(name)) fail("unsupported", token);
+          const hasControlCharacter = [...name].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
+          if (!name || name !== name.trim() || [...name].length > 64 || hasControlCharacter) fail("unsupported", token);
           if (token.kind === "word" && !/^[\p{L}_$][\p{L}\p{N}_$]*$/u.test(name)) fail("syntax", token);
         };
         readIdentifier();
