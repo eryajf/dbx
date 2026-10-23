@@ -1,3 +1,4 @@
+import { getPlatform } from "@/lib/backend/platform";
 import { SQL_VARIABLE_SYNTAX_KEYS, SQL_VARIABLE_SYNTAX_TOKENS } from "@/lib/sql/sqlVariableSyntax";
 import { APP_CUSTOM_UI_COLOR_DEFS } from "@/lib/app/appTheme";
 import { MCP_TOOL_OPTIONS, MCP_EXECUTION_MODE_COLUMNS } from "@/lib/mcp/mcpPolicySelection";
@@ -170,6 +171,7 @@ export const SETTINGS_SEARCH_DEFINITIONS: readonly SettingsSearchDefinition[] = 
   { id: "editor-completion-spacing", category: "editor", titleKey: "settings.insertSpaceAfterCompletion", descriptionKey: "settings.insertSpaceAfterCompletionDescription", targetId: "editor" },
   { id: "editor-sqlserver-space-completion", category: "editor", titleKey: "settings.sqlServerSpaceConfirmsCompletion", descriptionKey: "settings.sqlServerSpaceConfirmsCompletionDescription", targetId: "editor", visible: sqlServerSpaceCompletionVisible },
   { id: "editor-function-completion-include-params", category: "editor", titleKey: "settings.functionCompletionIncludeParams", descriptionKey: "settings.functionCompletionIncludeParamsDescription", targetId: "editor" },
+  { id: "editor-sequence-completion-enabled", category: "editor", titleKey: "settings.sequenceCompletionEnabled", descriptionKey: "settings.sequenceCompletionEnabledDescription", targetId: "editor" },
   {
     id: "editor-completion-trigger-mode",
     category: "editor",
@@ -340,6 +342,7 @@ export const SETTINGS_SEARCH_DEFINITIONS: readonly SettingsSearchDefinition[] = 
     visible: webOnly,
     keywordKeys: ["settings.webLogoPositionLeft", "settings.webLogoPositionRight", "settings.webLogoPositionHidden"],
   },
+  { id: "appearance-linux-floating-frame", category: "appearance", titleKey: "settings.linuxFloatingFrame", descriptionKey: "settings.linuxFloatingFrameDescription", targetId: "appearance", visible: (context) => !context.isWeb && getPlatform() === "linux" },
   { id: "appearance-tray", category: "appearance", titleKey: "settings.showTrayIcon", descriptionKey: "settings.showTrayIconDescription", targetId: "appearance", visible: desktopOnly },
   { id: "appearance-quit", category: "appearance", titleKey: "settings.quitOnClose", descriptionKey: "settings.quitOnCloseDescription", targetId: "appearance", visible: desktopOnly },
   { id: "about-debug-logs", category: "about", titleKey: "settings.debugLoggingEnabled", descriptionKey: "settings.debugLoggingEnabledDescription", targetId: "about", visible: desktopOnly },
@@ -526,8 +529,10 @@ export const SETTINGS_SEARCH_DEFINITIONS: readonly SettingsSearchDefinition[] = 
       "databaseBackup.outputPathTemplate",
       "databaseBackup.runDirectoryPattern",
       "databaseBackup.fileNamePattern",
-      "databaseBackup.compression",
+      "databaseBackup.backupFormat",
+      "databaseBackup.formatSql",
       "databaseBackup.compressionGzip",
+      "databaseBackup.formatNb3",
       "databaseBackup.databases",
       "databaseBackup.allDatabases",
       "databaseBackup.tableScope",
@@ -554,6 +559,7 @@ export const SETTINGS_SEARCH_DEFINITIONS: readonly SettingsSearchDefinition[] = 
       "connection.sshKeyPath",
       "connection.sshKeyPassphrase",
       "connection.sshAgentSockPath",
+      "connection.sshAgentKey",
       "connection.sshExposeLan",
       "connection.sshConnectTimeout",
       "connection.sshAuthMethodPassword",

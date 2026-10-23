@@ -181,6 +181,26 @@ describe("useSqlExecution", () => {
     expect(execute).toHaveBeenCalledWith(sql, { tabId: "tab-1" });
   });
 
+  it.each([
+    ["BEGIN", "DROP PROCEDURE IF EXISTS p;\nCREATE DEFINER=`root`@`127.0.0.1` PROCEDURE p(IN in_username VARCHAR(200))\nrun:BEGIN IF in_username = '' THEN LEAVE run; END IF; SELECT in_username; END;"],
+    ["LOOP", "CREATE PROCEDURE p() lbl:LOOP LEAVE lbl; END LOOP lbl;"],
+    ["WHILE", "CREATE PROCEDURE p() lbl:WHILE FALSE DO SELECT 1; END WHILE lbl;"],
+    ["REPEAT", "CREATE PROCEDURE p() lbl:REPEAT LEAVE lbl; UNTIL TRUE END REPEAT lbl;"],
+  ])("executes a MySQL procedure with a compact outer %s label without opening the parameter dialog (#13242)", async (_kind, sql) => {
+    const activeTab = ref<QueryTab | undefined>({ ...queryTab("app"), sql });
+    const activeConnection = ref<ConnectionConfig | undefined>(connection("mysql"));
+    useSettingsStore().editorSettings.confirmDangerousSqlExecution = false;
+    const execute = vi.spyOn(useQueryStore(), "executeCurrentSql").mockResolvedValue(undefined);
+    vi.spyOn(useHistoryStore(), "add").mockResolvedValue(undefined);
+    const execution = useSqlExecution({ activeTab: computed(() => activeTab.value), activeConnection: computed(() => activeConnection.value), executableSql: computed(() => sql), activeOutputView: ref("result") });
+
+    await execution.tryExecute();
+
+    expect(execution.showSqlParameterDialog.value).toBe(false);
+    expect(execution.sqlParameterNames.value).toEqual([]);
+    expect(execute).toHaveBeenCalledWith(sql, { tabId: "tab-1" });
+  });
+
   it("executes Neo4j graph patterns without a SQL parameter dialog", async () => {
     const sql = 'MATCH (p:Person)-[:WORK_IN]->(c:Company{name:"星云科技"})\nRETURN p.name, p.job, c.name';
     const activeTab = ref<QueryTab | undefined>({ ...queryTab("neo4j"), sql });
@@ -457,6 +477,43 @@ describe("useSqlExecution", () => {
     expect(executeCurrentSql).toHaveBeenCalledWith("select * from users where id = 42", { tabId: "tab-1" });
   });
 
+  it.each([
+    { sql: "UPDATE users SET name = 'Ada' WHERE id = 1", returnsRows: false },
+    { sql: "INSERT INTO users(id) VALUES (1) RETURNING id", returnsRows: true },
+  ])("shows a running write in summary and restores returned rows: $sql", async ({ sql, returnsRows }) => {
+    useSettingsStore().editorSettings.confirmDangerousSqlExecution = false;
+    const activeTab = ref<QueryTab | undefined>({ ...queryTab("app"), sql });
+    const activeConnection = ref<ConnectionConfig | undefined>(connection("postgres"));
+    const activeOutputView = ref<"result" | "summary" | "explain" | "chart">("result");
+    let finishExecution!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      finishExecution = resolve;
+    });
+    const execute = vi.spyOn(useQueryStore(), "executeCurrentSql").mockImplementation(async () => {
+      await completion;
+      activeTab.value!.result = {
+        columns: returnsRows ? ["id"] : [],
+        rows: returnsRows ? [[1]] : [],
+        affected_rows: 1,
+        execution_time_ms: 1,
+      };
+    });
+    vi.spyOn(useHistoryStore(), "add").mockResolvedValue(undefined);
+    const execution = useSqlExecution({
+      activeTab: computed(() => activeTab.value),
+      activeConnection: computed(() => activeConnection.value),
+      executableSql: computed(() => sql),
+      activeOutputView,
+    });
+
+    const pending = execution.tryExecute();
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    expect(activeOutputView.value).toBe("summary");
+    finishExecution();
+    await pending;
+    expect(activeOutputView.value).toBe(returnsRows ? "result" : "summary");
+  });
+
   it("opens the result table for a multi-statement batch by default", async () => {
     const sql = "SELECT 1;\nSELECT 2;";
     const activeTab = ref<QueryTab | undefined>({ ...queryTab("app"), sql });
@@ -480,7 +537,7 @@ describe("useSqlExecution", () => {
     expect(activeOutputView.value).toBe("result");
   });
 
-  it("opens the execution summary for a multi-statement batch when configured", async () => {
+  it("reads the latest multi-statement default view on each execution in the same tab", async () => {
     const sql = "SELECT 1;\nSELECT 2;";
     const activeTab = ref<QueryTab | undefined>({ ...queryTab("app"), sql });
     const activeConnection = ref<ConnectionConfig | undefined>(connection("mysql"));
@@ -499,9 +556,11 @@ describe("useSqlExecution", () => {
       activeOutputView,
     });
 
-    await execution.tryExecute();
-
-    expect(activeOutputView.value).toBe("summary");
+    for (const view of ["summary", "result", "summary"] as const) {
+      useSettingsStore().editorSettings.multiStatementDefaultView = view;
+      await execution.tryExecute();
+      expect(activeOutputView.value).toBe(view);
+    }
   });
 
   it("does not change the current output view when a background tab finishes", async () => {
