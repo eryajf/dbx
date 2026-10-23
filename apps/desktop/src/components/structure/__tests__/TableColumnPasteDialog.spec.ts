@@ -4,6 +4,7 @@ import { createApp, h, nextTick, reactive, type App } from "vue";
 import { createI18n } from "vue-i18n";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import TableColumnPasteDialog from "@/components/structure/TableColumnPasteDialog.vue";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import en from "@/i18n/locales/en";
 
 let app: App | undefined;
@@ -21,15 +22,22 @@ async function mountDialog() {
   document.body.append(host);
   app = createApp({
     setup: () => () =>
-      h(TableColumnPasteDialog, {
-        open: state.open,
-        disabled: false,
-        existingNames: [],
-        "onUpdate:open": (open: boolean) => {
-          state.open = open;
+      h(
+        TooltipProvider,
+        {},
+        {
+          default: () =>
+            h(TableColumnPasteDialog, {
+              open: state.open,
+              disabled: false,
+              existingNames: [],
+              "onUpdate:open": (open: boolean) => {
+                state.open = open;
+              },
+              onImport: imported,
+            }),
         },
-        onImport: imported,
-      }),
+      ),
   });
   app.use(createI18n({ legacy: false, locale: "en", messages: { en } }));
   app.mount(host);

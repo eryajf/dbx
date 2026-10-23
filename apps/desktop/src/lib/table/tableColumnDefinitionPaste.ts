@@ -240,6 +240,18 @@ function parseColumn(tokens: SqlSemanticToken[], source: string): PastedColumnDe
         index++;
         column.isNullable = false;
       }
+    } else if (kind === "auto_increment") {
+      if (!["tinyint", "smallint", "mediumint", "int", "integer", "bigint", "float", "double", "real"].includes(baseType)) fail("unsupported", clause);
+      column.extra.autoIncrement = true;
+    } else if (kind === "character" || kind === "collate") {
+      if (!["char", "varchar", "tinytext", "text", "mediumtext", "longtext", "enum", "set"].includes(baseType)) fail("unsupported", clause);
+      if (kind === "character" && !isWord(tokens[index++], "set")) fail("syntax", clause);
+      const value = tokens[index++];
+      if (!value || (value.kind !== "word" && value.kind !== "quoted_identifier")) fail("syntax", value ?? clause);
+      const name = unquoteSqlSemanticIdentifier(value);
+      if (!/^[a-zA-Z0-9_]+$/.test(name)) fail("unsupported", value);
+      if (kind === "character") column.characterSet = name;
+      else column.collation = name;
     } else if (kind === "comment") {
       const value = tokens[index++];
       if (!value) fail("syntax", clause);
@@ -296,6 +308,11 @@ function parseColumn(tokens: SqlSemanticToken[], source: string): PastedColumnDe
       fail("unsupported", clause);
     }
   }
+  if (column.extra.autoIncrement) {
+    if (seen.has("null") && column.isNullable) fail("unsupported", nameToken);
+    if (seen.has("default")) fail("unsupported", nameToken);
+    column.isNullable = false;
+  }
   if (!column.isNullable && column.defaultValue === "NULL") fail("unsupported", nameToken);
   return column;
 }
@@ -322,7 +339,7 @@ export function parseTableColumnDefinitions(text: string, existingNames: readonl
       // quotes can change meaning with that mode; never guess their meaning.
       if (token.kind === "string" && (token.quote !== "'" || token.text.includes("\\"))) fail("ambiguous", token);
       if (token.kind === "quoted_identifier" && token.quote !== "`") fail("ambiguous", token);
-      if (token.kind === "parameter" || token.text === ";" || token.text === "（" || token.text === "）") fail("unsupported", token);
+      if (token.kind === "parameter" || token.text === "（" || token.text === "）") fail("unsupported", token);
       if (token.text === "(") {
         openings.push(token);
         if (openings.length > 64) fail("unsupported", token);
@@ -335,17 +352,38 @@ export function parseTableColumnDefinitions(text: string, existingNames: readonl
     const source = sourceParts.join("");
     const names = new Set(existingNames.map((name) => tableStructureIdentifierComparisonKey(name, "mysql")));
     const columns: PastedColumnDefinition[] = [];
+    const statements = isWord(tokens[0], "alter");
     let start = 0;
     for (let index = 0; index <= tokens.length; index++) {
-      if (index < tokens.length && !(tokens[index].text === "," && tokens[index].depth === 0)) continue;
-      // A single trailing comma is accepted, but leading/repeated commas are not.
+      if (index < tokens.length && !(tokens[index].text === (statements ? ";" : ",") && tokens[index].depth === 0)) continue;
+      // Allow one trailing separator, but never empty definitions/statements.
       if (start === index) {
         if (index < tokens.length) fail("syntax", tokens[index]);
         break;
       }
-      const column = parseColumn(tokens.slice(start, index), source);
+      let definitionStart = start;
+      if (statements) {
+        let cursor = start;
+        if (!isWord(tokens[cursor++], "alter") || !isWord(tokens[cursor++], "table")) fail("unsupported", tokens[start]);
+        const readIdentifier = () => {
+          const token = tokens[cursor++];
+          if (!token || cursor > index || (token.kind !== "word" && token.kind !== "quoted_identifier")) fail("syntax", token ?? tokens[start]);
+          const name = unquoteSqlSemanticIdentifier(token);
+          if (!name || name !== name.trim() || [...name].length > 64 || /[\u0000-\u001f\u007f]/.test(name)) fail("unsupported", token);
+          if (token.kind === "word" && !/^[\p{L}_$][\p{L}\p{N}_$]*$/u.test(name)) fail("syntax", token);
+        };
+        readIdentifier();
+        if (tokens[cursor]?.text === ".") {
+          cursor++;
+          readIdentifier();
+        }
+        if (!isWord(tokens[cursor++], "add")) fail("unsupported", tokens[cursor - 1]);
+        if (isWord(tokens[cursor], "column")) cursor++;
+        definitionStart = cursor;
+      }
+      const column = parseColumn(tokens.slice(definitionStart, index), source);
       const key = tableStructureIdentifierComparisonKey(column.name, "mysql");
-      if (names.has(key)) throw new ColumnPasteError("duplicate", tokens[start].span.start, column.name);
+      if (names.has(key)) throw new ColumnPasteError("duplicate", tokens[definitionStart].span.start, column.name);
       names.add(key);
       columns.push(column);
       start = index + 1;
