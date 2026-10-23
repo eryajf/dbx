@@ -8863,7 +8863,7 @@ export default withEnglishFallback({
     searchSkippedOther: "Пропущено по другим причинам: объектов — {count}.",
     searchPreviewLimits: "Предпросмотр сокращён: до {perFile} строк на файл и {total} строк на поиск. Поиск подходящих файлов и подсчёт совпадающих строк продолжаются.",
     searchMode: "Область поиска",
-    searchByName: "Имя файла",
+    searchByName: "Файл",
     searchByContent: "Содержимое",
     searchContentPlaceholder: "Поиск по содержимому файлов...",
     searchPlaceholder: "Поиск по именам файлов...",

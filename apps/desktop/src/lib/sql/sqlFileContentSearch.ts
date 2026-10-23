@@ -2,8 +2,6 @@ import * as api from "@/lib/backend/api";
 import type { SqlFileContentMatch, SqlFileContentSearchResult as BackendSearchResult } from "@/lib/backend/api";
 import { normalizeExternalSqlPath } from "@/lib/sql/sqlFileOpen";
 
-export const SQL_FILE_CONTENT_SEARCH_DEBOUNCE_MS = 250;
-
 export interface SqlFileContentSearchResult extends BackendSearchResult {
   matchesByPath: Map<string, SqlFileContentMatch>;
 }

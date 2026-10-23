@@ -10268,7 +10268,7 @@ export default withEnglishFallback({
     searchSkippedOther: "Ignorati per altri motivi: {count} elementi.",
     searchPreviewLimits: "Anteprime troncate: fino a {perFile} righe per file e {total} per ricerca. La ricerca dei file corrispondenti e il conteggio delle righe continuano.",
     searchMode: "Ambito di ricerca",
-    searchByName: "Nome file",
+    searchByName: "File",
     searchByContent: "Contenuto",
     searchContentPlaceholder: "Cerca nei contenuti dei file...",
     searchPlaceholder: "Cerca nomi di file...",

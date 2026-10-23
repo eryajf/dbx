@@ -27,14 +27,13 @@ import {
   LocateFixed,
   Pencil,
   Play,
-  Search,
   Trash2,
   Upload,
   X,
 } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import SqlPanelSearch from "@/components/layout/SqlPanelSearch.vue";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import CustomContextMenu, { type ContextMenuItem as CtxMenuItem } from "@/components/ui/CustomContextMenu.vue";
 import ConnectionTreeSelect from "@/components/connection/ConnectionTreeSelect.vue";
@@ -88,8 +87,9 @@ type DragItemType = "folder" | "file" | "unfiled";
 type DropPosition = "before" | "after" | "inside";
 
 const activeConnectionIds = computed(() => new Set(connectionStore.connections.map((c) => c.id)));
-const searchText = ref("");
-const searchQuery = computed(() => searchText.value.trim().toLowerCase());
+const searchInput = ref<InstanceType<typeof SqlPanelSearch> | null>(null);
+const searchInputPending = ref(false);
+const searchQuery = ref("");
 
 const searchMode = ref<"name" | "content">("name");
 const loadingSearchContent = ref(false);
@@ -97,7 +97,7 @@ const unloadedSearchFiles = computed(() => savedSqlStore.allFiles.filter((file) 
 const contentSearchActive = computed(() => searchMode.value === "content" && !!searchQuery.value);
 
 async function loadSearchContent() {
-  if (loadingSearchContent.value || !contentSearchActive.value || unloadedSearchFiles.value.length === 0) return;
+  if (searchInputPending.value || loadingSearchContent.value || !contentSearchActive.value || unloadedSearchFiles.value.length === 0) return;
   loadingSearchContent.value = true;
   try {
     await savedSqlStore.ensureAllFilesLoaded();
@@ -109,7 +109,7 @@ async function loadSearchContent() {
 }
 
 watch(
-  () => [searchMode.value, searchQuery.value, unloadedSearchFiles.value.map((file) => file.id).join("\n")],
+  () => [searchMode.value, searchQuery.value, searchInputPending.value, unloadedSearchFiles.value.map((file) => file.id).join("\n")],
   () => {
     void loadSearchContent();
   },
@@ -483,7 +483,7 @@ async function openNewFolderInput(parentFolderId?: string) {
   }
   try {
     const folder = await savedSqlStore.createFolder(connectionId, t("savedSql.newFolderDefault"), parent?.id);
-    searchText.value = "";
+    searchInput.value?.clear();
     startRenameFolder(folder);
   } catch (e: any) {
     toast(t("savedSql.createFolderFailed", { message: e?.message || String(e) }), 5000);
@@ -1626,33 +1626,8 @@ function showDropInside(targetId: string) {
     </div>
 
     <div class="border-b shrink-0 px-2 py-1">
-      <div class="flex items-center gap-1">
-        <Select v-model="searchMode">
-          <SelectTrigger data-sql-library-search-mode class="data-[size=default]:h-6 max-w-[45%] shrink-0 rounded px-1.5 py-0 text-xs" :aria-label="t('sqlFileTree.searchMode')">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="name">{{ t("sqlFileTree.searchByName") }}</SelectItem>
-            <SelectItem value="content">{{ t("sqlFileTree.searchByContent") }}</SelectItem>
-          </SelectContent>
-        </Select>
-        <div class="relative min-w-0 flex-1">
-          <Search class="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
-          <input
-            data-sql-library-search
-            v-model="searchText"
-            autocapitalize="off"
-            autocorrect="off"
-            spellcheck="false"
-            class="w-full h-6 pl-7 pr-6 text-[13px] rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-            :placeholder="t(searchMode === 'name' ? 'sqlFileTree.searchPlaceholder' : 'sqlFileTree.searchContentPlaceholder')"
-          />
-          <button v-if="searchText" type="button" class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" @click="searchText = ''">
-            <X class="h-3 w-3" />
-          </button>
-        </div>
-      </div>
-      <p v-if="contentSearchActive && loadingSearchContent" class="mt-1 text-xs text-muted-foreground" role="status" aria-live="polite">{{ t("sqlFileTree.searching") }}</p>
+      <SqlPanelSearch ref="searchInput" v-model:mode="searchMode" panel="library" @query="searchQuery = $event" @pending="searchInputPending = $event" />
+      <p v-if="searchInputPending || (contentSearchActive && loadingSearchContent)" class="mt-1 text-xs text-muted-foreground" role="status" aria-live="polite">{{ t("sqlFileTree.searching") }}</p>
       <p v-else-if="contentSearchActive && unloadedSearchFiles.length" class="mt-1 text-xs text-destructive" role="status">
         {{ t("sqlLibrary.searchContentIncomplete", { count: unloadedSearchFiles.length }) }}
         <button type="button" class="underline" @click="loadSearchContent">{{ t("common.retry") }}</button>
@@ -1780,7 +1755,7 @@ function showDropInside(targetId: string) {
               <p class="text-[13px]">{{ t("common.loading") }}</p>
             </div>
 
-            <div v-else-if="!hasAnyVisibleItem && !(contentSearchActive && (loadingSearchContent || unloadedSearchFiles.length))" class="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+            <div v-else-if="!hasAnyVisibleItem && !(searchInputPending || (contentSearchActive && (loadingSearchContent || unloadedSearchFiles.length)))" class="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
               <Library class="h-8 w-8 opacity-30" />
               <p class="text-[13px]">{{ t(searchQuery ? "grid.noSearchResults" : "sqlLibrary.empty") }}</p>
             </div>

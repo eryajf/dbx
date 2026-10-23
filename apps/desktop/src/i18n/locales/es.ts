@@ -10520,7 +10520,7 @@ export default withEnglishFallback({
     searchSkippedOther: "Omitidos por otros motivos: {count} elementos.",
     searchPreviewLimits: "Vistas previas truncadas: hasta {perFile} líneas por archivo y {total} por búsqueda. Se siguen recopilando archivos coincidentes y contando líneas.",
     searchMode: "Ámbito de búsqueda",
-    searchByName: "Nombre",
+    searchByName: "Archivo",
     searchByContent: "Contenido",
     searchContentPlaceholder: "Buscar en el contenido...",
     searchPlaceholder: "Buscar nombres de archivos...",

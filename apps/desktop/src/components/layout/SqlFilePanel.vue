@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, watch, useId } from "vue";
 import { useI18n } from "vue-i18n";
-import { FolderOpen, FolderClosed, FileCode, FolderPlus, ChevronRight, ChevronDown, X, Trash2, RefreshCw, FolderSearch, Copy, Play, ChevronsUpDown, ChevronsDownUp, Settings, FilePlus, Pencil, Search, ArrowDownAZ, ArrowUpAZ } from "@lucide/vue";
+import { FolderOpen, FolderClosed, FileCode, FolderPlus, ChevronRight, ChevronDown, X, Trash2, RefreshCw, FolderSearch, Copy, Play, ChevronsUpDown, ChevronsDownUp, Settings, FilePlus, Pencil, ArrowDownAZ, ArrowUpAZ } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import SqlPanelSearch from "@/components/layout/SqlPanelSearch.vue";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import LightTooltip from "@/components/ui/LightTooltip.vue";
 import HelpTooltip from "@/components/ui/tooltip/HelpTooltip.vue";
@@ -64,11 +64,12 @@ const treeId = useId();
 let lastClickedKey: string | null = null;
 const fileFilterRegexExample = "(?i)[.](sql|ddl|sh|py)$";
 
-const searchText = ref("");
+const searchInput = ref<InstanceType<typeof SqlPanelSearch> | null>(null);
+const searchInputPending = ref(false);
 const searchMode = ref<SqlFileSearchMode>("name");
-const searchQuery = computed(() => searchText.value.trim().toLowerCase());
+const searchQuery = ref("");
 const {
-  searching,
+  searching: scanning,
   error: searchError,
   matchesByPath,
   matchingPaths,
@@ -79,7 +80,9 @@ const {
 } = useSqlFileContentSearch(
   () => (searchMode.value === "content" ? searchQuery.value : ""),
   () => folders.value,
+  () => searchInputPending.value,
 );
+const searching = computed(() => searchInputPending.value || scanning.value);
 const searchIncompleteHelp = computed(() => {
   const reasonKeys: Record<string, string> = {
     tooLarge: "sqlFileTree.searchSkippedTooLarge",
@@ -165,10 +168,10 @@ const activeFileTarget = computed(() => {
 async function locateActiveFile() {
   const target = activeFileTarget.value;
   if (!target) return;
-  if (searchText.value) {
+  if (searchInput.value?.text) {
     const isVisibleNow = visibleItems.value.some((item) => item.folder === target.folder && item.type === "file" && normalizeExternalSqlPath(item.path) === target.path);
-    if (!isVisibleNow) {
-      searchText.value = "";
+    if (searchInputPending.value || !isVisibleNow) {
+      searchInput.value?.clear();
       await nextTick();
     }
   }
@@ -1130,32 +1133,7 @@ function clearContextTarget() {
     </div>
 
     <div v-if="folders.length > 0" class="border-b shrink-0 px-2 py-1">
-      <div class="flex items-center gap-1">
-        <Select v-model="searchMode">
-          <SelectTrigger data-sql-file-search-mode class="data-[size=default]:h-6 max-w-[45%] shrink-0 rounded px-1.5 py-0 text-xs" :aria-label="t('sqlFileTree.searchMode')">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="name">{{ t("sqlFileTree.searchByName") }}</SelectItem>
-            <SelectItem value="content">{{ t("sqlFileTree.searchByContent") }}</SelectItem>
-          </SelectContent>
-        </Select>
-        <div class="relative min-w-0 flex-1">
-          <Search class="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
-          <input
-            data-sql-file-search
-            v-model="searchText"
-            autocapitalize="off"
-            autocorrect="off"
-            spellcheck="false"
-            class="w-full h-6 pl-7 pr-6 text-[13px] rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-            :placeholder="t(searchMode === 'name' ? 'sqlFileTree.searchPlaceholder' : 'sqlFileTree.searchContentPlaceholder')"
-          />
-          <button v-if="searchText" type="button" class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" @click="searchText = ''">
-            <X class="h-3 w-3" />
-          </button>
-        </div>
-      </div>
+      <SqlPanelSearch ref="searchInput" v-model:mode="searchMode" panel="file" @query="searchQuery = $event" @pending="searchInputPending = $event" />
       <p v-if="searching" class="mt-1 text-xs text-muted-foreground" role="status" aria-live="polite">{{ t("sqlFileTree.searching") }}</p>
       <p v-else-if="searchError" class="mt-1 text-xs text-destructive" role="status">{{ t("sqlFileTree.searchFailed", { message: translateBackendError(t, searchError) }) }}</p>
       <p v-else-if="searchIncomplete" class="mt-1 text-xs text-muted-foreground" role="status">

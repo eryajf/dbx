@@ -216,6 +216,10 @@ describe("SqlFilePanel content search", () => {
     await nextTick();
     expect(host.querySelector('[data-sql-file-path="/sql/queries/02_orders.sql"]')).toBeNull();
     resolveFirst!(result("/sql/queries/02_orders.sql", [1], 1));
+    await nextTick();
+    await nextTick();
+    // Invalidate on the first new keystroke, before the debounce commits "other".
+    expect(host.querySelector("[data-sql-file-content-snippet]")).toBeNull();
     await vi.waitFor(() => expect(host.querySelector('[data-sql-file-path="/sql/migrations/01_init.sql"]')).not.toBeNull());
 
     // The late answer for "needle" must not widen the tree for "other".

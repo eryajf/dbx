@@ -10264,7 +10264,7 @@ export default withEnglishFallback({
     searchSkippedOther: "Ignorados por outros motivos: {count} itens.",
     searchPreviewLimits: "Prévias truncadas: até {perFile} linhas por arquivo e {total} por pesquisa. A busca de arquivos correspondentes e a contagem de linhas continuam.",
     searchMode: "Escopo da pesquisa",
-    searchByName: "Nome",
+    searchByName: "Arquivo",
     searchByContent: "Conteúdo",
     searchContentPlaceholder: "Pesquisar conteúdo dos arquivos...",
     searchPlaceholder: "Pesquisar nomes de arquivos...",

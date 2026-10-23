@@ -1,6 +1,6 @@
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from "vue";
 import type { SqlFileContentMatch, SqlFileEntry } from "@/lib/backend/api";
-import { contentMatchPathSet, searchSqlFileContents, SQL_FILE_CONTENT_SEARCH_DEBOUNCE_MS, type SqlFileContentSearchResult } from "@/lib/sql/sqlFileContentSearch";
+import { contentMatchPathSet, searchSqlFileContents, type SqlFileContentSearchResult } from "@/lib/sql/sqlFileContentSearch";
 import { getSqlFileFilter } from "@/lib/sqlFile/sqlFileFolders";
 
 interface SearchFolder {
@@ -18,15 +18,14 @@ interface SearchRequest {
 }
 
 /** Keep disk reads off the render path and serialize scans while typing. */
-export function useSqlFileContentSearch(getQuery: () => string, getFolders: () => SearchFolder[]) {
-  const result = ref<SqlFileContentSearchResult | null>(null);
+export function useSqlFileContentSearch(getQuery: () => string, getFolders: () => SearchFolder[], getInputPending: () => boolean = () => false) {
+  const result = shallowRef<SqlFileContentSearchResult | null>(null);
   const searching = ref(false);
   const error = ref("");
   let generation = 0;
   let disposed = false;
   let running = false;
   let pending: SearchRequest | null = null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let resultQuery = "";
   let resultFileFilter = "";
 
@@ -47,7 +46,7 @@ export function useSqlFileContentSearch(getQuery: () => string, getFolders: () =
     } finally {
       running = false;
       if (!disposed && request.generation === generation) searching.value = false;
-      // Only the latest debounced request survives a slow filesystem scan.
+      // Only the latest committed request survives a slow filesystem scan.
       void runPending();
     }
   }
@@ -55,12 +54,12 @@ export function useSqlFileContentSearch(getQuery: () => string, getFolders: () =
   watch(
     () => ({
       query: getQuery(),
+      inputPending: getInputPending(),
       // Track entry replacement and refresh state, not expansion/selection.
       folders: getFolders().map((folder) => ({ path: folder.path, entries: folder.entries, loading: folder.loading, refreshing: folder.refreshing })),
     }),
-    ({ query, folders }) => {
+    ({ query, folders, inputPending }) => {
       const current = ++generation;
-      clearTimeout(timer);
       pending = null;
       const fileFilter = getSqlFileFilter();
       // Refresh in place: removing content-only hits while rescanning shrinks
@@ -68,13 +67,11 @@ export function useSqlFileContentSearch(getQuery: () => string, getFolders: () =
       // A different query/filter must never display the previous search's hits.
       if (!query || query !== resultQuery || fileFilter !== resultFileFilter || folders.length === 0) result.value = null;
       error.value = "";
-      searching.value = !!query && folders.length > 0;
+      searching.value = !inputPending && !!query && folders.length > 0;
       if (!searching.value || folders.some((folder) => folder.loading || folder.refreshing)) return;
 
-      timer = setTimeout(() => {
-        pending = { generation: current, roots: folders.map((folder) => folder.path), query, fileFilter };
-        void runPending();
-      }, SQL_FILE_CONTENT_SEARCH_DEBOUNCE_MS);
+      pending = { generation: current, roots: folders.map((folder) => folder.path), query, fileFilter };
+      void runPending();
     },
     { immediate: true, flush: "sync" },
   );
@@ -82,7 +79,6 @@ export function useSqlFileContentSearch(getQuery: () => string, getFolders: () =
   onBeforeUnmount(() => {
     disposed = true;
     generation++;
-    clearTimeout(timer);
     pending = null;
   });
 

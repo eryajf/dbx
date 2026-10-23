@@ -94,7 +94,10 @@ describe("SQL library search scopes", () => {
     await changeSearchMode(host, "content");
     await typeQuery(host, "needle");
     expect(host.textContent).toContain(i18n.global.t("sqlFileTree.searching"));
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
     await typeQuery(host, "other");
+    host.querySelector<HTMLInputElement>("[data-sql-library-search]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    await nextTick();
     expect(load).toHaveBeenCalledTimes(1);
     complete();
     await vi.waitFor(() => expect(host.textContent).toContain(i18n.global.t("sqlLibrary.searchContentIncomplete", { count: 1 })));
