@@ -166,7 +166,12 @@ fn compile_file_filter(file_filter: &str) -> Result<Regex, String> {
     Regex::new(&pattern).map_err(|error| format!("Invalid file filter regular expression: {error}"))
 }
 
-fn scan_sql_files(dir: &Path, depth: usize, visited: &mut HashSet<String>, file_filter: &Regex) -> Vec<SqlFileEntry> {
+fn scan_sql_files(
+    dir: &Path,
+    depth: usize,
+    visited: &mut HashSet<String>,
+    file_filter: &Regex,
+) -> Result<Vec<SqlFileEntry>, String> {
     scan_sql_files_with_directories(dir, depth, visited, file_filter, false)
 }
 
@@ -176,32 +181,30 @@ fn scan_sql_files_with_directories(
     visited: &mut HashSet<String>,
     file_filter: &Regex,
     include_empty_directories: bool,
-) -> Vec<SqlFileEntry> {
+) -> Result<Vec<SqlFileEntry>, String> {
     if depth > MAX_SCAN_DEPTH {
-        return vec![];
+        return Ok(vec![]);
     }
 
-    // Canonicalize only the top-level folder once per scan to guard against
-    // symlink loops; doing it for every subdir doubled the stat cost.
-    let canonical = std::fs::canonicalize(dir).ok();
-    if let Some(ref c) = canonical {
-        let c_str = c.to_string_lossy().to_string();
-        if !visited.insert(c_str) {
-            return vec![];
-        }
+    // Track canonical directory identities to avoid visiting a directory twice.
+    let canonical = std::fs::canonicalize(dir)
+        .map_err(|error| format!("Failed to resolve SQL folder '{}': {error}", dir.display()))?;
+    if !visited.insert(canonical.to_string_lossy().to_string()) {
+        return Ok(vec![]);
     }
 
     let mut entries = Vec::new();
-    let dir_entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return entries,
-    };
+    // A partial scan must not be presented as a successful snapshot: callers
+    // use missing paths to prune persisted folder expansion state.
+    let dir_entries = std::fs::read_dir(dir)
+        .map_err(|error| format!("Failed to read SQL folder '{}': {error}", dir.display()))?;
 
-    for entry in dir_entries.flatten() {
-        let file_type = match entry.file_type() {
-            Ok(ft) => ft,
-            Err(_) => continue,
-        };
+    for entry in dir_entries {
+        let entry =
+            entry.map_err(|error| format!("Failed to read entry in SQL folder '{}': {error}", dir.display()))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Failed to inspect SQL folder entry '{}': {error}", entry.path().display()))?;
         let path = entry.path();
         let name = match path.file_name().and_then(|n| n.to_str()) {
             Some(name) => name.to_string(),
@@ -213,7 +216,7 @@ fn scan_sql_files_with_directories(
                 continue;
             }
             let children =
-                scan_sql_files_with_directories(&path, depth + 1, visited, file_filter, include_empty_directories);
+                scan_sql_files_with_directories(&path, depth + 1, visited, file_filter, include_empty_directories)?;
             if include_empty_directories || !children.is_empty() {
                 entries.push(SqlFileEntry { name, path: path.to_string_lossy().to_string(), is_dir: true, children });
             }
@@ -235,7 +238,7 @@ fn scan_sql_files_with_directories(
         }
     });
 
-    entries
+    Ok(entries)
 }
 
 #[tauri::command]
@@ -254,11 +257,11 @@ pub async fn list_sql_files_in_folder(
             return Err(format!("Path is not a directory: {}", folder_path));
         }
         let mut visited = HashSet::new();
-        Ok(if include_empty_directories.unwrap_or(false) {
+        if include_empty_directories.unwrap_or(false) {
             scan_sql_files_with_directories(&path, 0, &mut visited, &file_filter, true)
         } else {
             scan_sql_files(&path, 0, &mut visited, &file_filter)
-        })
+        }
     })
     .await
     .map_err(|e| format!("Failed to scan folder: {e}"))?
@@ -422,7 +425,7 @@ mod tests {
 
         let mut visited = HashSet::new();
         let filter = compile_file_filter(DEFAULT_FILE_FILTER).unwrap();
-        let entries = scan_sql_files(&root, 0, &mut visited, &filter);
+        let entries = scan_sql_files(&root, 0, &mut visited, &filter).unwrap();
         let mut names = Vec::new();
         collect_file_names(&entries, &mut names);
         names.sort();
@@ -441,7 +444,7 @@ mod tests {
 
         let mut visited = HashSet::new();
         let filter = compile_file_filter(r"\.(sql|sh|py)$").unwrap();
-        let entries = scan_sql_files(&root, 0, &mut visited, &filter);
+        let entries = scan_sql_files(&root, 0, &mut visited, &filter).unwrap();
         let mut names = Vec::new();
         collect_file_names(&entries, &mut names);
         names.sort();
