@@ -1,29 +1,43 @@
 <script setup lang="ts">
 import { computed, ref, watch, type ObjectDirective } from "vue";
 import { useI18n } from "vue-i18n";
-import { formatMatchTooltip, type SavedSqlLineMatch, type SavedSqlSearchMatchResult } from "@/lib/savedSql/savedSqlSearch";
+import { formatMatchTooltip, type SavedSqlLineMatch } from "@/lib/savedSql/savedSqlSearch";
 
+/**
+ * Presentational snippet list shared by the SQL library panel and the external
+ * SQL file panel: line badge + highlighted segments, `initialVisible` rows by
+ * default, expandable up to the matches the caller supplied.
+ */
 const props = withDefaults(
   defineProps<{
-    result: SavedSqlSearchMatchResult;
+    matches: SavedSqlLineMatch[];
+    totalMatches: number;
     query: string;
+    /** Maximum available previews, including those built lazily on expansion. */
+    previewLimit?: number;
     depth?: number;
+    initialVisible?: number;
   }>(),
   {
     depth: 0,
+    initialVisible: 3,
+    previewLimit: 100,
   },
 );
 
 const emit = defineEmits<{
   selectMatch: [match: SavedSqlLineMatch];
+  /** Lets a caller that computes matches lazily (e.g. from full file text)
+   *  widen its own cap when the list is expanded. */
+  expandedChange: [expanded: boolean];
 }>();
 
 const { t } = useI18n();
 const expanded = ref(false);
-const availableMatches = computed(() => props.result.matches.slice(0, 100));
-const matches = computed(() => (expanded.value ? availableMatches.value : availableMatches.value.slice(0, 3)));
-const hasHiddenMatches = computed(() => availableMatches.value.length > 3);
-const previewLimited = computed(() => props.result.totalMatches > availableMatches.value.length);
+
+const visibleMatches = computed(() => (expanded.value ? props.matches : props.matches.slice(0, props.initialVisible)));
+const hasHiddenMatches = computed(() => Math.min(props.totalMatches, props.previewLimit) > props.initialVisible);
+const previewLimited = computed(() => props.totalMatches > props.previewLimit);
 
 // Measure rendered pixels so Chinese text, indentation and sidebar resizing
 // all keep the first highlight visible without changing its editor position.
@@ -56,16 +70,14 @@ const vCenterSearchMatch: ObjectDirective<HTMLElement> = {
   },
 };
 
-watch(
-  // A refreshed result for the same query must not collapse expanded snippets.
-  () => props.query,
-  () => {
-    expanded.value = false;
-  },
-);
+watch(() => props.query, () => {
+  expanded.value = false;
+  emit("expandedChange", false);
+});
 
 function toggleExpanded() {
   expanded.value = !expanded.value;
+  emit("expandedChange", expanded.value);
 }
 
 function handleSnippetClick(match: SavedSqlLineMatch) {
@@ -74,9 +86,9 @@ function handleSnippetClick(match: SavedSqlLineMatch) {
 </script>
 
 <template>
-  <div v-if="matches.length > 0" class="dbx-sql-library-snippets mb-1 mt-0.5 space-y-0.5 select-none" :style="{ paddingLeft: `${24 + depth * 16}px` }" data-no-drag="true" @mousedown.stop @dblclick.stop>
+  <div v-if="visibleMatches.length > 0" class="dbx-search-match-snippets mb-1 mt-0.5 space-y-0.5 select-none" :style="{ paddingLeft: `${24 + depth * 16}px` }" data-no-drag="true" @mousedown.stop @dblclick.stop>
     <div
-      v-for="match in matches"
+      v-for="match in visibleMatches"
       :key="match.lineNumber"
       class="group/snippet flex cursor-pointer items-center gap-1.5 rounded py-0.5 pr-2 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
       :title="formatMatchTooltip(match)"
@@ -93,11 +105,11 @@ function handleSnippetClick(match: SavedSqlLineMatch) {
 
     <div v-if="hasHiddenMatches" class="pt-0.5 text-[11px]">
       <button type="button" class="text-[11px] font-normal text-primary hover:underline hover:text-primary/80 select-none" @click.stop="toggleExpanded">
-        {{ expanded ? t("sqlLibrary.collapseMatches") : t("sqlLibrary.moreMatches", { count: result.totalMatches - 3 }) }}
+        {{ expanded ? t("sqlLibrary.collapseMatches") : t("sqlLibrary.moreMatches", { count: totalMatches - initialVisible }) }}
       </button>
     </div>
     <p v-if="previewLimited" class="pt-0.5 text-[11px] text-muted-foreground">
-      {{ t("sqlLibrary.matchPreviewLimit", { limit: availableMatches.length, total: result.totalMatches }) }}
+      {{ t("sqlLibrary.matchPreviewLimit", { limit: previewLimit, total: totalMatches }) }}
     </p>
   </div>
 </template>

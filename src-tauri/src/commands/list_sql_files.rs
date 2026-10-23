@@ -701,6 +701,79 @@ pub async fn delete_sql_folder_in_folder(root_path: String, folder_path: String)
 mod tests {
     use super::*;
 
+    #[test]
+    fn content_search_groups_matching_lines_and_uses_utf16_editor_columns() {
+        let mut remaining = MAX_SEARCH_MATCHES;
+        let result = search_sql_text("query.sql".into(), "-- context\r\n😀İ needle needle\r\nSELECT 1", "needle", &mut remaining);
+        assert_eq!(result.total_matches, 1);
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].line_number, 2);
+        assert_eq!(result.matches[0].column, 5);
+        assert_eq!(result.matches[0].segments.iter().filter(|segment| segment.matched).count(), 2);
+        assert_eq!(result.matches[0].context_before.as_ref().unwrap().line_number, 1);
+        assert_eq!(result.matches[0].context_after.as_ref().unwrap().line_number, 3);
+
+        let expanded_case = search_sql_text("query.sql".into(), "İ needle", "needle", &mut remaining);
+        assert_eq!(expanded_case.matches[0].column, 3);
+    }
+
+    #[test]
+    fn content_search_limits_previews_without_losing_counts_or_later_files() {
+        let text = vec!["SELECT needle"; 150].join("\n");
+        let mut remaining = MAX_SEARCH_FILE_MATCHES + 1;
+        let first = search_sql_text("first.sql".into(), &text, "needle", &mut remaining);
+        assert_eq!(first.total_matches, 150);
+        assert_eq!(first.matches.len(), MAX_SEARCH_FILE_MATCHES);
+        let second = search_sql_text("second.sql".into(), &text, "needle", &mut remaining);
+        assert_eq!(second.total_matches, 150);
+        assert_eq!(second.matches.len(), 1);
+        let third = search_sql_text("third.sql".into(), &text, "needle", &mut remaining);
+        assert_eq!(third.total_matches, 150);
+        assert!(third.matches.is_empty());
+    }
+
+    #[test]
+    fn content_search_centers_long_snippets_around_the_original_match() {
+        let text = format!("{}needle trailing", "长".repeat(250));
+        let mut remaining = MAX_SEARCH_MATCHES;
+        let result = search_sql_text("query.sql".into(), &text, "needle", &mut remaining);
+        let snippet = &result.matches[0];
+        assert_eq!(snippet.column, 251);
+        assert!(snippet.line_text.starts_with("..."));
+        assert!(snippet.line_text.chars().count() <= MAX_SEARCH_LINE_CHARS + 6);
+        assert_eq!(snippet.segments.iter().filter(|segment| segment.matched).map(|segment| segment.text.as_str()).collect::<Vec<_>>(), vec!["needle"]);
+    }
+
+    #[tokio::test]
+    async fn content_search_preserves_tree_filters_decoding_and_skipped_reasons() {
+        let root = std::env::temp_dir().join(format!("dbx-sql-content-search-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::write(root.join(".gitignore"), "*.sql").unwrap();
+        std::fs::write(root.join("README"), "请求方式").unwrap();
+        std::fs::write(root.join(".hidden.sql"), "请求方式").unwrap();
+        std::fs::write(root.join("ignored.txt"), "请求方式").unwrap();
+        std::fs::write(root.join("node_modules/excluded.sql"), "请求方式").unwrap();
+        let mut utf16 = vec![0xff, 0xfe];
+        for unit in "请求方式".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        std::fs::write(root.join("utf16.sql"), utf16).unwrap();
+        std::fs::write(root.join("gbk.sql"), [0xc7, 0xeb, 0xc7, 0xf3, 0xb7, 0xbd, 0xca, 0xbd]).unwrap();
+        std::fs::File::create(root.join("large.sql")).unwrap().set_len(MAX_SEARCH_FILE_BYTES + 1).unwrap();
+        let root_string = root.to_string_lossy().into_owned();
+        let result = search_sql_file_contents(
+            vec![root_string.clone(), root_string],
+            Some(r"(?i)(\.sql$|^README$)".into()),
+            "请求方式".into(),
+        ).await.unwrap();
+        assert_eq!(result.files.len(), 4);
+        assert!(result.files.iter().all(|file| file.total_matches == 1));
+        assert_eq!(result.skipped_files.len(), 1);
+        assert_eq!(result.skipped_files[0].reason, "tooLarge");
+        assert!(!result.truncated);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn collect_file_names(entries: &[SqlFileEntry], names: &mut Vec<String>) {
         for entry in entries {
             if entry.is_dir {

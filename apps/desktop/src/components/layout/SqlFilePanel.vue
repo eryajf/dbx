@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import LightTooltip from "@/components/ui/LightTooltip.vue";
 import HelpTooltip from "@/components/ui/tooltip/HelpTooltip.vue";
 import SidebarLocateButton from "@/components/sidebar/SidebarLocateButton.vue";
-import SqlSearchSnippets from "@/components/layout/SqlSearchSnippets.vue";
+import SqlSearchMatchSnippet from "@/components/layout/SqlSearchMatchSnippet.vue";
 import CustomContextMenu, { type ContextMenuItem } from "@/components/ui/CustomContextMenu.vue";
 import { useQueryStore } from "@/stores/queryStore";
 import { useConnectionStore } from "@/stores/connectionStore";
@@ -1304,9 +1304,12 @@ function clearContextTarget() {
                         </LightTooltip>
                       </template>
                     </div>
-                    <SqlSearchSnippets
+                    <SqlSearchMatchSnippet
                       v-if="searchMode === 'content' && !entry.is_dir && matchesByPath.has(normalizeExternalSqlPath(entry.path))"
-                      :result="matchesByPath.get(normalizeExternalSqlPath(entry.path))!"
+                      :data-sql-file-content-snippet="entry.path"
+                      :matches="matchesByPath.get(normalizeExternalSqlPath(entry.path))!.matches"
+                      :total-matches="matchesByPath.get(normalizeExternalSqlPath(entry.path))!.totalMatches"
+                      :preview-limit="matchesByPath.get(normalizeExternalSqlPath(entry.path))!.matches.length"
                       :query="searchQuery"
                       :depth="depth + 1"
                       @select-match="handleSearchMatch(folder.path, entry.path, $event)"

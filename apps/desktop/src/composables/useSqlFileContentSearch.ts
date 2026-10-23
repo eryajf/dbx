@@ -1,7 +1,6 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import * as api from "@/lib/backend/api";
-import type { SqlFileContentSearchResult, SqlFileEntry } from "@/lib/backend/api";
-import { normalizeExternalSqlPath } from "@/lib/sql/sqlFileOpen";
+import type { SqlFileContentMatch, SqlFileEntry } from "@/lib/backend/api";
+import { contentMatchPathSet, searchSqlFileContents, SQL_FILE_CONTENT_SEARCH_DEBOUNCE_MS, type SqlFileContentSearchResult } from "@/lib/sql/sqlFileContentSearch";
 import { getSqlFileFilter } from "@/lib/sqlFile/sqlFileFolders";
 
 interface SearchFolder {
@@ -37,7 +36,7 @@ export function useSqlFileContentSearch(getQuery: () => string, getFolders: () =
     pending = null;
     running = true;
     try {
-      const response = await api.searchSqlFileContents(request.roots, request.query, request.fileFilter);
+      const response = await searchSqlFileContents(request);
       if (!disposed && request.generation === generation) {
         resultQuery = request.query;
         resultFileFilter = request.fileFilter;
@@ -75,7 +74,7 @@ export function useSqlFileContentSearch(getQuery: () => string, getFolders: () =
       timer = setTimeout(() => {
         pending = { generation: current, roots: folders.map((folder) => folder.path), query, fileFilter };
         void runPending();
-      }, 250);
+      }, SQL_FILE_CONTENT_SEARCH_DEBOUNCE_MS);
     },
     { immediate: true, flush: "sync" },
   );
@@ -87,8 +86,8 @@ export function useSqlFileContentSearch(getQuery: () => string, getFolders: () =
     pending = null;
   });
 
-  const matchesByPath = computed(() => new Map((result.value?.files ?? []).map((file) => [normalizeExternalSqlPath(file.path), file])));
-  const matchingPaths = computed(() => new Set(matchesByPath.value.keys()));
+  const matchesByPath = computed(() => result.value?.matchesByPath ?? new Map<string, SqlFileContentMatch>());
+  const matchingPaths = computed(() => contentMatchPathSet(result.value));
   const incomplete = computed(() => !!result.value && (result.value.truncated || result.value.skippedFiles.length > 0));
   const skippedCount = computed(() => result.value?.skippedFiles.length ?? 0);
   const skippedFiles = computed(() => result.value?.skippedFiles ?? []);
