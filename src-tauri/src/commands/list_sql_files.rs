@@ -200,11 +200,20 @@ fn scan_sql_files_with_directories(
         std::fs::read_dir(dir).map_err(|error| format!("Failed to read SQL folder '{}': {error}", dir.display()))?;
 
     for entry in dir_entries {
-        let entry =
-            entry.map_err(|error| format!("Failed to read entry in SQL folder '{}': {error}", dir.display()))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("Failed to inspect SQL folder entry '{}': {error}", entry.path().display()))?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                log::warn!("Failed to read entry in SQL folder '{}': {error}", dir.display());
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                log::warn!("Failed to inspect SQL folder entry '{}': {error}", entry.path().display());
+                continue;
+            }
+        };
         let path = entry.path();
         let name = match path.file_name().and_then(|n| n.to_str()) {
             Some(name) => name.to_string(),
@@ -215,9 +224,24 @@ fn scan_sql_files_with_directories(
             if is_pruned_dir(&name) {
                 continue;
             }
-            let children =
-                scan_sql_files_with_directories(&path, depth + 1, visited, file_filter, include_empty_directories)?;
-            if include_empty_directories || !children.is_empty() {
+            // An unreadable child (permissions, transient network-share error)
+            // must not fail the whole root scan, but it also must not disappear:
+            // callers prune persisted expansion state for missing paths, so the
+            // folder entry stays visible with whatever children were produced.
+            let (children, degraded) = match scan_sql_files_with_directories(
+                &path,
+                depth + 1,
+                visited,
+                file_filter,
+                include_empty_directories,
+            ) {
+                Ok(children) => (children, false),
+                Err(error) => {
+                    log::warn!("Skipped unreadable SQL folder '{}': {error}", path.display());
+                    (Vec::new(), true)
+                }
+            };
+            if degraded || include_empty_directories || !children.is_empty() {
                 entries.push(SqlFileEntry { name, path: path.to_string_lossy().to_string(), is_dir: true, children });
             }
         } else if file_type.is_file() && file_filter.is_match(&name) {
@@ -431,6 +455,38 @@ mod tests {
         names.sort();
 
         assert_eq!(names, vec!["nested.SQL", "root.sql"]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_sql_files_keeps_root_files_when_a_child_folder_is_unreadable() {
+        let root = std::env::temp_dir().join(format!("dbx-sql-folder-degraded-{}", uuid::Uuid::new_v4()));
+        let locked = root.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(root.join("root.sql"), "SELECT 1;").unwrap();
+        std::fs::write(locked.join("hidden.sql"), "SELECT 2;").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+
+        let mut visited = HashSet::new();
+        let filter = compile_file_filter(DEFAULT_FILE_FILTER).unwrap();
+        // The unreadable child must not fail the root scan; whether its entry is
+        // empty (degraded) or full (root environments ignore the mode) the root
+        // files still load.
+        let entries = scan_sql_files(&root, 0, &mut visited, &filter)
+            .expect("unreadable child folder must not fail the root scan");
+        let mut names = Vec::new();
+        collect_file_names(&entries, &mut names);
+        assert!(names.contains(&"root.sql".to_string()), "names: {names:?}");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 
