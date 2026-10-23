@@ -34,7 +34,7 @@ import { useQueryEditorCompletionMetadata } from "./useQueryEditorCompletionMeta
 import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, shallowRef, computed, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { Transaction } from "@codemirror/state";
+import { EditorState as CodeMirrorEditorState, Transaction } from "@codemirror/state";
 import type { Text } from "@codemirror/state";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { search as cmSearch } from "@codemirror/search";
@@ -109,7 +109,7 @@ import { defaultKeymapForGlobalShortcuts } from "@/lib/editor/codemirrorDefaultK
 import { createQueryEditorFoldShortcutBindings, foldKeymapWithoutAllBindings } from "@/lib/editor/queryEditorFoldKeymap";
 import { createShowWhitespaceExtension } from "@/lib/editor/codemirrorShowWhitespace";
 
-import { clampEditorFontSize, createEditorWheelZoomGestureGuard, createEditorZoomCommitScheduler, fontSizeFromGestureScale, fontSizeFromWheelDelta } from "@/lib/editor/editorZoom";
+import { clampEditorFontSize, createEditorWheelZoomController, createEditorZoomCommitScheduler, fontSizeFromGestureScale } from "@/lib/editor/editorZoom";
 import { buildSqlShortcutExecutionSql, enabledSqlShortcutActions, resolveSqlShortcutForDatabase, uniqueSqlShortcutBindings } from "@/lib/sql/sqlShortcutActions";
 import { resolveSqlShortcutTableToken } from "@/lib/sql/sqlShortcutTableTarget";
 import { normalizeShortcutSettings, shortcutToCodeMirrorKey } from "@/lib/editor/shortcutRegistry";
@@ -597,7 +597,7 @@ const zoomCommitScheduler = createEditorZoomCommitScheduler((fontSize) => {
   if (settingsStore.editorSettings.fontSize === fontSize) return;
   settingsStore.updateEditorSettings({ fontSize });
 });
-const wheelZoomGestureGuard = createEditorWheelZoomGestureGuard();
+const wheelZoom = createEditorWheelZoomController();
 
 const queryEditorAppearanceSettings = computed(() => {
   const settings = settingsStore.editorSettings;
@@ -693,6 +693,7 @@ function onEditorGestureChange(event: EditorGestureEvent) {
 function onEditorGestureEnd(event: Event) {
   event.preventDefault();
   isGestureZooming.value = false;
+  wheelZoom.holdScrollGesture(event.timeStamp);
   zoomCommitScheduler.flush(liveFontSize.value);
 }
 
@@ -2412,9 +2413,16 @@ const codeMirrorLifecycle = useQueryEditorCodeMirror({
             return handleVimDbxAction(event, currentView);
           },
           wheel(event) {
-            if (!wheelZoomGestureGuard.accepts(event)) return false;
+            if (isGestureZooming.value) {
+              if (event.ctrlKey || event.metaKey) {
+                event.preventDefault();
+                return true;
+              }
+              return false;
+            }
+            const next = wheelZoom.nextFontSize(liveFontSize.value, event);
+            if (next === null) return false;
             event.preventDefault();
-            const next = fontSizeFromWheelDelta(liveFontSize.value, event.deltaY);
             applyLiveFontSize(next);
             scheduleFontSizeCommit(next);
             return true;
@@ -2736,6 +2744,18 @@ watch(
 );
 
 watch(
+  [view, () => props.tabId, () => props.readOnly],
+  () => {
+    if (!view.value || !codeMirrorRuntime.readOnlyComp || !codeMirrorRuntime.editorViewModule) return;
+    view.value.dispatch({
+      effects: codeMirrorRuntime.readOnlyComp.reconfigure([CodeMirrorEditorState.readOnly.of(!!props.readOnly), codeMirrorRuntime.editorViewModule.EditorView.editable.of(!props.readOnly)]),
+    });
+  },
+  // Reapply after per-tab cached EditorState restoration, even when the prop stays unchanged.
+  { flush: "post" },
+);
+
+watch(
   () => props.forceWordWrap,
   () => {
     if (!view.value || !codeMirrorRuntime.wordWrapComp) return;
@@ -2774,6 +2794,7 @@ async function applyEditorAppearance() {
   }
   if (!isGestureZooming.value && !zoomCommitScheduler.hasPendingCommit() && liveFontSize.value !== ss.fontSize) {
     liveFontSize.value = ss.fontSize;
+    wheelZoom.rebase();
   }
   syncEditorFontCssVars(liveFontSize.value, ss.fontFamily);
   syncEditorDiagnosticCssVars();

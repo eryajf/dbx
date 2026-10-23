@@ -214,7 +214,7 @@ jobs:
             -o Acquire::http::Timeout=30 \
             -o Acquire::https::Timeout=30 \
             update
-          sudo timeout --kill-after=30s 10m apt-get \
+          sudo timeout --kill-after=30s 20m apt-get \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \
             -o Acquire::https::Timeout=30 \
@@ -914,7 +914,7 @@ jobs:
             -o Acquire::http::Timeout=30 \
             -o Acquire::https::Timeout=30 \
             update
-          sudo timeout --kill-after=30s 10m apt-get \
+          sudo timeout --kill-after=30s 20m apt-get \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \
             -o Acquire::https::Timeout=30 \
@@ -1015,8 +1015,17 @@ jobs:
           [[ "$ID" == ubuntu ]] || exit 0
           sudo python3 .github/scripts/configure-docker-mirror.py /etc/docker/daemon.json --validate
           timeout 30s sudo systemctl restart docker
-          timeout 15s docker info --format '{{json .RegistryConfig.Mirrors}}' \
-            | python3 -c 'import json, sys; assert any(x.rstrip("/") == "https://mirror.gcr.io" for x in json.load(sys.stdin))'
+          for attempt in {1..12}; do
+            if mirrors="$(timeout 5s docker info --format '{{json .RegistryConfig.Mirrors}}')"; then
+              printf '%s\n' "$mirrors" | python3 -c 'import json, sys; assert any(x.rstrip("/") == "https://mirror.gcr.io" for x in json.load(sys.stdin))'
+              break
+            fi
+            if ((attempt == 12)); then
+              echo '::error::Docker did not become ready after restart' >&2
+              exit 1
+            fi
+            sleep 2
+          done
 
       - name: Install system dependencies
         run: |
@@ -1026,7 +1035,7 @@ jobs:
             -o Acquire::http::Timeout=30 \
             -o Acquire::https::Timeout=30 \
             update
-          sudo timeout --kill-after=30s 10m apt-get \
+          sudo timeout --kill-after=30s 20m apt-get \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \
             -o Acquire::https::Timeout=30 \
@@ -1647,8 +1656,17 @@ jobs:
           [[ "$ID" == ubuntu ]] || exit 0
           sudo python3 .github/scripts/configure-docker-mirror.py /etc/docker/daemon.json --validate
           timeout 30s sudo systemctl restart docker
-          timeout 15s docker info --format '{{json .RegistryConfig.Mirrors}}' \
-            | python3 -c 'import json, sys; assert any(x.rstrip("/") == "https://mirror.gcr.io" for x in json.load(sys.stdin))'
+          for attempt in {1..12}; do
+            if mirrors="$(timeout 5s docker info --format '{{json .RegistryConfig.Mirrors}}')"; then
+              printf '%s\n' "$mirrors" | python3 -c 'import json, sys; assert any(x.rstrip("/") == "https://mirror.gcr.io" for x in json.load(sys.stdin))'
+              break
+            fi
+            if ((attempt == 12)); then
+              echo '::error::Docker did not become ready after restart' >&2
+              exit 1
+            fi
+            sleep 2
+          done
       - name: Setup RocketMQ server Java
         if: matrix.scenario == 'rocketmq'
         uses: actions/setup-java@v6
