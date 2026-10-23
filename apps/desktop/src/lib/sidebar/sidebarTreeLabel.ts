@@ -2,6 +2,7 @@ import type { TreeNode, DatabaseType, CustomTypeTreeMemberMeta } from "@/types/d
 import { isTreeGroupNodeType } from "@/lib/sidebar/treeNodeGroup";
 import { xuguSchemaDisplayName } from "@/lib/sidebar/xuguPublicSynonyms";
 import { elasticsearchIndexAliasLabel } from "@/lib/sidebar/elasticsearchIndexActions";
+import { supportsOracleTypeAttributeExpansion } from "@/lib/database/databaseObjectCapabilities";
 export type SidebarTreeTranslate = (key: string, values?: Record<string, number>) => string;
 
 export function sidebarTreeDisplayLabel(node: TreeNode, t: SidebarTreeTranslate, databaseType?: DatabaseType): string {
@@ -11,7 +12,7 @@ export function sidebarTreeDisplayLabel(node: TreeNode, t: SidebarTreeTranslate,
   if (node.type === "schema" && node.connectionId) {
     if (databaseType === "xugu") return xuguSchemaDisplayName(node.schema ?? node.label);
   }
-  if (node.type === "load-more") return t(node.label);
+  if (node.type === "load-more") return node.loadMore?.objectType === "INDEX" ? `${t("tree.indexes")} · ${t(node.label)}` : t(node.label);
   if (node.type === "object-browser") return t(node.label, { count: node.objectCount ?? 0 });
   // Use the canonical key for persisted trees created before this label was
   // internationalized; those nodes may still contain the old Chinese text.
@@ -24,8 +25,11 @@ export function sidebarTreeDisplayLabel(node: TreeNode, t: SidebarTreeTranslate,
   return isTreeGroupNodeType(node.type) ? t(node.label) : node.label;
 }
 
-export function sidebarTreeSecondaryValue(node: TreeNode, t: SidebarTreeTranslate): string | undefined {
-  if (node.type === "type" && node.customTypeKind) return t(`customType.kinds.${node.customTypeKind}`);
+export function sidebarTreeSecondaryValue(node: TreeNode, t: SidebarTreeTranslate, databaseType?: DatabaseType): string | undefined {
+  if (node.type === "type" && node.customTypeKind) {
+    const kindKey = supportsOracleTypeAttributeExpansion(databaseType) ? `oracleType.kinds.${node.customTypeKind in { object: true, collection: true } ? node.customTypeKind : "other"}` : `customType.kinds.${node.customTypeKind}`;
+    return t(kindKey);
+  }
   if (node.type === "type-member") return (node.meta as CustomTypeTreeMemberMeta | undefined)?.displayValue;
   if (node.type === "datafile") return node.xuguDatafilePath;
   if (node.type === "elasticsearch-index") return elasticsearchIndexAliasLabel(node);

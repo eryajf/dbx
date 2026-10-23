@@ -1,3 +1,4 @@
+import { tableColumnPasteAz as tableColumnPaste } from "./tableColumnPaste";
 import { sidebarMenuAz as sidebarMenu } from "./sidebarMenuMessages";
 import { withEnglishFallback } from "./fallback";
 import docs from "./docs/az";
@@ -61,6 +62,7 @@ const consul = {
 };
 
 export default withEnglishFallback({
+  tableColumnPaste,
   objectDependencies: {
     dependencies: "Asılılıqlar",
     dependents: "Asılı obyektlər",
@@ -502,6 +504,7 @@ export default withEnglishFallback({
     regexSearchTooltip: "Yan paneldəki adları, şərhləri və ləqəbləri JavaScript müntəzəm ifadələri ilə uyğunlaşdırın.",
     clearFilter: "Süzgəci təmizlə",
     locateTargetNotFound: "Element yan paneldə mövcud deyil. O, silinmiş və ya gizlədilmiş ola bilər.",
+    locateSqlFile: "SQL fayl siyahısında tap",
     locateActiveTab: "Yan paneldə tap",
   },
   savedSql: {
@@ -1650,6 +1653,7 @@ export default withEnglishFallback({
       searchFailed: "Axtarış uğursuz oldu və ya vaxtı bitdi. İfadəni sadələşdirib yenidən cəhd edin.",
       caseSensitive: "Böyük və kiçik hərflərə həssas",
       regex: "Müntəzəm ifadə",
+      wholeWord: "Bütöv söz",
       collapseReplace: "Əvəzetməni yığ",
       expandReplace: "Əvəzetməni genişləndir",
       prevMatch: "Əvvəlki (Shift+Enter)",
@@ -6913,6 +6917,9 @@ export default withEnglishFallback({
     searching: "Fayl məzmununda axtarılır...",
     searchIncomplete: "Axtarış natamamdır: {skipped} fayl və ya qovluq ötürüldü; uyğun fraqmentlər qısaldıla bilər.",
     searchFailed: "Məzmun axtarışı uğursuz oldu: {message}",
+    sortManual: "Əl ilə sıralama",
+    sortManualHint: "Sıralamaq üçün eyni qovluqdakı faylları sürükləyin. Axtarış zamanı sürükləmə deaktivdir.",
+    sortSaveFailed: "Fayl sıralama seçimini saxlamaq mümkün olmadı.",
     folderNameInvalid: "Yol deyil, tək qovluq adı daxil edin.",
     folderNameExcluded: "Bu qovluq adı SQL fayl brauzerindən istisna edilib.",
     folderDepthExceeded: "Maksimum qovluq dərinliyinə çatılıb.",
@@ -9126,8 +9133,20 @@ export default withEnglishFallback({
     runDirectoryPatternHint:
       "Təyinat qovluğu daxilində nisbi yol. {'{'}schedule{'}'}, {'{'}date{'}'}, {'{'}timestamp{'}'} və {'{'}runId{'}'} şablonlarından istifadə edin. Standart şablona əlavə təcrid üçün {'{'}runId{'}'} daxildir. Nümunə: {'{'}schedule{'}'}/{'{'}date{'}'}/{'{'}timestamp{'}'}-{'{'}runId{'}'}",
     runDirectoryPatternInvalid: ". və ya .. hissələri olmayan nisbi yoldan istifadə edin.",
-    compression: "Sıxılma",
+    backupFormat: "Ehtiyat nüsxə formatı",
     compressionGzip: "Gzip (.sql.gz)",
+    formatSql: "SQL (.sql)",
+    formatNb3: "Navicat ehtiyat nüsxəsi (.nb3)",
+    formatNb3Hint: "MySQL və PostgreSQL üçün Navicat ehtiyat nüsxə formatı. DBX onu istənilən SQL ehtiyat nüsxəsi kimi bərpa edir.",
+    restoreFromFile: "Fayldan bərpa et",
+    restoreFromFileHint: "İstənilən yerdən .sql, .sql.gz və ya .nb3 ehtiyat nüsxə faylını bərpa edin",
+    importBackup: "Ehtiyat nüsxəni idxal et",
+    importBackupHint: "DBX xaricində yaradılmış ehtiyat nüsxə fayllarını (məsələn, Navicat .nb3 arxivləri) tarixçəyə əlavə edin",
+    importedTrigger: "İdxal edilib",
+    externalFile: "Xarici fayl",
+    backupsImported: "Tarixçəyə {count} ehtiyat nüsxə əlavə edildi",
+    deleteImportedConfirm: "{count} idxal edilmiş ehtiyat nüsxə tarixçədən silinsin? Fayllar diskdə qalır.",
+    importedFilesKept: "İdxal edilmiş ehtiyat nüsxə faylları yalnız tarixçədən silinir və diskdə qalır.",
     searchConnections: "Əlaqələrdə axtarış…",
     noMatchingConnections: "Uyğun əlaqə yoxdur",
     connectionsSelected: "{count} əlaqə seçilib",

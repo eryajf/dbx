@@ -1,3 +1,4 @@
+import { tableColumnPasteId as tableColumnPaste } from "./tableColumnPaste";
 import { sidebarMenuId as sidebarMenu } from "./sidebarMenuMessages";
 import { withEnglishFallback } from "./fallback";
 import docs from "./docs/id";
@@ -7,6 +8,7 @@ import { sqlServerTraceMessages as sqlServerTrace } from "./sqlServerTraceMessag
 import { meilisearchManagementId } from "./meilisearchManagement";
 
 export default withEnglishFallback({
+  tableColumnPaste,
   objectDependencies: {
     dependencies: "Dependensi",
     dependents: "Objek yang bergantung",
@@ -707,6 +709,7 @@ export default withEnglishFallback({
     regexSearchTooltip: "Cocokkan nama, komentar, dan alias di bilah sisi dengan ekspresi reguler JavaScript.",
     clearFilter: "Bersihkan filter",
     locateTargetNotFound: "Item tidak tersedia di bilah sisi. Item mungkin telah dihapus atau disembunyikan.",
+    locateSqlFile: "Temukan dalam daftar file SQL",
     locateActiveTab: "Cari di bilah sisi",
   },
   savedSql: {
@@ -1918,6 +1921,7 @@ export default withEnglishFallback({
       searchFailed: "Pencarian gagal atau kehabisan waktu. Sederhanakan ekspresi dan coba lagi.",
       caseSensitive: "Case sensitive",
       regex: "Ekspresi reguler",
+      wholeWord: "Kata utuh",
       collapseReplace: "Ciutkan ganti",
       expandReplace: "Perluas ganti",
       prevMatch: "Sebelumnya (Shift+Enter)",
@@ -7614,6 +7618,9 @@ export default withEnglishFallback({
     searching: "Mencari isi file...",
     searchIncomplete: "Pencarian tidak lengkap: {skipped} file atau folder dilewati; cuplikan yang cocok mungkin terpotong.",
     searchFailed: "Pencarian isi gagal: {message}",
+    sortManual: "Urutan manual",
+    sortManualHint: "Seret file dalam folder yang sama untuk mengubah urutan. Penyeretan dinonaktifkan saat mencari.",
+    sortSaveFailed: "Tidak dapat menyimpan preferensi urutan file.",
     folderNameInvalid: "Masukkan satu nama folder, bukan jalur.",
     folderNameExcluded: "Nama folder ini dikecualikan dari penjelajah file SQL.",
     folderDepthExceeded: "Kedalaman folder maksimum telah tercapai.",
@@ -9963,8 +9970,20 @@ export default withEnglishFallback({
     runDirectoryPattern: "Template direktori proses",
     runDirectoryPatternHint: "Path relatif di bawah direktori tujuan. Gunakan {'{'}schedule{'}'}, {'{'}date{'}'}, {'{'}timestamp{'}'}, dan {'{'}runId{'}'}. Default menyertakan {'{'}runId{'}'} untuk isolasi tambahan. Contoh: {'{'}schedule{'}'}/{'{'}date{'}'}/{'{'}timestamp{'}'}-{'{'}runId{'}'}",
     runDirectoryPatternInvalid: "Gunakan path relatif tanpa segmen . atau ..",
-    compression: "Kompresi",
+    backupFormat: "Format cadangan",
     compressionGzip: "Gzip (.sql.gz)",
+    formatSql: "SQL (.sql)",
+    formatNb3: "Cadangan Navicat (.nb3)",
+    formatNb3Hint: "Format cadangan Navicat untuk MySQL dan PostgreSQL. DBX memulihkannya seperti cadangan SQL lainnya.",
+    restoreFromFile: "Pulihkan dari file",
+    restoreFromFileHint: "Pulihkan file cadangan .sql, .sql.gz, atau .nb3 dari lokasi mana pun",
+    importBackup: "Impor cadangan",
+    importBackupHint: "Tambahkan file cadangan yang dibuat di luar DBX, seperti arsip Navicat .nb3, ke riwayat cadangan",
+    importedTrigger: "Diimpor",
+    externalFile: "File eksternal",
+    backupsImported: "{count} cadangan ditambahkan ke riwayat",
+    deleteImportedConfirm: "Hapus {count} cadangan yang diimpor dari riwayat? File tetap ada di disk.",
+    importedFilesKept: "Cadangan yang diimpor hanya dihapus dari riwayat; file tetap ada di disk.",
     searchConnections: "Cari koneksi…",
     noMatchingConnections: "Tidak ada koneksi yang cocok",
     connectionsSelected: "{count} koneksi dipilih",

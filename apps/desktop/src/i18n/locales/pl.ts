@@ -1,3 +1,4 @@
+import { tableColumnPastePl as tableColumnPaste } from "./tableColumnPaste";
 import { withEnglishFallback } from "./fallback";
 import { redisGroupingPl as redisGrouping } from "./redisGrouping";
 import docs from "./docs/pl";
@@ -62,6 +63,7 @@ const consul = {
 };
 
 export default withEnglishFallback({
+  tableColumnPaste,
   objectDependencies: {
     dependencies: "Zależności",
     dependents: "Obiekty zależne",
@@ -771,6 +773,7 @@ export default withEnglishFallback({
     regexSearchTooltip: "Dopasowuj nazwy, komentarze i aliasy w panelu bocznym przy użyciu wyrażeń regularnych JavaScript.",
     clearFilter: "Wyczyść filtr",
     locateTargetNotFound: "Pozycja nie jest dostępna w panelu bocznym. Mogła zostać usunięta lub ukryta.",
+    locateSqlFile: "Znajdź na liście plików SQL",
     locateActiveTab: "Znajdź na pasku bocznym",
   },
   savedSql: {
@@ -1961,6 +1964,7 @@ export default withEnglishFallback({
       replaceAll: "Zamień wszystkie",
       caseSensitive: "Uwzględniaj wielkość liter",
       regex: "Wyrażenie regularne",
+      wholeWord: "Całe słowo",
       collapseReplace: "Zwiń pole zamiany",
       expandReplace: "Rozwiń pole zamiany",
       prevMatch: "Poprzednie (Shift+Enter)",
@@ -7668,6 +7672,9 @@ export default withEnglishFallback({
     searching: "Wyszukiwanie w treści plików...",
     searchIncomplete: "Wyszukiwanie niepełne: pominięto {skipped} plików lub folderów; pasujące fragmenty mogą być ucięte.",
     searchFailed: "Wyszukiwanie w treści nie powiodło się: {message}",
+    sortManual: "Kolejność ręczna",
+    sortManualHint: "Przeciągaj pliki w tym samym folderze, aby zmienić kolejność. Przeciąganie jest wyłączone podczas wyszukiwania.",
+    sortSaveFailed: "Nie udało się zapisać ustawienia sortowania plików.",
     title: "Aktualizacja zabezpieczeń danych",
     storageHelp: "Są to rzeczywiste pliki .sql na dysku otwarte przez „Otwórz folder”. Zmiany zapisywane są bezpośrednio w pliku źródłowym.",
     openFolder: "Otwórz folder",
@@ -9990,8 +9997,20 @@ export default withEnglishFallback({
     runDirectoryPattern: "Szablon katalogu uruchomienia",
     runDirectoryPatternHint: "Ścieżka względna wewnątrz katalogu docelowego. Użyj {'{'}schedule{'}'}, {'{'}date{'}'}, {'{'}timestamp{'}'} i {'{'}runId{'}'}. Domyślnie zawiera {'{'}runId{'}'} dla izolacji. Przykład: {'{'}schedule{'}'}/{'{'}date{'}'}/{'{'}timestamp{'}'}-{'{'}runId{'}'}",
     runDirectoryPatternInvalid: "Użyj ścieżki względnej bez segmentów . lub ..",
-    compression: "Kompresja",
+    backupFormat: "Format kopii zapasowej",
     compressionGzip: "Gzip (.sql.gz)",
+    formatSql: "SQL (.sql)",
+    formatNb3: "Kopia zapasowa Navicat (.nb3)",
+    formatNb3Hint: "Format kopii zapasowej Navicat dla MySQL i PostgreSQL. DBX przywraca go jak każdą kopię SQL.",
+    restoreFromFile: "Przywróć z pliku",
+    restoreFromFileHint: "Przywróć plik kopii zapasowej .sql, .sql.gz lub .nb3 z dowolnego miejsca",
+    importBackup: "Importuj kopię zapasową",
+    importBackupHint: "Dodaj do historii pliki kopii zapasowych utworzone poza DBX, np. archiwa .nb3 z Navicat",
+    importedTrigger: "Zaimportowana",
+    externalFile: "Plik zewnętrzny",
+    backupsImported: "Dodano {count} kopii zapasowych do historii",
+    deleteImportedConfirm: "Usunąć {count} zaimportowanych kopii zapasowych z historii? Pliki pozostaną na dysku.",
+    importedFilesKept: "Zaimportowane kopie zapasowe są tylko usuwane z historii; pliki pozostają na dysku.",
     searchConnections: "Szukaj połączeń…",
     noMatchingConnections: "Brak pasujących połączeń",
     connectionsSelected: "Wybrane połączenia: {count}",
