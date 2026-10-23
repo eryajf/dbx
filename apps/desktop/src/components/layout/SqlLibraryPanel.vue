@@ -430,11 +430,7 @@ function persistTreeState() {
   saveSavedSqlTreeState(new Map(savedSqlStore.allFolders.map((folder) => [folder.id, !collapsedFolders.value.has(folder.id)])));
 }
 
-watch(
-  () => [collapseDefaultsSeeded.value, savedSqlStore.allFolders.map((folder) => [folder.id, !collapsedFolders.value.has(folder.id)] as const)] as const,
-  persistTreeState,
-  { immediate: true },
-);
+watch(() => [collapseDefaultsSeeded.value, savedSqlStore.allFolders.map((folder) => [folder.id, !collapsedFolders.value.has(folder.id)] as const)] as const, persistTreeState, { immediate: true });
 onBeforeUnmount(persistTreeState);
 
 function collapseAllFolders() {

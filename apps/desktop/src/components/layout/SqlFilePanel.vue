@@ -58,10 +58,7 @@ function persistTreeState() {
   if (!foldersInitialized || disposed) return;
   saveSqlFileTreeState(folders.value.map((folder) => ({ path: folder.path, collapsed: folder.collapsed, expanded: [...folder.expanded] })));
 }
-watch(
-  () => folders.value.map((folder) => ({ path: folder.path, collapsed: folder.collapsed, expanded: [...folder.expanded] })),
-  persistTreeState,
-);
+watch(() => folders.value.map((folder) => ({ path: folder.path, collapsed: folder.collapsed, expanded: [...folder.expanded] })), persistTreeState);
 onBeforeUnmount(() => {
   persistTreeState();
   disposed = true;

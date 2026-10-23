@@ -196,8 +196,8 @@ fn scan_sql_files_with_directories(
     let mut entries = Vec::new();
     // A partial scan must not be presented as a successful snapshot: callers
     // use missing paths to prune persisted folder expansion state.
-    let dir_entries = std::fs::read_dir(dir)
-        .map_err(|error| format!("Failed to read SQL folder '{}': {error}", dir.display()))?;
+    let dir_entries =
+        std::fs::read_dir(dir).map_err(|error| format!("Failed to read SQL folder '{}': {error}", dir.display()))?;
 
     for entry in dir_entries {
         let entry =
