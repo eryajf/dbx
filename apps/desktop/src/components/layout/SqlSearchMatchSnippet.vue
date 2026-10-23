@@ -70,10 +70,13 @@ const vCenterSearchMatch: ObjectDirective<HTMLElement> = {
   },
 };
 
-watch(() => props.query, () => {
-  expanded.value = false;
-  emit("expandedChange", false);
-});
+watch(
+  () => props.query,
+  () => {
+    expanded.value = false;
+    emit("expandedChange", false);
+  },
+);
 
 function toggleExpanded() {
   expanded.value = !expanded.value;

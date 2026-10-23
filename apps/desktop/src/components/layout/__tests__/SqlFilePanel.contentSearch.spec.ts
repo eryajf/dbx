@@ -79,11 +79,24 @@ function typeQuery(host: HTMLElement, value: string) {
 
 function result(path: string, lines = [3], column = 8): SqlFileContentSearchResult {
   return {
-    files: [{ path, totalMatches: lines.length, matches: lines.map((lineNumber) => ({
-      lineNumber, column, lineText: "SELECT needle FROM t",
-      segments: [{ text: "SELECT ", matched: false }, { text: "needle", matched: true }, { text: " FROM t", matched: false }],
-    })) }],
-    skippedFiles: [], truncated: false,
+    files: [
+      {
+        path,
+        totalMatches: lines.length,
+        matches: lines.map((lineNumber) => ({
+          lineNumber,
+          column,
+          lineText: "SELECT needle FROM t",
+          segments: [
+            { text: "SELECT ", matched: false },
+            { text: "needle", matched: true },
+            { text: " FROM t", matched: false },
+          ],
+        })),
+      },
+    ],
+    skippedFiles: [],
+    truncated: false,
   };
 }
 
@@ -237,7 +250,7 @@ describe("SqlFilePanel content search", () => {
     expect(host.querySelector('[data-sql-file-path="/sql/queries/02_orders.sql"]')).toBeNull();
     await changeSearchMode(host, "name");
     expect(host.querySelector('[data-sql-file-path="/sql/queries/02_orders.sql"]')).not.toBeNull();
-    expect(host.querySelector('[data-sql-file-content-snippet]')).toBeNull();
+    expect(host.querySelector("[data-sql-file-content-snippet]")).toBeNull();
   });
 
   it("reports a failed content search without silently matching names", async () => {
@@ -247,7 +260,7 @@ describe("SqlFilePanel content search", () => {
     typeQuery(host, "orders");
     await vi.waitFor(() => expect(host.textContent).toContain("Search unavailable"));
     expect(host.querySelector('[data-sql-file-path="/sql/queries/02_orders.sql"]')).toBeNull();
-    expect(host.querySelector('[data-sql-file-empty-search]')).toBeNull();
+    expect(host.querySelector("[data-sql-file-empty-search]")).toBeNull();
   });
 
   it("defaults to name filtering without scanning, including outside the desktop runtime", async () => {

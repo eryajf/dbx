@@ -151,5 +151,4 @@ describe("SqlLibrarySearchSnippet", () => {
     await nextTick();
     expect(host.querySelectorAll("mark")).toHaveLength(100);
   });
-
 });

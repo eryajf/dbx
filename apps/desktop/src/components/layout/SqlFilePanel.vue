@@ -67,7 +67,19 @@ const fileFilterRegexExample = "(?i)[.](sql|ddl|sh|py)$";
 const searchText = ref("");
 const searchMode = ref<SqlFileSearchMode>("name");
 const searchQuery = computed(() => searchText.value.trim().toLowerCase());
-const { searching, error: searchError, matchesByPath, matchingPaths, incomplete: searchIncomplete, skippedCount, skippedFiles, truncated: searchTruncated } = useSqlFileContentSearch(() => searchMode.value === "content" ? searchQuery.value : "", () => folders.value);
+const {
+  searching,
+  error: searchError,
+  matchesByPath,
+  matchingPaths,
+  incomplete: searchIncomplete,
+  skippedCount,
+  skippedFiles,
+  truncated: searchTruncated,
+} = useSqlFileContentSearch(
+  () => (searchMode.value === "content" ? searchQuery.value : ""),
+  () => folders.value,
+);
 const searchIncompleteHelp = computed(() => {
   const reasonKeys: Record<string, string> = {
     tooLarge: "sqlFileTree.searchSkippedTooLarge",
@@ -1130,7 +1142,15 @@ function clearContextTarget() {
         </Select>
         <div class="relative min-w-0 flex-1">
           <Search class="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
-          <input data-sql-file-search v-model="searchText" autocapitalize="off" autocorrect="off" spellcheck="false" class="w-full h-6 pl-7 pr-6 text-[13px] rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring" :placeholder="t(searchMode === 'name' ? 'sqlFileTree.searchPlaceholder' : 'sqlFileTree.searchContentPlaceholder')" />
+          <input
+            data-sql-file-search
+            v-model="searchText"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            class="w-full h-6 pl-7 pr-6 text-[13px] rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            :placeholder="t(searchMode === 'name' ? 'sqlFileTree.searchPlaceholder' : 'sqlFileTree.searchContentPlaceholder')"
+          />
           <button v-if="searchText" type="button" class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" @click="searchText = ''">
             <X class="h-3 w-3" />
           </button>

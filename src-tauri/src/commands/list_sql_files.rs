@@ -263,7 +263,10 @@ fn scan_sql_files_with_diagnostics(
         Ok(entries) => entries,
         Err(_) => {
             if let Some(skipped) = skipped_files.as_deref_mut() {
-                skipped.push(SkippedSqlSearchFile { path: dir.to_string_lossy().into_owned(), reason: "unreadable".to_string() });
+                skipped.push(SkippedSqlSearchFile {
+                    path: dir.to_string_lossy().into_owned(),
+                    reason: "unreadable".to_string(),
+                });
             }
             return entries;
         }
@@ -274,7 +277,10 @@ fn scan_sql_files_with_diagnostics(
             Ok(entry) => entry,
             Err(_) => {
                 if let Some(skipped) = skipped_files.as_deref_mut() {
-                    skipped.push(SkippedSqlSearchFile { path: dir.to_string_lossy().into_owned(), reason: "unreadable".to_string() });
+                    skipped.push(SkippedSqlSearchFile {
+                        path: dir.to_string_lossy().into_owned(),
+                        reason: "unreadable".to_string(),
+                    });
                 }
                 continue;
             }
@@ -389,14 +395,16 @@ fn search_context(text: &str, line_number: usize) -> Option<SqlFileSearchContext
     })
 }
 
-fn search_snippet(line: &str, query: &str, first_match: usize, first_match_end: usize) -> (String, Vec<SqlFileSearchSegment>) {
+fn search_snippet(
+    line: &str,
+    query: &str,
+    first_match: usize,
+    first_match_end: usize,
+) -> (String, Vec<SqlFileSearchSegment>) {
     let first_match_char = line[..first_match].chars().count();
     let start_char = first_match_char.saturating_sub(20);
     let start = line.char_indices().nth(start_char).map_or(line.len(), |(offset, _)| offset);
-    let end = line[start..]
-        .char_indices()
-        .nth(MAX_SEARCH_LINE_CHARS)
-        .map_or(line.len(), |(offset, _)| start + offset);
+    let end = line[start..].char_indices().nth(MAX_SEARCH_LINE_CHARS).map_or(line.len(), |(offset, _)| start + offset);
     let snippet = &line[start..end];
     let lower = snippet.to_lowercase();
     let mut segments = Vec::new();
@@ -521,7 +529,9 @@ fn search_sql_entries(
                     result.files.push(file);
                 }
             }
-            Err(reason) => result.skipped_files.push(SkippedSqlSearchFile { path: entry.path, reason: reason.to_string() }),
+            Err(reason) => {
+                result.skipped_files.push(SkippedSqlSearchFile { path: entry.path, reason: reason.to_string() })
+            }
         }
     }
 }
@@ -704,7 +714,12 @@ mod tests {
     #[test]
     fn content_search_groups_matching_lines_and_uses_utf16_editor_columns() {
         let mut remaining = MAX_SEARCH_MATCHES;
-        let result = search_sql_text("query.sql".into(), "-- context\r\n😀İ needle needle\r\nSELECT 1", "needle", &mut remaining);
+        let result = search_sql_text(
+            "query.sql".into(),
+            "-- context\r\n😀İ needle needle\r\nSELECT 1",
+            "needle",
+            &mut remaining,
+        );
         assert_eq!(result.total_matches, 1);
         assert_eq!(result.matches.len(), 1);
         assert_eq!(result.matches[0].line_number, 2);
@@ -741,7 +756,15 @@ mod tests {
         assert_eq!(snippet.column, 251);
         assert!(snippet.line_text.starts_with("..."));
         assert!(snippet.line_text.chars().count() <= MAX_SEARCH_LINE_CHARS + 6);
-        assert_eq!(snippet.segments.iter().filter(|segment| segment.matched).map(|segment| segment.text.as_str()).collect::<Vec<_>>(), vec!["needle"]);
+        assert_eq!(
+            snippet
+                .segments
+                .iter()
+                .filter(|segment| segment.matched)
+                .map(|segment| segment.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["needle"]
+        );
     }
 
     #[tokio::test]
@@ -765,7 +788,9 @@ mod tests {
             vec![root_string.clone(), root_string],
             Some(r"(?i)(\.sql$|^README$)".into()),
             "请求方式".into(),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert_eq!(result.files.len(), 4);
         assert!(result.files.iter().all(|file| file.total_matches == 1));
         assert_eq!(result.skipped_files.len(), 1);

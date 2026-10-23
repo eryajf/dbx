@@ -44,7 +44,10 @@ function visibleFiles(host: HTMLElement) {
   return [...host.querySelectorAll("[data-sql-library-file]")].map((row) => row.getAttribute("data-sql-library-file"));
 }
 afterEach(() => {
-  for (const { app, host } of mounted.splice(0)) { app.unmount(); host.remove(); }
+  for (const { app, host } of mounted.splice(0)) {
+    app.unmount();
+    host.remove();
+  }
   vi.restoreAllMocks();
 });
 
@@ -65,7 +68,7 @@ describe("SQL library search scopes", () => {
     store.folders = [{ id: "folder", connectionId: "", name: "needle", createdAt: timestamp, updatedAt: timestamp }];
     store.files.push({ ...file("unrelated", "unrelated.sql", "SELECT 1"), folderId: "folder" });
     load.mockImplementation(async () => {
-      store.files = store.files.map((entry) => entry.id === "body" ? { ...entry, sql: "SELECT needle", sqlLoaded: true } : entry);
+      store.files = store.files.map((entry) => (entry.id === "body" ? { ...entry, sql: "SELECT needle", sqlLoaded: true } : entry));
     });
     await changeSearchMode(host, "content");
     expect(load).not.toHaveBeenCalled();
@@ -82,7 +85,12 @@ describe("SQL library search scopes", () => {
   it("shows pending and incomplete states, allows retry, and does not claim no matches", async () => {
     const { host, store, load } = await mountPanel();
     let complete!: () => void;
-    load.mockImplementationOnce(() => new Promise<void>((resolve) => { complete = resolve; }));
+    load.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          complete = resolve;
+        }),
+    );
     await changeSearchMode(host, "content");
     await typeQuery(host, "needle");
     expect(host.textContent).toContain(i18n.global.t("sqlFileTree.searching"));

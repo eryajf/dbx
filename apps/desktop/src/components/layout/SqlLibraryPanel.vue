@@ -110,7 +110,9 @@ async function loadSearchContent() {
 
 watch(
   () => [searchMode.value, searchQuery.value, unloadedSearchFiles.value.map((file) => file.id).join("\n")],
-  () => { void loadSearchContent(); },
+  () => {
+    void loadSearchContent();
+  },
 );
 
 // Sort mode: "folder" (manual sibling order) or "date" (updated date among siblings)
