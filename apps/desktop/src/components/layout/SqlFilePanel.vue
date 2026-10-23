@@ -783,7 +783,12 @@ const visibleItems = computed<VisibleItem[]>(() => {
   return items;
 });
 
-const { source: draggedFile, target: fileDropTarget, start: startFileDrag, cancel: cancelFileDrag } = useSqlFileReorder({
+const {
+  source: draggedFile,
+  target: fileDropTarget,
+  start: startFileDrag,
+  cancel: cancelFileDrag,
+} = useSqlFileReorder({
   tree: fileTree,
   enabled: () =>
     !searchQuery.value &&
@@ -802,7 +807,13 @@ const { source: draggedFile, target: fileDropTarget, start: startFileDrag, cance
   drop: (source, target) => {
     // Re-check the current tree; a refresh or mutation may have removed a node.
     const siblings = visibleItems.value.filter((item) => item.type === "file" && item.folder.path === source.root && sqlFileParentPath(item.path) === sqlFileParentPath(source.path));
-    const next = reorderSqlFiles(manualOrder.value, siblings.map((item) => item.path), source.path, target.path, target.position);
+    const next = reorderSqlFiles(
+      manualOrder.value,
+      siblings.map((item) => item.path),
+      source.path,
+      target.path,
+      target.position,
+    );
     if (!next) return;
     if (!saveSqlFileOrder(next)) {
       toast(t("sqlFileTree.sortSaveFailed"), 5000);
@@ -1476,7 +1487,11 @@ function clearContextTarget() {
                       :data-sql-file-root="folder.path"
                       :aria-current="activeKey === nodeKey(folder.path, entry.is_dir ? 'dir' : 'file', entry.path) ? 'true' : undefined"
                       class="relative flex cursor-default select-none items-center gap-1 px-2 py-1 text-sm"
-                      :class="[draggedFile?.root === folder.path && draggedFile.path === entry.path ? 'opacity-50' : '', entry.is_dir ? 'rounded-sm' : 'rounded-none', isPathHighlighted(folder.path, entry.is_dir ? 'dir' : 'file', entry.path) ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/40']"
+                      :class="[
+                        draggedFile?.root === folder.path && draggedFile.path === entry.path ? 'opacity-50' : '',
+                        entry.is_dir ? 'rounded-sm' : 'rounded-none',
+                        isPathHighlighted(folder.path, entry.is_dir ? 'dir' : 'file', entry.path) ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/40',
+                      ]"
                       :style="{ paddingLeft: depth * 16 + 8 + 'px' }"
                       role="treeitem"
                       :id="visibleRowIds.get(folder)?.get(entry.path)"

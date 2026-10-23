@@ -11,12 +11,7 @@ interface DropTarget extends FileRow {
   position: "before" | "after";
 }
 
-export function useSqlFileReorder(options: {
-  tree: Ref<HTMLElement | null>;
-  enabled: () => boolean;
-  files: () => FileRow[];
-  drop: (source: FileRow, target: DropTarget) => void;
-}) {
+export function useSqlFileReorder(options: { tree: Ref<HTMLElement | null>; enabled: () => boolean; files: () => FileRow[]; drop: (source: FileRow, target: DropTarget) => void }) {
   const source = ref<FileRow | null>(null);
   const target = ref<DropTarget | null>(null);
   let pending: (FileRow & { x: number; y: number }) | null = null;

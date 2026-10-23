@@ -18,7 +18,10 @@ export function getSqlFileOrder(): SqlFileOrder {
     for (const [directory, paths] of Object.entries(stored.directories)) {
       if (!Array.isArray(paths)) continue;
       const parent = normalizeExternalSqlPath(directory);
-      const files = paths.filter((path): path is string => typeof path === "string" && !!path.trim()).map(normalizeExternalSqlPath).filter((path) => sqlFileParentPath(path) === parent);
+      const files = paths
+        .filter((path): path is string => typeof path === "string" && !!path.trim())
+        .map(normalizeExternalSqlPath)
+        .filter((path) => sqlFileParentPath(path) === parent);
       if (files.length) result[parent] = [...new Set(files)];
     }
   } catch {
@@ -43,7 +46,7 @@ export function reorderSqlFiles(order: SqlFileOrder, siblings: readonly string[]
   // Replace only visible slots so filtered-out files keep their relative order.
   const visiblePaths = new Set(visible);
   let visibleIndex = 0;
-  const merged = [...new Set(order[parent] ?? [])].map((path) => visiblePaths.has(path) ? visible[visibleIndex++] : path);
+  const merged = [...new Set(order[parent] ?? [])].map((path) => (visiblePaths.has(path) ? visible[visibleIndex++] : path));
   merged.push(...visible.slice(visibleIndex));
   const reordered = merged.filter((path) => path !== source);
   const index = reordered.indexOf(target);

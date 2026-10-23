@@ -81,8 +81,12 @@ beforeEach(() => {
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => storage.get(key) ?? null,
-    setItem: (key: string, value: string) => { storage.set(key, value); },
-    removeItem: (key: string) => { storage.delete(key); },
+    setItem: (key: string, value: string) => {
+      storage.set(key, value);
+    },
+    removeItem: (key: string) => {
+      storage.delete(key);
+    },
   });
   vi.clearAllMocks();
   mocks.list.mockResolvedValue([entry("/sql/sub", [entry("/sql/sub/child.sql")]), entry("/sql/c.sql"), entry("/sql/a.sql"), entry("/sql/b.sql")]);
