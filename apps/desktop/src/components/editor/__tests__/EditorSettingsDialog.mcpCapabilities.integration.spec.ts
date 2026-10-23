@@ -264,6 +264,7 @@ function createHarness(initial: Partial<McpGlobalPolicy> = {}) {
     editMetadataCacheMaxMemoryMb: ref(DEFAULT_DESKTOP_SETTINGS.metadata_cache_max_memory_mb),
     normalizeMetadataCacheMemoryMb: (value: number) => value,
     editShowTrayIcon: ref(false),
+    editLinuxFloatingFrameEnabled: ref(DEFAULT_DESKTOP_SETTINGS.linux_floating_frame_enabled ?? true),
     editQuitOnClose: ref(false),
     desktopCloseBehaviorResetPending: ref(false),
     editIconTheme: ref("default"),
