@@ -811,6 +811,7 @@ const editColorizeConnectionTabsScope = ref<ConnectionTabColorScope>(settingsSto
 const editTabGroupMode = ref<TabGroupMode>(settingsStore.editorSettings.tabGroupMode);
 const editTabSortMode = ref<TabSortMode>(settingsStore.editorSettings.tabSortMode);
 const editTabMaxWidth = ref<number>(settingsStore.editorSettings.tabMaxWidth);
+const editTabDoubleClickAction = ref<EditorSettings["tabDoubleClickAction"]>(settingsStore.editorSettings.tabDoubleClickAction);
 const editTabGroupRows = ref<TabGroupRowMode>(settingsStore.editorSettings.tabGroupRows);
 const editLinuxFloatingFrameEnabled = ref(settingsStore.desktopSettings.linux_floating_frame_enabled ?? true);
 const editShowTrayIcon = ref(settingsStore.desktopSettings.show_tray_icon);
@@ -1238,6 +1239,7 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     tabGroupMode: editTabGroupMode.value,
     tabSortMode: editTabSortMode.value,
     tabMaxWidth: editTabMaxWidth.value,
+    tabDoubleClickAction: editTabDoubleClickAction.value,
     tabGroupRows: editTabGroupRows.value,
     showColumnCommentsInHeader: editShowColumnCommentsInHeader.value,
     dataGridColumnCommentsInInfoArea: editDataGridColumnCommentsInInfoArea.value,
@@ -1939,6 +1941,7 @@ function syncEditorSettingsDraftFromStore() {
   editTabGroupMode.value = settingsStore.editorSettings.tabGroupMode;
   editTabSortMode.value = settingsStore.editorSettings.tabSortMode;
   editTabMaxWidth.value = settingsStore.editorSettings.tabMaxWidth;
+  editTabDoubleClickAction.value = settingsStore.editorSettings.tabDoubleClickAction;
   editTabGroupRows.value = settingsStore.editorSettings.tabGroupRows;
   editShowColumnCommentsInHeader.value = settingsStore.editorSettings.showColumnCommentsInHeader;
   editDataGridColumnCommentsInInfoArea.value = settingsStore.editorSettings.dataGridColumnCommentsInInfoArea;
@@ -2114,6 +2117,7 @@ const editorSettingsDraftRefs: EditorSettingsDraftRefMap = {
   tabGroupMode: editTabGroupMode,
   tabSortMode: editTabSortMode,
   tabMaxWidth: editTabMaxWidth,
+  tabDoubleClickAction: editTabDoubleClickAction,
   tabGroupRows: editTabGroupRows,
   showColumnCommentsInHeader: editShowColumnCommentsInHeader,
   dataGridColumnCommentsInInfoArea: editDataGridColumnCommentsInInfoArea,
@@ -2733,6 +2737,7 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editTabGroupMode.value = DEFAULT_EDITOR_SETTINGS.tabGroupMode;
     editTabSortMode.value = DEFAULT_EDITOR_SETTINGS.tabSortMode;
     editTabMaxWidth.value = DEFAULT_EDITOR_SETTINGS.tabMaxWidth;
+    editTabDoubleClickAction.value = DEFAULT_EDITOR_SETTINGS.tabDoubleClickAction;
     editTabGroupRows.value = DEFAULT_EDITOR_SETTINGS.tabGroupRows;
     editShowTrayIcon.value = DEFAULT_DESKTOP_SETTINGS.show_tray_icon;
     editLinuxFloatingFrameEnabled.value = DEFAULT_DESKTOP_SETTINGS.linux_floating_frame_enabled ?? true;
@@ -8801,6 +8806,16 @@ onUnmounted(() => {
                     </Select>
                   </div>
                   <div class="space-y-2">
+                    <Label>{{ t("settings.tabDoubleClickAction") }}</Label>
+                    <Select v-model="editTabDoubleClickAction">
+                      <SelectTrigger class="w-full"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">{{ t("settings.tabDoubleClickActionDefault") }}</SelectItem>
+                        <SelectItem value="close">{{ t("settings.tabDoubleClickActionClose") }}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div class="space-y-2">
                     <Label>{{ t("settings.tabMaxWidth") }}</Label>
                     <Select :model-value="String(editTabMaxWidth)" @update:model-value="setTabMaxWidth(Number($event))">
                       <SelectTrigger class="w-full"><SelectValue /></SelectTrigger>
@@ -8819,6 +8834,7 @@ onUnmounted(() => {
                   <p>{{ t("settings.tabOrganizationDescription") }}</p>
                   <p>{{ t("settings.tabGroupRowsDescription") }}</p>
                   <p>{{ t("settings.tabMaxWidthDescription") }}</p>
+                  <p>{{ t("settings.tabDoubleClickActionDescription") }}</p>
                 </div>
               </div>
 

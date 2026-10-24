@@ -1038,6 +1038,7 @@ export interface EditorSettings {
   tabSortMode: TabSortMode;
   /** 水平标签页最大显示宽度（像素，0 表示不限制）。 */
   tabMaxWidth: number;
+  tabDoubleClickAction: "default" | "close";
   /** 分组标签在水平标签栏中的行数：single 为分组与标签混排一行，two-row 为分组独占一行。 */
   tabGroupRows: TabGroupRowMode;
   appLayout: "separated" | "classic";
@@ -1423,6 +1424,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   tabGroupCustomizations: {},
   tabSortMode: "manual",
   tabMaxWidth: 0,
+  tabDoubleClickAction: "default",
   tabGroupRows: "single",
   appLayout: "classic",
   webLogoPosition: "left",
@@ -2103,6 +2105,7 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
     tabGroupCustomizations: normalizeTabGroupCustomizations(settings.tabGroupCustomizations),
     tabSortMode: normalizeTabSortMode(settings.tabSortMode),
     tabMaxWidth: normalizeTabMaxWidth(settings.tabMaxWidth),
+    tabDoubleClickAction: settings.tabDoubleClickAction === "close" ? "close" : "default",
     tabGroupRows: normalizeTabGroupRows(settings.tabGroupRows),
     appLayout: settings.appLayout ?? DEFAULT_EDITOR_SETTINGS.appLayout,
     webLogoPosition: normalizeWebLogoPosition(settings.webLogoPosition),
@@ -3030,6 +3033,7 @@ export const useSettingsStore = defineStore("settings", () => {
     if (partial.tabGroupCustomizations !== undefined) editorSettings.value.tabGroupCustomizations = normalizeTabGroupCustomizations(partial.tabGroupCustomizations);
     if (partial.tabSortMode !== undefined) editorSettings.value.tabSortMode = normalizeTabSortMode(partial.tabSortMode);
     if (partial.tabMaxWidth !== undefined) editorSettings.value.tabMaxWidth = normalizeTabMaxWidth(partial.tabMaxWidth);
+    if (partial.tabDoubleClickAction !== undefined) editorSettings.value.tabDoubleClickAction = partial.tabDoubleClickAction === "close" ? "close" : "default";
     if (partial.tabGroupRows !== undefined) editorSettings.value.tabGroupRows = normalizeTabGroupRows(partial.tabGroupRows);
     if (partial.appLayout !== undefined) editorSettings.value.appLayout = partial.appLayout;
     if (partial.webLogoPosition !== undefined) editorSettings.value.webLogoPosition = normalizeWebLogoPosition(partial.webLogoPosition);
