@@ -8,7 +8,8 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("apt_dir", type=Path)
 args = parser.parse_args()
 
-for pattern in ("sources.list", "sources.list.d/*.list", "sources.list.d/*.sources"):
+# Hosted runners can reference this mirror list instead of an archive URI directly.
+for pattern in ("sources.list", "sources.list.d/*.list", "sources.list.d/*.sources", "apt-mirrors.txt"):
     for source in args.apt_dir.glob(pattern):
         original = source.read_bytes()
         updated = re.sub(
