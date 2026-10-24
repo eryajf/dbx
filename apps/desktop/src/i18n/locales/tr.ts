@@ -2248,6 +2248,8 @@ export default withEnglishFallback({
     invertColumnVisibility: "Tersine çevir",
     resetColumnOrder: "Sıralamayı sıfırla",
     showAllColumns: "Tümünü göster",
+    showSelectedColumns: "Seçilenleri göster",
+    showSelectedColumnsHint: "Yalnızca mevcut aramayla eşleşen alanları göster.",
     viewOptions: "Görünüm seçenekleri",
     resultRunDisplayMode: "Sonuç sekmeleri",
     resultRunDisplayList: "Liste",

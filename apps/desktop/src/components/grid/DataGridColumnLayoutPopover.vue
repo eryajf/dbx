@@ -59,6 +59,7 @@ interface ColumnDragState {
 let columnDragState: ColumnDragState | null = null;
 
 const columnLayoutOptions = computed(() => props.grid?.filteredColumnLayoutOptions(columnSearch.value) ?? []);
+const hasColumnSearch = computed(() => columnSearch.value.trim().length > 0);
 const columnReorderEnabled = computed(() => columnSearch.value.trim() === "");
 const virtualized = computed(() => columnLayoutOptions.value.length > DATA_GRID_COLUMN_LAYOUT_VIRTUAL_THRESHOLD);
 const virtualWindow = computed(() =>
@@ -386,7 +387,7 @@ onBeforeUnmount(resetColumnDragState);
           {{ t("grid.columnVisibilityHint") }}
           {{ columnReorderEnabled ? t("grid.columnReorderHint") : t("grid.columnReorderSearchHint") }}
         </span>
-        <div class="flex items-center justify-end gap-1">
+        <div class="flex flex-wrap items-center justify-end gap-1">
           <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="(grid?.displayableColumnCount ?? 0) <= 1" @click="grid?.invertColumnVisibility()">
             {{ t("grid.invertColumnVisibility") }}
           </Button>
@@ -395,6 +396,17 @@ onBeforeUnmount(resetColumnDragState);
           </Button>
           <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="(grid?.hiddenColumnCount ?? 0) === 0" @click="grid?.showAllColumns()">
             {{ t("grid.showAllColumns") }}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-7 px-2 text-xs"
+            data-column-show-selected
+            :disabled="!grid?.showOnlyColumns || !hasColumnSearch || columnLayoutOptions.length === 0"
+            :title="t('grid.showSelectedColumnsHint')"
+            @click="grid?.showOnlyColumns?.(columnLayoutOptions.map((option) => option.index))"
+          >
+            {{ t("grid.showSelectedColumns") }}
           </Button>
         </div>
       </div>

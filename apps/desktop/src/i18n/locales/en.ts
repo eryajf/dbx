@@ -3140,6 +3140,8 @@ export default {
     invertColumnVisibility: "Invert",
     resetColumnOrder: "Reset order",
     showAllColumns: "Show all",
+    showSelectedColumns: "Show selected",
+    showSelectedColumnsHint: "Show only fields matching the current search.",
     viewOptions: "View options",
     resultRunDisplayMode: "Result tabs",
     resultRunDisplayList: "List",

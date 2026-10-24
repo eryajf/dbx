@@ -2439,6 +2439,7 @@ const {
   toggleColumnVisibility,
   hideColumns: hideColumnsInLayout,
   showAllColumns: showAllColumnsInLayout,
+  showOnlyColumns: showOnlyColumnsInLayout,
   invertColumnVisibility,
   showColumn,
   persistColumnOrder,
@@ -2939,6 +2940,16 @@ function hideSelectedColumns() {
 function showAllColumns() {
   applyColumnOrderChange(showAllColumnsInLayout);
   void nextTick(scheduleColumnLayoutRefresh);
+}
+
+function showOnlyColumns(columnIndexes: number[]) {
+  if (columnIndexes.length === 0) return;
+  applyColumnOrderChange(() => showOnlyColumnsInLayout(columnIndexes));
+  clearCellSelection();
+  void nextTick(() => {
+    scheduleColumnLayoutRefresh();
+    clampGridHorizontalScroll();
+  });
 }
 
 function getComparisonRows(): ReadonlyArray<ReadonlyArray<unknown>> {
@@ -13946,6 +13957,7 @@ defineExpose({
   toggleColumnVisibility,
   hideColumns,
   showAllColumns,
+  showOnlyColumns,
   invertColumnVisibility,
   hasCustomColumnOrder,
   moveDisplayableColumn,
