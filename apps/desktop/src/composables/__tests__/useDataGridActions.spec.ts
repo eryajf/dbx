@@ -45,6 +45,7 @@ vi.mock("@/lib/backend/api", () => ({
 vi.mock("@/lib/table/tableSelectSql", () => ({
   buildTableSelectSql: mocks.buildTableSelectSql,
   quoteTableDataIdentifier: (_databaseType: string, name: string) => `"${name}"`,
+  requiresEagerTableMetadataForDataOpen: (databaseType: string | undefined) => databaseType === "mysql" || databaseType === "postgres" || databaseType === "oracle",
 }));
 
 vi.mock("@/stores/connectionStore", () => ({
@@ -206,6 +207,28 @@ describe("useDataGridActions", () => {
     await actions.onReloadData(tab.id, tab.sql, "", "", "", 100, 0, "refresh");
     // 旧 PK 不在新列中：等待段不得把失效 PK 写回 tab 元数据
     expect(tab.tableMeta?.primaryKeys).toEqual(["id2"]);
+  });
+
+  it("keeps Kingbase table editable after manual refresh when primary keys are populated (#13128)", async () => {
+    mocks.getConfig.mockReturnValue({ id: "kingbase-1", db_type: "kingbase" });
+    const tab = tableDataTab({
+      connectionId: "kingbase-1",
+      tableMeta: {
+        schema: "lhxzztb",
+        tableName: "basestr",
+        tableType: "TABLE",
+        columns: [{ name: "id", data_type: "bigint", is_nullable: false, column_default: "nextval('lhxzztb.basestr_id_seq'::regclass)", is_primary_key: true, extra: null }],
+        primaryKeys: ["id"],
+      },
+    });
+    mocks.tabs.push(tab);
+    mocks.getColumns.mockResolvedValue([{ name: "id", data_type: "bigint", is_nullable: false, column_default: "nextval('lhxzztb.basestr_id_seq'::regclass)", is_primary_key: true, extra: null }]);
+    const actions = useDataGridActions(computed(() => tab));
+
+    await actions.onReloadData(tab.id, tab.sql, "", "", "", 100, 0, "refresh");
+
+    expect(tab.tableMeta?.primaryKeys).toEqual(["id"]);
+    await vi.waitFor(() => expect(tab.tableMetaPending).toBe(false));
   });
 
   it.each([true, false])("keeps a surviving old key read-only until index discovery settles (success=%s)", async (success) => {

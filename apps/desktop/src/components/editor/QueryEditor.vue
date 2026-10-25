@@ -65,6 +65,7 @@ import QueryEditorContextMenu, { type QueryEditorContextMenuState, type QueryEdi
 import { clipboardLineEndings, copyToClipboard, readTextFromClipboard } from "@/lib/common/clipboard";
 
 import { resolveExecutableSql, type SqlExecutionOverride } from "@/lib/sql/sqlExecutionTarget";
+import { resolveContextMenuExportSql } from "@/lib/sql/contextMenuExportSql";
 import { supportsExecutionTargetPicker, type SqlTextRange } from "@/lib/sql/sqlStatementRanges";
 import { executableStatementRangeAtCursor, executableStatementRangeCacheForDoc, executableStatementRangeStartingAt as executableStatementRangeStartingAtLine, type ExecutableStatementRangeCache } from "@/lib/sql/executableStatementRangeCache";
 import { statementNavigationTarget, type StatementNavigationDirection } from "@/lib/sql/statementNavigation";
@@ -301,6 +302,8 @@ const gotoLinePanelRef = ref<InstanceType<typeof EditorGotoLinePanel>>();
 const { intentionPopup, closeIntentionPopup, executeIntentionAction, handleSqlIntentionActions } = useQueryEditorIntentions({ props, view, sqlBehaviorDialect, focusEditor });
 
 const selectedSql = ref("");
+// 右键菜单打开处的文档位置：导出只取该处的单条语句，避免把多语句整篇文档交给后端。
+const contextMenuPosition = ref<number | null>(null);
 const {
   delimitedListOpen,
   delimitedListSelectedText,
@@ -932,6 +935,7 @@ function selectStarExpansionTargetForView(currentView: EditorViewType, position?
 
 function syncContextMenuStateAtEvent(currentView: EditorViewType, event: MouseEvent) {
   const pos = currentView.posAtCoords({ x: event.clientX, y: event.clientY });
+  contextMenuPosition.value = pos ?? currentView.state.selection.main.head;
   clearScheduledPreviewContextRefresh();
   // 预览按“右键点击处”解析当前语句（执行按光标处），右键处与光标一致时才直觉一致。
   syncContextMenuState(currentView, pos ?? undefined, pos ?? undefined);
@@ -1009,8 +1013,23 @@ function explainFromContextMenu() {
   focusEditor();
 }
 
-function exportQueryFromContextMenu(format: "csv" | "xlsx" | "txt") {
-  const sql = executableSql.value;
+// 右键导出与「执行」「预览变更」保持同一语句范围：选区优先，否则只导出右键处的单条语句。
+// 把整篇多语句文档交给导出后端会被判定为不可流式导出（#1894）。
+async function contextMenuExportSql(): Promise<string> {
+  const currentView = view.value;
+  const position = contextMenuPosition.value ?? currentView?.state.selection.main.head ?? null;
+  return resolveContextMenuExportSql({
+    selectedSql: selectedSql.value,
+    position,
+    documentSql: currentView ? currentEditorDocText(currentView) : executableSql.value,
+    databaseType: props.databaseType,
+    findStatementAtPosition: (sql, cursorPos, databaseType) => api.findStatementAtCursor(sql, cursorPos, databaseType),
+    statementAtPosition: (cursorPos) => (currentView ? (executableStatementRangeAtPosition(currentView, cursorPos)?.sql ?? null) : null),
+  });
+}
+
+async function exportQueryFromContextMenu(format: "csv" | "xlsx" | "txt") {
+  const sql = await contextMenuExportSql();
   if (!sql.trim()) return;
   emit("exportQuery", { sql, format, columnComments: undefined });
 }
@@ -1250,6 +1269,23 @@ function selectCurrentStatementFromContextMenu(): void {
 }
 
 /**
+ * 复制光标所在的当前可执行语句（与「选中当前语句」共用同一套范围计算），
+ * 方便在不选中、不执行的前提下把当前语句带走（issue #13261）。
+ */
+async function copyCurrentStatementFromContextMenu(): Promise<void> {
+  const currentView = view.value;
+  if (!currentView) return;
+  const range = executableStatementRangeAtPosition(currentView, currentView.state.selection.main.head);
+  if (!range || range.from === range.to) return;
+  try {
+    await copyToClipboard(currentView.state.sliceDoc(range.from, range.to));
+    toast(t("grid.copied"));
+  } catch (e: any) {
+    toast(t("grid.copyFailed", { message: e?.message || String(e) }), 5000);
+  }
+}
+
+/**
  * Move the caret between executable statements without changing the document.
  * Reuses the same statement ranges as 「执行当前语句」/「选中当前语句」 so the
  * navigation boundaries always match what execution would run.
@@ -1291,6 +1327,7 @@ const contextMenuActions: QueryEditorContextMenuActions = {
   openFindReplaceFromContextMenu,
   deleteEmptyLines,
   selectCurrentStatementFromContextMenu,
+  copyCurrentStatementFromContextMenu,
   selectAllSqlFromContextMenu,
   emitContextObjectAction,
   openCodeSnapshot,

@@ -115,7 +115,7 @@ import { getPlatform, isMacOS, isWindows } from "@/lib/backend/platform";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { openQueryResultArchiveFile } from "@/lib/query/queryResultArchiveFile";
 import { activeTabExternalSqlFileTarget, rememberExternalSqlFileTarget, resolveExternalSqlFileTarget, resolveExternalSqlFileTargetForActiveTab, unassociatedExternalSqlFileTarget, type ExternalSqlFileTarget } from "@/lib/sql/externalSqlFileTarget";
-import { defaultSavedQueryFileName, externalSqlFileOpenErrorMessage, externalSqlEditorMaxBytes, isSqlFilePath, queryEditorOpenFileAccept, queryEditorOpenFileFilters, readBrowserSqlFile, sqlFileTitleFromPath } from "@/lib/sql/sqlFileOpen";
+import { defaultSavedQueryFileName, externalSqlFileOpenErrorMessage, externalSqlEditorMaxBytes, isSqlFilePath, queryEditorOpenFileAccept, queryEditorOpenFileFilters, queryTabExternalFilePath, readBrowserSqlFile, sqlFileTitleFromPath } from "@/lib/sql/sqlFileOpen";
 import type { ConnectionConfig, DatabaseType, ObjectBrowserFilter, ObjectSourceKind, QueryTab, TableInfoTab, TabOutputView, TreeNode } from "@/types/database";
 import { OPEN_PLUGIN_SETTINGS, type PluginCenterFocus } from "@/lib/plugins/pluginCenterNavigation";
 import { parsePluginInstallDeepLink } from "@/lib/plugins/pluginInstallDeepLink";
@@ -211,7 +211,7 @@ import { dismissOpenModalSurface } from "@/lib/ui/modalSurface";
 import { hasTreeNodeDatabaseContext } from "@/lib/sidebar/treeNodeContext";
 import { objectBrowserTablesToAiTreeNodes } from "@/lib/ai/objectBrowserToAiTargets";
 import { aiTargetFromTab, type AiConversationBinding } from "@/lib/ai/aiConversationBinding";
-import type { AiExternalContextRequest } from "@/lib/ai/aiExternalContext";
+import { queryErrorSelection, type AiExternalContextRequest } from "@/lib/ai/aiExternalContext";
 import { isSchemaAware, isSingleDatabase, supportsConnectionQueryActions, usesTreeSchemaMode } from "@/lib/database/databaseFeatureSupport";
 import { codeMirrorSqlDialect, connectionObjectTreeNodeSchema, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import { canFormatSqlForDatabaseType, formatSqlForEditing, sqlFormatDialectForDbType } from "@/lib/sql/sqlFormatter";
@@ -232,6 +232,7 @@ import { useBackgroundImage } from "@/composables/useBackgroundImage";
 import ExternalSqlFileChangeDialog from "@/components/editor/ExternalSqlFileChangeDialog.vue";
 import { resolveWindowContext } from "@/lib/app/windowContext";
 import { openDetachedTabWindow } from "@/lib/app/detachedTabWindow";
+import { DETACH_TAB_REQUEST_EVENT, type DetachTabRequestDetail } from "@/lib/tabs/detachedTableOpen";
 import { FLOATING_OPEN_FILESYSTEM_EVENT, FLOATING_OPEN_WORKBENCH_EVENT, type FloatingOpenFilesystemPayload, type FloatingOpenWorkbenchPayload } from "@/lib/plugins/pluginFloatingWindow";
 import { OPEN_PLUGIN_AI_CONVERSATION, type AiPluginConversationRequest } from "@/lib/ai/aiPluginConversation";
 import type { PluginAiRecommendationHostUpdate } from "@/lib/plugins/pluginHostBridge";
@@ -503,7 +504,16 @@ const isAiPanelMaximized = ref(false);
 const isHistoryPanelMaximized = ref(false);
 const isZenMode = ref(false);
 const showSqlLibraryPanel = ref(safeLocalStorageGet("dbx-sql-library-open") === "true");
+const sqlFileLocateRequest = ref<{ id: number; path: string } | null>(null);
+let sqlFileLocateRequestId = 0;
 const showSqlFilePanel = ref(safeLocalStorageGet("dbx-sql-file-panel-open") === "true");
+watch(
+  showSqlFilePanel,
+  (open) => {
+    if (!open) sqlFileLocateRequest.value = null;
+  },
+  { flush: "sync" },
+);
 const rightSidebarPanelRefs: Record<RightSidebarPanelId, typeof showAiPanel> = {
   ai: showAiPanel,
   history: showHistory,
@@ -941,6 +951,15 @@ async function detachTab(tab: QueryTab, position?: { x: number; y: number }) {
     await api.deleteDetachedTabHandoff(tab.id).catch(() => {});
     toast(error?.message || String(error), 5000);
   }
+}
+
+// #13308: table tabs opened while "open tables in a detached window" is on ask
+// to be detached once their first load settles.
+function handleDetachTabRequest(event: Event) {
+  const detail = (event as CustomEvent<DetachTabRequestDetail>).detail;
+  if (!detail?.tabId) return;
+  const tab = queryStore.tabs.find((entry) => entry.id === detail.tabId);
+  if (tab) void detachTab(tab);
 }
 
 watch(
@@ -2113,10 +2132,14 @@ function editorAiTarget(tabId?: string): AiConversationBinding | null {
 }
 
 function fixWithAi(tabId: string, errorMessage: string) {
+  const tab = queryStore.tabs.find((candidate) => candidate.id === tabId);
+  const selection = queryErrorSelection(tab);
+  const target = aiTargetFromTab(queryStore.activeResultExecutionTarget(tabId) ?? tab, (connectionId) => !!connectionStore.getConfig(connectionId));
   openRightSidebarPanel("ai");
   invokeWhenAiReady((handle) =>
     handle.openExternalContext({
-      target: editorAiTarget(tabId),
+      target,
+      selections: selection ? [selection] : [],
       action: "fix",
       instruction: errorMessage,
       unresolvedKey: "ai.externalTargetUnavailable",
@@ -3681,6 +3704,18 @@ function setSidebarOpen(open: boolean) {
   safeLocalStorageSet("dbx-sidebar-open", open ? "true" : "false");
 }
 
+function locateSqlFile(tab: QueryTab) {
+  const path = queryTabExternalFilePath(tab);
+  if (!path || isDetachedWindowContext) return;
+  isZenMode.value = false;
+  openRightSidebarPanel("sqlFile");
+  sqlFileLocateRequest.value = { id: ++sqlFileLocateRequestId, path };
+}
+
+function finishSqlFileLocate(requestId: number) {
+  if (sqlFileLocateRequest.value?.id === requestId) sqlFileLocateRequest.value = null;
+}
+
 async function locateTabInSidebar(tab: QueryTab) {
   setSidebarOpen(true);
   await nextTick();
@@ -5182,6 +5217,7 @@ onMounted(async () => {
   window.addEventListener("keydown", handleTabSwitcherKeydownCapture, true);
   window.addEventListener("keydown", handleAuxiliarySearchKeydownCapture, true);
   window.addEventListener("keydown", handleKeydown);
+  window.addEventListener(DETACH_TAB_REQUEST_EVENT, handleDetachTabRequest as EventListener);
   window.addEventListener(DBX_VIM_ACTION_EVENT, handleVimDbxAppAction);
   window.addEventListener("keyup", handleKeyup, true);
   window.addEventListener("blur", handleTabSwitcherWindowBlur);
@@ -5376,6 +5412,7 @@ onUnmounted(() => {
             @start-resize="startSidebarResize"
             @collapse="setSidebarOpen(false)"
             @open-settings="(initialTab) => openSettings(initialTab ?? 'appearance')"
+            @open-connection-settings="(connectionId) => openConnectionSettings(connectionId, 'advanced')"
             @add-to-ai="addToAi"
             @open-dependency-object="onOpenDependencyObject"
             @mousedown="rememberSidebarSearchSurface"
@@ -5509,6 +5546,7 @@ onUnmounted(() => {
                     ref="contentAreaRef"
                     :content-suppressed="activeTab?.mode === 'plugin-workbench'"
                     @locate-tab="locateTabInSidebar"
+                    @locate-sql-file="locateSqlFile"
                     @close-tab="
                       (tabId: string) => {
                         if (tabId === queryStore.activeTabId) void closeActiveSurface();
@@ -5757,7 +5795,7 @@ onUnmounted(() => {
           >
             <div class="panel-resize-handle panel-resize-handle--left" @pointerdown="startSqlFilePanelResize" />
             <div class="h-full min-h-0 overflow-hidden rounded-[inherit]">
-              <SqlFilePanel @close="closeRightSidebarPanel('sqlFile')" />
+              <SqlFilePanel :locate-request="sqlFileLocateRequest" @locate-handled="finishSqlFileLocate" @close="closeRightSidebarPanel('sqlFile')" />
             </div>
           </div>
           <PluginShortcutBar v-if="!isDetachedWindowContext && !isZenMode && settingsStore.editorSettings.pluginShortcuts.enabled && settingsStore.editorSettings.pluginShortcuts.position.startsWith('right-')" :position="settingsStore.editorSettings.pluginShortcuts.position" />

@@ -8,8 +8,9 @@ import type { DamengDumpKind, DamengDumpRequest, DamengDumpProgress } from "./da
 import type { UserSkillRootSettings, UserSkillsListResult, UserSkillsReadResult } from "@/types/userSkills";
 import type { McpAccessPolicy, McpAccessRule, McpSubScopeMode, McpToolCatalog, PluginMcpGrant, PluginMcpView } from "@/types/mcpCatalog";
 import type { DatabaseBackupCommand, DatabaseBackupBackgroundStatus } from "@/lib/backup/backgroundDatabaseBackup";
+import type { NativeJobContext, NativeJobDetails, NativeJobList, NativeJobListRequest, NativeJobRequest, NativeJobOperationStatus, NativeJobPreparedPlan, NativeJobRef, NativeJobReferenceCatalog, NativeJobReferenceListRequest } from "@/lib/database/nativeJobs";
 import { functionDiffsToWire, functionInfoFromWire, schemaDiffPreparationFromWire, schemaDiffPreparationToWire, type FunctionInfoWire, type SchemaDiffPreparationWire } from "./functionInfoTransport";
-import type { OracleRoutineSnapshot, OracleRoutineOperation, OracleRoutineOperationObservation, OracleRoutineSaveInput, OracleRoutinePlanInput, OracleRoutinePlan } from "@/types/schemaDiff";
+import type { OracleRoutineSnapshot, OracleRoutineOperation, OracleRoutineOperationObservation, OracleRoutineSaveInput, OracleRoutinePlanInput, OracleRoutinePlan, OracleRoutineReadOptions, OracleRoutineIdentity } from "@/types/schemaDiff";
 
 export function databaseBackupCommand<T = unknown>(command: DatabaseBackupCommand): Promise<T> {
   return invoke("database_backup_command", { command });
@@ -184,6 +185,7 @@ import type { BuildTableSelectSqlOptions } from "@/lib/table/tableSelectSql";
 import type { DatabaseSearchSql, DatabaseSearchSqlOptions, SearchResultWhereOptions } from "@/lib/database/databaseSearch";
 import type { DatabaseStructureSearchSql, DatabaseStructureSearchSqlOptions } from "@/lib/database/databaseStructureSearch";
 import type { BuildEditableObjectSourceSqlInput, BuildRoutineRenameObjectSourceInput, FingerprintOracleRoutineObjectSourceInput, RewriteOracleRoutineReferencesInput, ValidateOracleExecutableObjectSourceInput } from "@/lib/table/objectSourceEditor";
+import type { OracleTriggerSqlInput, PreparedOracleTriggerSql } from "@/lib/database/oracleTriggerSql";
 import type { OracleTableReferenceRewriteInput, OracleViewRenameSource, OracleViewRenameSourceInput, OracleViewRenameSourceReview } from "@/types/database";
 import type { BuildViewDdlInput } from "@/lib/table/viewDdl";
 import type { BuildRenameObjectSqlOptions } from "@/lib/table/objectRenameSql";
@@ -1429,6 +1431,20 @@ export async function listSqlFilesInFolder(folderPath: string, fileFilter?: stri
   return invoke("list_sql_files_in_folder", { folderPath, fileFilter, includeEmptyDirectories });
 }
 
+export type SqlFileContentMatch = import("@/lib/savedSql/savedSqlSearch").SavedSqlSearchMatchResult & {
+  path: string;
+};
+
+export interface SqlFileContentSearchResult {
+  files: SqlFileContentMatch[];
+  skippedFiles: { path: string; reason: string }[];
+  truncated: boolean;
+}
+
+export async function searchSqlFileContents(roots: string[], query: string, fileFilter?: string): Promise<SqlFileContentSearchResult> {
+  return invoke("search_sql_file_contents", { roots, query, fileFilter });
+}
+
 export async function createSqlFileInFolder(rootPath: string, directoryPath: string, fileName: string): Promise<string> {
   return invoke("create_sql_file_in_folder", { rootPath, directoryPath, fileName });
 }
@@ -1898,8 +1914,9 @@ export async function listObjects(
   catalog?: string,
   tableNameFilter?: import("@/types/database").TableNameFilter,
   executionId?: string,
-  exactIdentity?: boolean,
+  options?: boolean | import("@/types/database").MetadataReadOptions,
 ): Promise<ObjectInfo[]> {
+  const readOptions = typeof options === "object" ? options : undefined;
   return invoke("list_objects", {
     connectionId,
     database,
@@ -1908,10 +1925,11 @@ export async function listObjects(
     filter,
     limit,
     offset,
-    catalog,
+    catalog: readOptions?.catalog ?? catalog,
     tableNameFilter,
     executionId,
-    ...(exactIdentity ? { exactIdentity: true } : {}),
+    ...(readOptions?.identityMode ? { identityMode: readOptions.identityMode } : {}),
+    ...(options === true ? { exactIdentity: true } : {}),
   });
 }
 
@@ -1927,7 +1945,7 @@ export async function completionAssistantSearch(request: CompletionAssistantRequ
   return invoke("completion_assistant_search", { request });
 }
 
-export async function getObjectSource(connectionId: string, database: string, schema: string, name: string, objectType: ObjectSourceKind, signature?: string, relationName?: string): Promise<ObjectSource> {
+export async function getObjectSource(connectionId: string, database: string, schema: string, name: string, objectType: ObjectSourceKind, signature?: string, relationName?: string, options?: import("@/types/database").MetadataReadOptions): Promise<ObjectSource> {
   return invoke("get_object_source", {
     connectionId,
     database,
@@ -1936,6 +1954,8 @@ export async function getObjectSource(connectionId: string, database: string, sc
     objectType,
     signature,
     relationName,
+    ...(options?.identityMode ? { identityMode: options.identityMode } : {}),
+    ...(options?.catalog !== undefined ? { catalog: options.catalog } : {}),
   });
 }
 
@@ -1954,6 +1974,32 @@ export async function listSchemaInfos(connectionId: string, database: string): P
 export async function getCustomTypeDetails(connectionId: string, database: string, schema: string, name: string): Promise<CustomTypeDetails> {
   return invoke("get_custom_type_details", { connectionId, database, schema, name });
 }
+
+export function nativeJobOpenContext(connectionId: string, database: string): Promise<NativeJobContext> {
+  return invokeBackend("native_job_open_context", { connectionId, database });
+}
+export function nativeJobList(request: NativeJobListRequest): Promise<NativeJobList> {
+  return invokeBackend("native_job_list", { request });
+}
+export function nativeJobReferences(request: NativeJobReferenceListRequest): Promise<NativeJobReferenceCatalog> {
+  return invokeBackend("native_job_references", { request });
+}
+export function nativeJobRead(target: NativeJobRef): Promise<NativeJobDetails> {
+  return invokeBackend("native_job_read", { target });
+}
+export function nativeJobPrepare(mutation: NativeJobRequest): Promise<NativeJobPreparedPlan> {
+  return invokeBackend("native_job_prepare", { mutation });
+}
+export function nativeJobApply(planId: string): Promise<NativeJobOperationStatus> {
+  return invokeBackend("native_job_apply", { planId });
+}
+export function nativeJobStatus(operationId: string, observe?: boolean): Promise<NativeJobOperationStatus> {
+  return invokeBackend("native_job_status", { operationId, ...(observe ? { observe: true } : {}) });
+}
+export function nativeJobCancel(operationId: string): Promise<NativeJobOperationStatus> {
+  return invokeBackend("native_job_cancel", { operationId });
+}
+
 export async function getOracleTypeManagementSnapshot(connectionId: string, database: string, owner: string, name: string, knownObjects: OracleTypeManagementObjectKey[] = []): Promise<OracleTypeManagementSnapshot> {
   return invoke("get_oracle_type_management_snapshot", { connectionId, database, owner, name, knownObjects });
 }
@@ -2086,6 +2132,7 @@ export async function executeMulti(
     maxResultBytes?: number;
     resultKeyColumns?: string[];
     tableDataPreview?: boolean;
+    deferLobs?: boolean;
     resultSessionId?: string;
     clientSessionId?: string;
     timeoutSecs?: number;
@@ -2162,6 +2209,7 @@ export async function executeMultiWithProgress(
     maxResultBytes?: number;
     resultKeyColumns?: string[];
     tableDataPreview?: boolean;
+    deferLobs?: boolean;
     resultSessionId?: string;
     clientSessionId?: string;
     timeoutSecs?: number;
@@ -2229,13 +2277,14 @@ export async function exportSnapshotResult(request: import("./http").SnapshotExp
   signal?.throwIfAborted();
 }
 
-export async function closeQuerySession(connectionId: string, database: string, sessionId: string, clientSessionId?: string, catalog?: string): Promise<boolean> {
+export async function closeQuerySession(connectionId: string, database: string, sessionId: string, clientSessionId?: string, catalog?: string, txnSessionId?: string): Promise<boolean> {
   return invoke("close_query_session", {
     connectionId,
     database,
     sessionId,
     clientSessionId,
     catalog,
+    txnSessionId,
   });
 }
 
@@ -2302,6 +2351,7 @@ export async function executeInManualTransaction(
   executionId?: string,
   timeoutSecs?: number,
   boundStatements?: BlobBoundStatement[],
+  deferLobs?: boolean,
 ): Promise<QueryResult[]> {
   return invokeBackend("execute_in_manual_transaction", {
     txnSessionId,
@@ -2316,6 +2366,7 @@ export async function executeInManualTransaction(
     executionId,
     timeoutSecs,
     boundStatements,
+    deferLobs,
   });
 }
 
@@ -2522,6 +2573,10 @@ export async function buildExecutableObjectSourceStatements(input: BuildEditable
 
 export async function validateOracleExecutableObjectSource(input: ValidateOracleExecutableObjectSourceInput): Promise<void> {
   return invoke("validate_oracle_executable_object_source", { input });
+}
+
+export async function prepareOracleTriggerSql(input: OracleTriggerSqlInput): Promise<PreparedOracleTriggerSql> {
+  return invoke("prepare_oracle_trigger_sql", { input });
 }
 
 export async function fingerprintOracleRoutineObjectSource(input: FingerprintOracleRoutineObjectSourceInput): Promise<string> {
@@ -2765,14 +2820,16 @@ export async function listForeignKeysForDatabase(connectionId: string, database:
   return invoke("list_foreign_keys_for_database", { connectionId, database, schema, catalog, executionId });
 }
 
-export async function listTriggers(connectionId: string, database: string, schema: string, table: string, catalog?: string, exactIdentity?: boolean): Promise<TriggerInfo[]> {
+export async function listTriggers(connectionId: string, database: string, schema: string, table: string, catalog?: string, options?: boolean | import("@/types/database").MetadataReadOptions): Promise<TriggerInfo[]> {
+  const readOptions = typeof options === "object" ? options : undefined;
   return invoke("list_triggers", {
     connectionId,
     database,
     schema,
     table,
-    catalog,
-    ...(exactIdentity ? { exactIdentity: true } : {}),
+    catalog: readOptions?.catalog ?? catalog,
+    ...(readOptions?.identityMode ? { identityMode: readOptions.identityMode } : {}),
+    ...(options === true ? { exactIdentity: true } : {}),
   });
 }
 
@@ -2840,7 +2897,7 @@ export async function listSubpartitions(connectionId: string, database: string, 
   });
 }
 
-export async function getTableDdl(connectionId: string, database: string, schema: string, table: string, objectType?: ObjectSourceKind, catalog?: string, portable = false, exactIdentity?: boolean): Promise<string> {
+export async function getTableDdl(connectionId: string, database: string, schema: string, table: string, objectType?: ObjectSourceKind, catalog?: string, portable = false, exactIdentity?: boolean, separateIndexes?: boolean): Promise<string> {
   return invoke("get_table_ddl", {
     connectionId,
     database,
@@ -2850,10 +2907,11 @@ export async function getTableDdl(connectionId: string, database: string, schema
     catalog,
     portable,
     ...(exactIdentity ? { exactIdentity: true } : {}),
+    ...(separateIndexes ? { separateIndexes: true } : {}),
   });
 }
 
-export async function getTableDisplayDdl(connectionId: string, database: string, schema: string, table: string, objectType?: ObjectSourceKind, catalog?: string): Promise<string> {
+export async function getTableDisplayDdl(connectionId: string, database: string, schema: string, table: string, objectType?: ObjectSourceKind, catalog?: string, separateIndexes?: boolean): Promise<string> {
   return invoke("get_table_ddl", {
     connectionId,
     database,
@@ -2862,6 +2920,7 @@ export async function getTableDisplayDdl(connectionId: string, database: string,
     objectType,
     catalog,
     includePostgresAccess: true,
+    ...(separateIndexes ? { separateIndexes: true } : {}),
     portable: false,
   });
 }
@@ -2899,8 +2958,8 @@ export async function listFunctions(connectionId: string, database: string, sche
   return (await invoke<FunctionInfoWire[]>("list_functions", { connectionId, database, schema })).map(functionInfoFromWire);
 }
 
-export function loadSchemaDiffRoutines(connectionId: string, database: string, schema: string, selectedRoutines?: string[]): Promise<OracleRoutineSnapshot> {
-  return invoke("load_schema_diff_routines", { connectionId, database, schema, ...(selectedRoutines === undefined ? {} : { selectedRoutines }) });
+export function loadSchemaDiffRoutines(connectionId: string, database: string, schema: string, selectedRoutines?: string[], options?: OracleRoutineReadOptions): Promise<OracleRoutineSnapshot> {
+  return invoke("load_schema_diff_routines", { connectionId, database, schema, ...(selectedRoutines === undefined ? {} : { selectedRoutines }), ...options });
 }
 
 export function prepareOracleRoutineSave(input: OracleRoutineSaveInput): Promise<OracleRoutineOperation> {
@@ -3399,8 +3458,8 @@ export async function previewAgentOfflineExport(): Promise<AgentOfflineExportPre
   return invoke("preview_agent_offline_export");
 }
 
-export async function exportAgentsOffline(path: string, driverKeys: string[]): Promise<AgentOfflineExportResult> {
-  return invoke("export_agents_offline", { path, driverKeys });
+export async function exportAgentsOffline(path: string, driverKeys: string[], includeJres = true): Promise<AgentOfflineExportResult> {
+  return invoke("export_agents_offline", { path, driverKeys, includeJres });
 }
 
 export async function importAgentDriver(dbType: string, path: string | File): Promise<void> {
@@ -5702,7 +5761,7 @@ export interface HistoryConnectionOption extends HistoryConnectionFilter {
 export type TaskType = "transfer";
 export type TaskLifecycleOwner = "tauri" | "web";
 export type TaskRunStatus = "running" | "succeeded" | "partial_failed" | "failed" | "cancelled";
-export type TaskItemKind = "table" | "view" | "materialized_view" | "procedure" | "function" | "trigger" | "sequence" | "event" | "object";
+export type TaskItemKind = "table" | "view" | "materialized_view" | "procedure" | "function" | "package" | "package_body" | "trigger" | "sequence" | "event" | "object";
 export type TaskItemStatus = "pending" | "running" | "succeeded" | "skipped" | "failed" | "cancelled" | "not_started" | "incomplete";
 export type TaskRowCountState = "not_applicable" | "known" | "unknown" | "incomplete";
 export type TransferRunContent = "structure_and_data" | "structure_only" | "data_only";
@@ -5984,7 +6043,7 @@ export type TransferTableNameCase = "preserve" | "lower" | "upper";
 export type TransferColumnNameCase = "preserve" | "lower" | "upper";
 export type TransferOwnershipPolicy = "preserve" | "skip" | "reassignMissing";
 export type TransferContent = "structureAndData" | "structureOnly" | "dataOnly";
-export type TransferObjectKind = "TABLE" | "VIEW" | "MATERIALIZED_VIEW" | "PROCEDURE" | "FUNCTION" | "TRIGGER" | "SEQUENCE" | "EVENT" | "PACKAGE" | "SYNONYM";
+export type TransferObjectKind = "TABLE" | "VIEW" | "MATERIALIZED_VIEW" | "PROCEDURE" | "FUNCTION" | "TRIGGER" | "SEQUENCE" | "EVENT" | "PACKAGE" | "PACKAGE_BODY" | "SYNONYM";
 
 export interface TransferObjectSelection {
   objectType: TransferObjectKind;
@@ -6022,6 +6081,28 @@ export interface TransferRequest {
   tableFilters?: Record<string, string>;
   dropTargetBeforeCreate: boolean;
   dropTargetConfirmed: boolean;
+  oraclePackages?: OraclePackageTransferRequest;
+}
+
+export interface OraclePackageTransferRequest {
+  input?: OracleRoutinePlanInput;
+  operationIds?: string[];
+  pendingTables?: OraclePackagePendingTables;
+}
+
+export interface OraclePackagePendingTables {
+  source: OracleRoutinePlanInput["source"]["endpoint"];
+  target: OracleRoutinePlanInput["target"]["endpoint"];
+  tables: unknown[];
+  dependencyManifest: unknown;
+  tableEvidence: unknown[];
+}
+
+export interface OraclePackageTransferPreview {
+  input: OracleRoutinePlanInput;
+  plan: OracleRoutinePlan;
+  skipped: OracleRoutineIdentity[];
+  pendingTables?: OraclePackagePendingTables;
 }
 
 export interface TransferStructurePreviewTable {
@@ -6062,9 +6143,13 @@ export interface TransferOwnershipPreview {
   };
   /** Structure-plan preview: present for structure-only transfers. */
   structure?: TransferStructurePreview;
+  oraclePackages?: OraclePackageTransferPreview;
 }
 
 export interface TransferProgress {
+  oraclePackageApproval?: OraclePackageTransferPreview;
+  oraclePackagePreflight?: OraclePackageTransferPreview;
+  oracleRoutineOperation?: OracleRoutineOperation;
   transferId: string;
   table: string;
   tableIndex: number;
@@ -6141,6 +6226,7 @@ export interface TableImportColumnMapping {
   sourceColumn: string;
   targetColumn: string;
   targetDataType?: string | null;
+  generator?: string | null;
 }
 
 export interface TableImportParseOptions {

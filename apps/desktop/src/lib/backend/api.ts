@@ -227,6 +227,14 @@ export const completionAssistantSearch = forward("completionAssistantSearch");
 export const getObjectSource = forward("getObjectSource");
 export const getEventInfo = forward("getEventInfo");
 export const getCustomTypeDetails = forward("getCustomTypeDetails");
+export const nativeJobOpenContext = forward("nativeJobOpenContext");
+export const nativeJobList = forward("nativeJobList");
+export const nativeJobReferences = forward("nativeJobReferences");
+export const nativeJobRead = forward("nativeJobRead");
+export const nativeJobPrepare = forward("nativeJobPrepare");
+export const nativeJobApply = forward("nativeJobApply");
+export const nativeJobStatus = forward("nativeJobStatus");
+export const nativeJobCancel = forward("nativeJobCancel");
 export const getOracleTypeManagementSnapshot = forward("getOracleTypeManagementSnapshot");
 export const buildOracleTypeManagementSql = forward("buildOracleTypeManagementSql");
 export const verifyOracleTypeData = forward("verifyOracleTypeData");
@@ -342,6 +350,7 @@ export const buildDuplicateTableStructureSql = forward("buildDuplicateTableStruc
 export const buildCopyTableDataSql = forward("buildCopyTableDataSql");
 export const buildExecutableObjectSourceStatements = forward("buildExecutableObjectSourceStatements");
 export const validateOracleExecutableObjectSource = forward("validateOracleExecutableObjectSource");
+export const prepareOracleTriggerSql = forward("prepareOracleTriggerSql");
 export const fingerprintOracleRoutineObjectSource = forward("fingerprintOracleRoutineObjectSource");
 export const buildExecutableObjectSourceSql = forward("buildExecutableObjectSourceSql");
 export const buildEditableObjectSource = forward("buildEditableObjectSource");
@@ -531,6 +540,7 @@ export const inspectExternalSqlFile = forward("inspectExternalSqlFile");
 export const writeExternalSqlFile = forward("writeExternalSqlFile");
 export const saveExternalSqlFile = forward("saveExternalSqlFile");
 export const listSqlFilesInFolder = forward("listSqlFilesInFolder");
+export const searchSqlFileContents = forward("searchSqlFileContents");
 export const globalSearch = forward("globalSearch");
 export const loadGlobalSearchSettings = forward("loadGlobalSearchSettings");
 export const saveGlobalSearchSettings = forward("saveGlobalSearchSettings");
@@ -1176,6 +1186,9 @@ export type {
   SqlFileTable,
   SqlFileProgress,
   TransferRequest,
+  OraclePackageTransferRequest,
+  OraclePackageTransferPreview,
+  OraclePackagePendingTables,
   TransferProgress,
   TransferMode,
   TransferContent,
@@ -1224,6 +1237,8 @@ export type {
   QueryResultExportRequest,
   AgentEvent,
   SqlFileEntry,
+  SqlFileContentMatch,
+  SqlFileContentSearchResult,
   GlobalSearchRequest,
   GlobalSearchMatch,
   GlobalSearchSettings,

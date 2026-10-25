@@ -44,6 +44,10 @@ pub fn validate_blob_bound_statements(previews: &[String], bound: &[BlobBoundSta
 }
 
 pub use crate::mysql_event::MysqlEventInfo;
+pub use crate::oracle_trigger::{
+    MetadataIdentityMode, MetadataReadOptions, OracleTriggerDefinition, OracleTriggerError, OracleTriggerMetadata,
+    OracleTriggerParent, OracleTriggerReadState,
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DatabaseInfo {
@@ -306,6 +310,8 @@ pub struct ObjectSource {
     pub editable: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routine_parameters: Option<Vec<RoutineParameterMetadata>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<TriggerInfo>,
 }
 
 /// Provenance for structured metadata fields that are optional in [`ColumnInfo`].
@@ -597,6 +603,8 @@ pub struct LargeValueCell {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct QueryResult {
+    #[serde(default, rename = "large_value_cells", deserialize_with = "deserialize_vec_or_default")]
+    pub deferred_large_value_cells: Vec<LargeValueCell>,
     #[serde(default, deserialize_with = "deserialize_vec_or_default")]
     pub columns: Vec<String>,
     /// Database type name for each column, parallel to `columns`. May be empty
@@ -953,6 +961,8 @@ pub struct TriggerInfo {
     pub created_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub statement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle_metadata: Option<OracleTriggerMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1999,10 +2009,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn query_result_receives_deferred_cells_without_serializing_a_second_metadata_field() {
+        let mut wire = serde_json::to_value(bigint_result_sample()).unwrap();
+        wire["large_value_cells"] = serde_json::json!([{
+            "row_index": 0, "column_index": 0, "original_bytes": 67108864, "value_ref": "original-lob"
+        }]);
+        let result: super::QueryResult = serde_json::from_value(wire).unwrap();
+        assert_eq!(result.deferred_large_value_cells.len(), 1);
+        assert_eq!(result.deferred_large_value_cells[0].value_ref.as_deref(), Some("original-lob"));
+        let serialized = serde_json::to_value(&result).unwrap();
+        assert!(serialized.get("large_value_cells").is_none());
+        assert!(serialized.get("deferred_large_value_cells").is_none());
+    }
+
     fn bigint_result_sample() -> super::QueryResult {
         super::QueryResult {
             columns: vec!["id".to_string()],
             column_types: vec!["bigint".to_string()],
+            deferred_large_value_cells: Vec::new(),
             column_sortables: Vec::new(),
             spatial_columns: Vec::new(),
             spatial_values: Vec::new(),

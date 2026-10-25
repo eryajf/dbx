@@ -247,6 +247,7 @@ pub async fn execute_multi(
     continue_on_error: Option<bool>,
     execution_mode: Option<dbx_core::query::QueryExecutionMode>,
     preserve_explicit_transaction: Option<bool>,
+    defer_lobs: Option<bool>,
 ) -> Result<Vec<dbx_core::query::ExecuteMultiResult>, BackendError> {
     let execution_id = execution_id.filter(|id| !id.trim().is_empty());
     let registered_query = execution_id.as_ref().map(|id| {
@@ -315,6 +316,7 @@ pub async fn execute_multi(
                     continue_on_error: continue_on_error.unwrap_or(false),
                     execution_mode: execution_mode.unwrap_or_default(),
                     preserve_explicit_transaction: preserve_explicit_transaction.unwrap_or(false),
+                    defer_lobs: defer_lobs.unwrap_or(false),
                 },
                 progress,
             )
@@ -384,7 +386,17 @@ pub async fn close_query_session(
     session_id: String,
     client_session_id: Option<String>,
     catalog: Option<String>,
+    txn_session_id: Option<String>,
 ) -> Result<bool, String> {
+    if let Some(txn_session_id) = txn_session_id {
+        return dbx_core::query::close_manual_transaction_query_session(
+            &state,
+            &connection_id,
+            &txn_session_id,
+            &session_id,
+        )
+        .await;
+    }
     dbx_core::query::close_query_session(
         &state,
         &connection_id,
@@ -632,6 +644,7 @@ pub async fn execute_in_manual_transaction(
     execution_id: Option<String>,
     timeout_secs: Option<u64>,
     bound_statements: Option<Vec<db::BlobBoundStatement>>,
+    defer_lobs: Option<bool>,
 ) -> Result<Vec<dbx_core::query::ExecuteMultiResult>, ManualTransactionCommandError> {
     let messages = query_messages_callback(&app, execution_id.as_deref());
     dbx_core::query::query_messages::with_query_messages(
@@ -643,6 +656,7 @@ pub async fn execute_in_manual_transaction(
             &database,
             schema.as_deref(),
             dbx_core::query::ManualTransactionExecutionOptions {
+                defer_lobs: defer_lobs.unwrap_or(false),
                 bound_statements,
                 max_rows,
                 table_data_preview: table_data_preview.unwrap_or(false),
@@ -911,6 +925,13 @@ pub fn validate_oracle_executable_object_source(
 }
 
 #[tauri::command]
+pub fn prepare_oracle_trigger_sql(
+    input: dbx_core::object_source_sql::OracleTriggerSqlInput,
+) -> Result<dbx_core::object_source_sql::PreparedOracleTriggerSql, String> {
+    dbx_core::object_source_sql::prepare_oracle_trigger_sql(input)
+}
+
+#[tauri::command]
 pub fn fingerprint_oracle_routine_object_source(
     input: dbx_core::object_source_sql::EditableObjectSourceSqlInput,
 ) -> Result<String, String> {
@@ -981,13 +1002,13 @@ pub fn build_table_structure_change_sql(
     options: dbx_core::table_structure_sql::TableStructureSqlOptions,
     starrocks: Option<dbx_core::table_structure_sql::StarRocksAlterOptions>,
     mysql_table_charset: Option<dbx_core::table_structure_sql::MysqlTableCharsetChange>,
-) -> Result<dbx_core::table_structure_sql::TableStructureSqlResult, String> {
+) -> Result<dbx_core::table_structure_sql::TableStructureSqlPlan, String> {
     let table_charset = mysql_table_charset
         .map(|change| dbx_core::table_structure_sql::build_mysql_table_charset_change_sql(&options, change));
-    let mut result = dbx_core::table_structure_sql::build_table_structure_change_sql_with_context(options, starrocks);
+    let mut result = dbx_core::table_structure_sql::build_table_structure_change_sql_plan(options, starrocks);
     if let Some(extra) = table_charset {
-        result.statements.extend(extra.statements);
-        result.warnings.extend(extra.warnings);
+        result.sql.statements.extend(extra.statements);
+        result.sql.warnings.extend(extra.warnings);
     }
     Ok(result)
 }
@@ -1033,8 +1054,8 @@ pub fn build_create_table_sql(
     options: dbx_core::table_structure_sql::TableStructureSqlOptions,
     server_version: Option<String>,
     dialect_options: Option<dbx_core::table_structure_sql::CreateTableDialectOptions>,
-) -> Result<dbx_core::table_structure_sql::TableStructureSqlResult, String> {
-    Ok(dbx_core::table_structure_sql::build_create_table_sql_with_dialect_options(
+) -> Result<dbx_core::table_structure_sql::TableStructureSqlPlan, String> {
+    Ok(dbx_core::table_structure_sql::build_create_table_sql_plan_with_dialect_options(
         options,
         server_version.as_deref(),
         dialect_options.unwrap_or_default(),
