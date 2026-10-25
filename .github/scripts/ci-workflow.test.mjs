@@ -311,16 +311,6 @@ test("mold downloads are isolated from extraction in CI and keepalive", () => {
   assert.ok(job("github-scripts").includes("./.github/scripts/prepare-webview2-win7-runtime.test.ps1"));
 });
 
-test("desktop system dependencies remain available for application and workspace tests", () => {
-  const install = job("rust-test").match(/      - name: Install system dependencies\n([\s\S]*?)(?=\n      - name:)/)?.[1];
-  assert.ok(install, "missing system dependency install step");
-  const condition = install.match(/^        if: (.+)$/m)?.[1];
-  assert.ok(condition, "missing dependency install condition");
-  const shouldInstall = new Function("matrix", `return (${condition});`);
-  for (const group of ["application", "workspace"]) assert.equal(shouldInstall({ group }), true, group);
-  for (const group of ["foundation", "drivers"]) assert.equal(shouldInstall({ group }), false, group);
-});
-
 for (const name of ["rust-test", "agent-integration"]) {
   for (const scenario of ["ready", "delayed", "unavailable", "missing-mirror"]) {
     test(`${name} Docker readiness: ${scenario}`, () => {

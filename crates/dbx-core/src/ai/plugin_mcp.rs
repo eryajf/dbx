@@ -570,6 +570,16 @@ mod tests {
 
     #[test]
     fn undeclared_tools_are_never_exposed_and_annotations_do_not_count() {
+        // A legacy plugin remains hidden even if an old grant approved its tools.
+        for contribution in
+            [json!({ "external_tools": true }), json!({ "external_tools": true, "tools": { "list_dir": {} } })]
+        {
+            let legacy = manifest(contribution);
+            let grant = full_grant(&declared());
+            assert!(exposed(&legacy, Some(&grant)).is_empty());
+            let view = plugin_view(&legacy, Some(&grant), Ok(tools()));
+            assert!(view.tools.iter().all(|tool| tool.exposure == PluginToolExposure::Undeclared));
+        }
         // Only list_dir is declared; annotations on the others are ignored.
         let partial = manifest(json!({ "external_tools": true, "tools": { "list_dir": { "access": "read" } } }));
         let grant = full_grant(&partial);

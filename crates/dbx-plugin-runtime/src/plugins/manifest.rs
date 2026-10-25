@@ -1241,6 +1241,16 @@ impl PluginManifest {
             plugin_dir,
             &mut errors,
         );
+        // Missing external access declarations must not disable an older
+        // plugin's drivers or AI tools. The MCP exposure gate hides those tools.
+        if let Some(mcp) = self.mcp_contribution() {
+            if mcp.external_tools && !mcp.tools.values().any(|declaration| declaration.access.is_some()) {
+                warnings.push(format!(
+                    "Mcp contribution '{}' sets external_tools but declares no tool access level; external tools remain hidden until declared under `tools` with `access`",
+                    mcp.id
+                ));
+            }
+        }
 
         let target = current_plugin_target();
         let backend_executable = self.backend_entrypoint().and_then(|backend| {
@@ -1670,11 +1680,6 @@ fn validate_contributions(
                         &format!("Mcp toolset '{}' description", toolset.id),
                         errors,
                     );
-                }
-                if mcp.external_tools && !mcp.tools.values().any(|declaration| declaration.access.is_some()) {
-                    errors.push(format!(
-                        "Mcp contribution '{id}' sets external_tools but declares no tool access level; declare each external tool under `tools` with `access`"
-                    ));
                 }
                 if mcp.tools.len() > MAX_PLUGIN_MCP_TOOL_DECLARATIONS {
                     errors.push(format!(
@@ -2288,13 +2293,13 @@ mod tests {
         validate_contributions(std::slice::from_ref(&mcp), true, false, &plugin_dir, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
 
-        // Opting into the external server requires declared tool levels.
+        // Missing external declarations do not invalidate the whole plugin.
         let PluginContribution::Mcp(undeclared) = &mcp else { unreachable!() };
         let undeclared =
             PluginContribution::Mcp(PluginMcpContribution { tools: BTreeMap::new(), ..undeclared.clone() });
         let mut errors = Vec::new();
         validate_contributions(std::slice::from_ref(&undeclared), true, false, &plugin_dir, &mut errors);
-        assert!(errors.iter().any(|error| error.contains("declares no tool access level")), "{errors:?}");
+        assert!(errors.is_empty(), "{errors:?}");
 
         let two = vec![mcp.clone(), mcp];
         let mut errors = Vec::new();
@@ -2419,6 +2424,30 @@ mod tests {
         assert!(manifest.external_tools_excluded(), "external_tools defaults to off");
         let compatibility = manifest.compatibility(dir.path(), "0.6.0");
         assert!(compatibility.compatible, "{:?}", compatibility.errors);
+        assert!(compatibility.warnings.is_empty(), "{:?}", compatibility.warnings);
+
+        let mut manifest = manifest;
+        let PluginContribution::Mcp(mcp) = &mut manifest.contributions[0] else { unreachable!() };
+        mcp.external_tools = true;
+        for tools in [BTreeMap::new(), BTreeMap::from([("ping".to_string(), PluginMcpToolDeclaration::default())])] {
+            let PluginContribution::Mcp(mcp) = &mut manifest.contributions[0] else { unreachable!() };
+            mcp.tools = tools;
+            let compatibility = manifest.compatibility(dir.path(), "0.6.0");
+            assert!(compatibility.compatible, "{:?}", compatibility.errors);
+            assert!(
+                compatibility.warnings.iter().any(|warning| warning.contains("external tools remain hidden")),
+                "{:?}",
+                compatibility.warnings
+            );
+            assert!(!manifest.ai_tools_excluded());
+            assert!(manifest.provides_mcp_tools());
+        }
+
+        let PluginContribution::Mcp(mcp) = &mut manifest.contributions[0] else { unreachable!() };
+        mcp.tools.get_mut("ping").unwrap().access = Some(PluginMcpAccess::Read);
+        let compatibility = manifest.compatibility(dir.path(), "0.6.0");
+        assert!(compatibility.compatible, "{:?}", compatibility.errors);
+        assert!(compatibility.warnings.is_empty(), "{:?}", compatibility.warnings);
     }
 
     #[test]

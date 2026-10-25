@@ -1018,8 +1018,7 @@ jobs:
 
       - name: Install system dependencies
         run: sudo python3 .github/scripts/ci-install-system-deps.py
-        # Application and workspace tests need Tauri/WebKit; drivers bundle OpenSSL and SQLite.
-        if: matrix.group != 'foundation' && matrix.group != 'drivers'
+        if: matrix.group != 'foundation'
 
       # Pin mold because runner image updates can change bundled C++ links.
       # See the packages job note for the pinned upstream build.

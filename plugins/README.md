@@ -603,8 +603,10 @@ On the external server, users manage MCP tools per plugin in Settings → MCP �
 }
 ```
 
-- `tools` (required with `external_tools: true`) declares, per tool name returned by `mcp/tools`, the highest `access` it can reach — `read` (no state change), `write` (ordinary changes), `full` (destructive or bulk changes) — and optionally its `toolset`. Up to 64 entries. **A tool `mcp/tools` lists without a declaration is never exposed on the external server**; MCP annotations are client hints, not a substitute. The declared level is authoritative: the host rewrites `readOnlyHint` / `destructiveHint` from it. Each call remains subject to the effective resource permissions and allowed connection scope.
+- `tools` (required to expose tools with `external_tools: true`) declares, per tool name returned by `mcp/tools`, the highest `access` it can reach — `read` (no state change), `write` (ordinary changes), `full` (destructive or bulk changes) — and optionally its `toolset`. Up to 64 entries. **A tool `mcp/tools` lists without a declaration is never exposed on the external server**; MCP annotations are client hints, not a substitute. The declared level is authoritative: the host rewrites `readOnlyHint` / `destructiveHint` from it. Each call remains subject to the effective resource permissions and allowed connection scope.
 - `toolsets` (optional) groups tools in the settings UI (`id` uses `[a-z0-9._-]`, `title` is required). Tools without a toolset join a default group.
+
+A legacy manifest with `external_tools: true` but no tool access declarations remains compatible and receives a warning. Its drivers and built-in AI tools remain available under their existing gates, but no undeclared tool is exposed on the external MCP server. Authors must add per-tool `access` declarations to enable external exposure.
 
 #### Sub-scopes (optional)
 
@@ -616,6 +618,7 @@ A plugin whose connections contain their own resources (Kubernetes namespaces, d
 
 - `kind` (`[a-z0-9._-]`, not `database`) and `title` name the scope in the access-control tree.
 - `argument` is the tool argument that carries the value. On every external call that includes it, the host checks scope admission and access for the bound connection before forwarding. Omitting it is allowed only when all sub-scopes are open and no named scope has a permission override or ceiling; otherwise the host returns `SCOPE_REQUIRED`. Full tools also follow the confirmation tier below.
+- The sidecar must interpret the scope argument consistently with the host policy. The host trims and compares the declared argument value; it cannot detect a sidecar interpreting `*`, an empty value, or a parent path as access to all resources. Do not expand an authorized value into a broader scope; reject ambiguous values or require an explicitly authorized scope instead.
 - `list_method` (optional) is a sidecar method returning `{ "values": [string] }` for a `connectionId`, used by the settings picker.
 
 #### High-risk tools
@@ -626,7 +629,7 @@ Existing **Legacy temporary authorization** settings (`promptHighRiskSql=true` o
 
 Nothing is exposed until the user authorizes the plugin and picks a ceiling; tools above the ceiling stay hidden. After a plugin update, a tool that needs more than `read` and is new — or whose declared level rose since the user accepted it — stays hidden until the user confirms it, so an update cannot widen exposure silently.
 
-With the default `external_tools: false`, only `id` is required in addition to `type`; enabling external tools also requires the tool access declarations above. `ai_tools` defaults to `true` (set it to `false` to keep the tools off the AI surface even when the user opts in). At most one `mcp` contribution is allowed per manifest, and it requires a backend entrypoint. Declaring it makes the manifest unreadable to hosts that predate the contribution type, so plugins that must install on older hosts should stay undeclared. The runtime gates stay in force on every call: the AI surface requires open connections, per-call approval for tools not marked `annotations.readOnlyHint: true`, and the Plugin Center switch; the external surface uses the resource permissions, connection scope, plugin grants, and confirmation rules described above.
+With the default `external_tools: false`, only `id` is required in addition to `type`; exposing external tools also requires the tool access declarations above, while missing declarations produce a compatibility warning rather than disabling the plugin. `ai_tools` defaults to `true` (set it to `false` to keep the tools off the AI surface even when the user opts in). At most one `mcp` contribution is allowed per manifest, and it requires a backend entrypoint. Declaring it makes the manifest unreadable to hosts that predate the contribution type, so plugins that must install on older hosts should stay undeclared. The runtime gates stay in force on every call: the AI surface requires open connections, per-call approval for tools not marked `annotations.readOnlyHint: true`, and the Plugin Center switch; the external surface uses the resource permissions, connection scope, plugin grants, and confirmation rules described above.
 
 ### Table Schema Metadata
 
