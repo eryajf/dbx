@@ -403,10 +403,7 @@ impl NacosOpenApiAdmin {
         // tenant. Keep the explicit `public` scope in DBX (ordinary users may
         // not be able to list namespaces), and translate only at the HTTP
         // boundary. Naming APIs, Nacos 3 and r-nacos retain their own IDs.
-        if !self.is_rnacos_compatible()
-            && matches!(self.cfg.version_mode, Some(NacosVersionMode::V2))
-            && (path.starts_with("/v1/cs/") || path.starts_with("/v2/cs/"))
-        {
+        if !self.is_rnacos_compatible() && (path.starts_with("/v1/cs/") || path.starts_with("/v2/cs/")) {
             for (key, value) in query.iter_mut().chain(form.iter_mut().flatten()) {
                 if key == "tenant" && value == "public" {
                     value.clear();

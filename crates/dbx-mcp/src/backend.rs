@@ -58,11 +58,17 @@ impl From<&ConnectionConfig> for ConnectionSummary {
 }
 
 fn legacy_mcp_allow_writes() -> Option<bool> {
-    match std::env::var("DBX_MCP_ALLOW_WRITES").ok()?.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" => Some(true),
-        "0" | "false" => Some(false),
-        _ => None,
-    }
+    Some(parse_legacy_mcp_allow_writes(&std::env::var("DBX_MCP_ALLOW_WRITES").ok()?)?)
+}
+
+fn parse_legacy_mcp_allow_writes(value: &str) -> Option<bool> {
+    Some(match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" => true,
+        "0" | "false" | "no" | "yes" | "" => false,
+        // Fail closed for values that are not understood by the CLI flag
+        // parser; an invalid setting must never silently enable writes.
+        _ => false,
+    })
 }
 
 fn effective_mcp_policy(state: McpGlobalPolicyState) -> McpGlobalPolicy {
@@ -3407,6 +3413,16 @@ mod tests {
         // Unset env var leaves the policy as-is.
         assert!(!effective_mcp_policy_with_legacy_allow_writes(policy_state(true, false), None).read_only);
         assert!(effective_mcp_policy_with_legacy_allow_writes(policy_state(true, true), None).read_only);
+    }
+
+    #[test]
+    fn legacy_allow_writes_parser_fails_closed_for_unknown_values() {
+        assert_eq!(parse_legacy_mcp_allow_writes("1"), Some(true));
+        assert_eq!(parse_legacy_mcp_allow_writes("yes"), Some(false));
+        assert_eq!(parse_legacy_mcp_allow_writes("0"), Some(false));
+        assert_eq!(parse_legacy_mcp_allow_writes("no"), Some(false));
+        assert_eq!(parse_legacy_mcp_allow_writes(""), Some(false));
+        assert_eq!(parse_legacy_mcp_allow_writes("unexpected"), Some(false));
     }
 
     #[test]
