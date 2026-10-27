@@ -58,7 +58,7 @@ impl From<&ConnectionConfig> for ConnectionSummary {
 }
 
 fn legacy_mcp_allow_writes() -> Option<bool> {
-    Some(parse_legacy_mcp_allow_writes(&std::env::var("DBX_MCP_ALLOW_WRITES").ok()?)?)
+    parse_legacy_mcp_allow_writes(&std::env::var("DBX_MCP_ALLOW_WRITES").ok()?)
 }
 
 fn parse_legacy_mcp_allow_writes(value: &str) -> Option<bool> {
