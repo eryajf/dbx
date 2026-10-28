@@ -222,7 +222,12 @@ fn compile_file_filter(file_filter: &str) -> Result<Regex, String> {
     Regex::new(&pattern).map_err(|error| format!("Invalid file filter regular expression: {error}"))
 }
 
-fn scan_sql_files(dir: &Path, depth: usize, visited: &mut HashSet<String>, file_filter: &Regex) -> Result<Vec<SqlFileEntry>, String> {
+fn scan_sql_files(
+    dir: &Path,
+    depth: usize,
+    visited: &mut HashSet<String>,
+    file_filter: &Regex,
+) -> Result<Vec<SqlFileEntry>, String> {
     scan_sql_files_with_directories(dir, depth, visited, file_filter, false)
 }
 
@@ -242,8 +247,8 @@ fn scan_sql_files_with_directories(
         return Ok(vec![]);
     }
     let mut entries = Vec::new();
-    let dir_entries = std::fs::read_dir(dir)
-        .map_err(|error| format!("Failed to read SQL folder '{}': {error}", dir.display()))?;
+    let dir_entries =
+        std::fs::read_dir(dir).map_err(|error| format!("Failed to read SQL folder '{}': {error}", dir.display()))?;
     for entry in dir_entries {
         let entry = match entry {
             Ok(entry) => entry,
@@ -285,7 +290,12 @@ fn scan_sql_files_with_directories(
                 entries.push(SqlFileEntry { name, path: path.to_string_lossy().to_string(), is_dir: true, children });
             }
         } else if file_type.is_file() && file_filter.is_match(&name) {
-            entries.push(SqlFileEntry { name, path: path.to_string_lossy().to_string(), is_dir: false, children: vec![] });
+            entries.push(SqlFileEntry {
+                name,
+                path: path.to_string_lossy().to_string(),
+                is_dir: false,
+                children: vec![],
+            });
         }
     }
     entries.sort_by(|a, b| {
