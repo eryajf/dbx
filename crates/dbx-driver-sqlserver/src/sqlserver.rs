@@ -887,8 +887,10 @@ fn server_messages_query_result(messages: Vec<String>, start: Instant) -> Option
         QueryResult {
             columns: vec![],
             column_types: vec![],
+            deferred_large_value_cells: Vec::new(),
             column_sortables: vec![],
             spatial_columns: vec![],
+            raw_key_cells: Vec::new(),
             spatial_values: vec![],
             rows: vec![],
             affected_rows: 0,
@@ -1010,8 +1012,10 @@ fn collect_first_result_finish(
         QueryResult {
             columns,
             column_types,
+            deferred_large_value_cells: Vec::new(),
             column_sortables: vec![],
             spatial_columns,
+            raw_key_cells: Vec::new(),
             spatial_values,
             rows,
             affected_rows: 0,
@@ -1946,8 +1950,10 @@ fn push_sqlserver_result_set(results: &mut Vec<QueryResult>, result: Option<SqlS
         results.push(QueryResult {
             columns: result.columns,
             column_types: result.column_types,
+            deferred_large_value_cells: Vec::new(),
             column_sortables: vec![],
             spatial_columns: vec![],
+            raw_key_cells: Vec::new(),
             spatial_values: vec![],
             rows: result.rows,
             affected_rows: 0,
@@ -2006,8 +2012,10 @@ fn push_sqlserver_ordered_events(
                     result: QueryResult {
                         columns: vec![],
                         column_types: vec![],
+                        deferred_large_value_cells: Vec::new(),
                         column_sortables: vec![],
                         spatial_columns: vec![],
+                        raw_key_cells: Vec::new(),
                         spatial_values: vec![],
                         rows: vec![],
                         affected_rows,
@@ -3372,6 +3380,7 @@ pub async fn list_indexes(client: &mut SqlServerClient, schema: &str, table: &st
             let cols_str = row.get::<&str, _>(1).unwrap_or("");
             let inc_str = row.get::<&str, _>(5).unwrap_or("");
             IndexInfo {
+                owner: None,
                 key_directions: Vec::new(),
                 visibility: None,
                 key_metadata_complete: false,
@@ -3578,6 +3587,7 @@ pub async fn list_triggers(
             valid: None,
             comment: None,
             created_at: None,
+            oracle_metadata: None,
             statement: row.get::<&str, _>(3).map(str::to_string),
         })
         .collect())
@@ -3894,8 +3904,10 @@ async fn execute_query_with_max_rows_inner(
             QueryResult {
                 columns: vec![],
                 column_types: Vec::new(),
+                deferred_large_value_cells: Vec::new(),
                 column_sortables: vec![],
                 spatial_columns: vec![],
+                raw_key_cells: Vec::new(),
                 spatial_values: vec![],
                 rows: vec![],
                 affected_rows: result.rows_affected().iter().sum::<u64>(),
@@ -3961,8 +3973,10 @@ async fn execute_batch_with_max_rows_metadata_inner(
             QueryResult {
                 columns: vec![],
                 column_types: Vec::new(),
+                deferred_large_value_cells: Vec::new(),
                 column_sortables: vec![],
                 spatial_columns: vec![],
+                raw_key_cells: Vec::new(),
                 spatial_values: vec![],
                 rows: vec![],
                 affected_rows: result.rows_affected().iter().sum::<u64>(),
@@ -4061,8 +4075,10 @@ pub async fn execute_simple_batch_with_max_rows_metadata(
             result: QueryResult {
                 columns: vec![],
                 column_types: Vec::new(),
+                deferred_large_value_cells: Vec::new(),
                 column_sortables: vec![],
                 spatial_columns: vec![],
+                raw_key_cells: Vec::new(),
                 spatial_values: vec![],
                 rows: vec![],
                 affected_rows: 0,
@@ -4685,8 +4701,10 @@ mod tests {
         let empty = QueryResult {
             columns: vec![],
             column_types: vec![],
+            deferred_large_value_cells: Vec::new(),
             column_sortables: vec![],
             spatial_columns: vec![],
+            raw_key_cells: Vec::new(),
             spatial_values: vec![],
             rows: vec![],
             affected_rows: 0,
@@ -4711,8 +4729,10 @@ mod tests {
             QueryResult {
                 columns: vec![],
                 column_types: vec![],
+                deferred_large_value_cells: Vec::new(),
                 column_sortables: vec![],
                 spatial_columns: vec![],
+                raw_key_cells: Vec::new(),
                 spatial_values: vec![],
                 rows: vec![],
                 affected_rows: 0,
@@ -4732,8 +4752,10 @@ mod tests {
         let select = QueryResult {
             columns: vec!["id".to_string()],
             column_types: vec!["int".to_string()],
+            deferred_large_value_cells: Vec::new(),
             column_sortables: vec![],
             spatial_columns: vec![],
+            raw_key_cells: Vec::new(),
             spatial_values: vec![],
             rows: vec![vec![serde_json::json!(1)]],
             affected_rows: 0,
@@ -5991,8 +6013,10 @@ mod tests {
         let context = completion_context_from_query_result(QueryResult {
             columns: vec!["default_schema".to_string(), "engine_edition".to_string()],
             column_types: vec![],
+            deferred_large_value_cells: Vec::new(),
             column_sortables: vec![],
             spatial_columns: vec![],
+            raw_key_cells: Vec::new(),
             spatial_values: vec![],
             rows: vec![vec![serde_json::json!("app_user"), serde_json::json!("8")]],
             affected_rows: 0,
@@ -6554,8 +6578,10 @@ mod tests {
         let mut result = QueryResult {
             columns: vec!["id".to_string(), "__dbx_row_num".to_string()],
             column_types: vec!["int".to_string(), "bigint".to_string()],
+            deferred_large_value_cells: Vec::new(),
             column_sortables: vec![],
             spatial_columns: vec![],
+            raw_key_cells: Vec::new(),
             spatial_values: vec![],
             rows: vec![vec![serde_json::json!(42), serde_json::json!(101)]],
             affected_rows: 0,

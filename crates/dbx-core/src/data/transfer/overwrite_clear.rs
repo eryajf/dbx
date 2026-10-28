@@ -28,6 +28,7 @@ pub async fn clear_foreign_key_linked_overwrite_targets(
     target_db_type: DatabaseType,
     target_pool_key: &str,
 ) -> Result<HashSet<String>, String> {
+    super::check_data_charset_transfer(state, request).await?;
     if !overwrite_clear_prepass_enabled(request, tables.len(), &target_db_type) {
         return Ok(HashSet::new());
     }
@@ -193,6 +194,7 @@ mod tests {
             table_filters: HashMap::new(),
             drop_target_before_create: false,
             drop_target_confirmed: false,
+            oracle_packages: None,
         }
     }
 
