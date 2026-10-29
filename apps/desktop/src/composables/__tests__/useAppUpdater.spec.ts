@@ -75,8 +75,13 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe("older version release pages", () => {
-  it("uses the beta release tag for CNB update pages", () => {
-    expect(resolveUpdateReleaseUrl({ ...info, channel: "beta", release_tag: "v1.1.0-beta.20261028.1" }, "cnb", "fallback")).toBe("https://cnb.cool/dbxio.com/dbx/-/releases/tag/v1.1.0-beta.20261028.1");
+  it("opens the GitHub beta release before it has been mirrored to CNB", () => {
+    const releaseUrl = "https://github.com/t8y2/dbx/releases/tag/v1.1.0-beta.20261028.1";
+    expect(resolveUpdateReleaseUrl({ ...info, channel: "beta", release_tag: "v1.1.0-beta.20261028.1", release_url: releaseUrl }, "cnb", "fallback")).toBe(releaseUrl);
+  });
+
+  it("uses the original beta tag on CNB after promotion to stable", () => {
+    expect(resolveUpdateReleaseUrl({ ...info, channel: "stable", release_tag: "v1.1.0-beta.20261028.1" }, "cnb", "fallback")).toBe("https://cnb.cool/dbxio.com/dbx/-/releases/tag/v1.1.0-beta.20261028.1");
   });
 
   it("maps a historical version to the matching GitHub release page", () => {

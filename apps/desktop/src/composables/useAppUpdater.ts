@@ -131,6 +131,8 @@ export function tagVersion(version: string): string {
 }
 
 export function resolveUpdateReleaseUrl(info: api.UpdateInfo | null, source: unknown, fallbackUrl: string): string {
+  // Beta releases are mirrored to CNB only after promotion to stable.
+  if (info?.channel === "beta") return info.release_url || fallbackUrl;
   const normalizedSource = normalizeUpdateDownloadSource(source);
   if (normalizedSource === "cnb" && (info?.release_tag || info?.latest_version)) {
     const tag = info.release_tag ?? tagVersion(info.latest_version);
