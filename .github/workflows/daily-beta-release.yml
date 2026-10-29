@@ -55,7 +55,8 @@ jobs:
           sequence=1
           while :; do
             tag="v${base_version}-beta.${date_suffix}.${sequence}"
-            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              && ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
               break
             fi
             sequence=$((sequence + 1))
@@ -65,9 +66,13 @@ jobs:
             echo "::error::MCP_RELEASE_TOKEN is required to dispatch the release workflow because GITHUB_TOKEN-created events do not trigger another workflow."
             exit 1
           fi
+          # A draft release does not publish its tag. Dispatch requires an
+          # existing ref so every matrix job can check out this exact source.
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f "ref=refs/tags/${tag}" -f "sha=${GITHUB_SHA}"
           gh release create "$tag" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
+            --verify-tag \
             --draft \
             --title "DBX ${base_version} Beta ${date_suffix}.${sequence}" \
             --generate-notes

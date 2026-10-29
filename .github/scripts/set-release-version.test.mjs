@@ -48,3 +48,24 @@ test("sets the base version for a stable build", async () => {
   assert.equal(result.code, 0, result.stderr);
   assert.match(await readFile(join(root, "src-tauri/Cargo.toml"), "utf8"), /version = "0\.6\.60"/);
 });
+
+test("accepts an already prepared stable or beta checkout without changing its metadata", async () => {
+  for (const tag of ["v0.6.59", "v0.6.60-beta.20261029.1"]) {
+    const root = await fixture();
+    const first = await run(tag, root);
+    assert.equal(first.code, 0, first.stderr);
+    const files = ["package.json", "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml", "crates/dbx-web/Cargo.toml", "Cargo.lock"];
+    const before = await Promise.all(files.map((path) => readFile(join(root, path), "utf8")));
+    const second = await run(tag, root);
+    assert.equal(second.code, 0, second.stderr);
+    assert.deepEqual(await Promise.all(files.map((path) => readFile(join(root, path), "utf8"))), before);
+  }
+});
+
+test("rejects a lockfile missing one of the application packages", async () => {
+  const root = await fixture();
+  await writeFile(join(root, "Cargo.lock"), '[[package]]\nname = "dbx"\nversion = "0.6.59"\n');
+  const result = await run("v0.6.60", root);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /dbx-web package version was not found/);
+});

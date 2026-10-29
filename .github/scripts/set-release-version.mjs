@@ -26,8 +26,9 @@ for (const relativePath of jsonFiles) {
 for (const relativePath of cargoFiles) {
   const path = resolve(root, relativePath);
   const source = readFileSync(path, "utf8");
-  const updated = source.replace(/^(version\s*=\s*")[^"]+(")/m, `$1${version}$2`);
-  if (updated === source) throw new Error(`Package version declaration not found in ${relativePath}.`);
+  const pattern = /^(version\s*=\s*")[^"]+(")/m;
+  if (!pattern.test(source)) throw new Error(`Package version declaration not found in ${relativePath}.`);
+  const updated = source.replace(pattern, `$1${version}$2`);
   writeFileSync(path, updated);
 }
 
@@ -36,9 +37,9 @@ const lockSource = readFileSync(lockPath, "utf8");
 let lockUpdated = lockSource;
 for (const packageName of ["dbx", "dbx-web"]) {
   const pattern = new RegExp(`(\\[\\[package\\]\\]\\nname = "${packageName}"\\nversion = ")[^\\n"]+(")`);
+  if (!pattern.test(lockUpdated)) throw new Error(`${packageName} package version was not found in Cargo.lock.`);
   lockUpdated = lockUpdated.replace(pattern, `$1${version}$2`);
 }
-if (lockUpdated === lockSource) throw new Error("DBX package versions were not found in Cargo.lock.");
 writeFileSync(lockPath, lockUpdated);
 
 for (const relativePath of [...jsonFiles, ...cargoFiles, "Cargo.lock"]) {

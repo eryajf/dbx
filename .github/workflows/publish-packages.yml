@@ -13,6 +13,7 @@ on:
         type: boolean
 
 permissions:
+  actions: read
   contents: write
 
 env:
@@ -31,6 +32,8 @@ jobs:
       published_at: ${{ steps.release.outputs.published_at }}
       is_beta: ${{ steps.version.outputs.is_beta }}
     steps:
+      - uses: actions/checkout@v7
+
       - name: Extract and validate beta tag
         id: version
         shell: bash
@@ -79,12 +82,7 @@ jobs:
           if [[ "$(jq -r '.object.type' <<<"$REF_JSON")" == tag ]]; then
             SHA="$(gh api "repos/${{ github.repository }}/git/tags/${SHA}" --jq '.object.sha')"
           fi
-          CHECKS="$(gh api "repos/${{ github.repository }}/commits/${SHA}/check-runs?per_page=100")"
-          if ! jq -e '(.check_runs | length > 0) and all(.check_runs[]; .status == "completed" and (.conclusion == "success" or .conclusion == "skipped" or .conclusion == "neutral"))' <<<"$CHECKS" >/dev/null; then
-            echo "::error::Release commit checks are incomplete or unsuccessful for $TAG."
-            jq -r '.check_runs[] | "\(.name): \(.status)/\(.conclusion)"' <<<"$CHECKS"
-            exit 1
-          fi
+          node .github/scripts/validate-release-ci.mjs "$GITHUB_REPOSITORY" "$SHA"
 
       - name: Validate updater manifest and platform assets
         env:
