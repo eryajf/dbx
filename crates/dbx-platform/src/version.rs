@@ -7,6 +7,11 @@ pub fn parse_version(version: &str) -> Vec<u64> {
 }
 
 pub fn is_newer_version(latest: &str, current: &str) -> bool {
+    if let (Ok(latest), Ok(current)) =
+        (semver::Version::parse(&normalize_version(latest)), semver::Version::parse(&normalize_version(current)))
+    {
+        return latest > current;
+    }
     let latest_parts = parse_version(latest);
     let current_parts = parse_version(current);
     let max_len = latest_parts.len().max(current_parts.len());
@@ -41,5 +46,9 @@ mod tests {
         assert!(is_newer_version("1.0.0", "0.9.9"));
         assert!(!is_newer_version("0.2.0", "0.2.0"));
         assert!(!is_newer_version("0.1.9", "0.2.0"));
+        assert!(is_newer_version("0.6.60-beta.20261028.1", "0.6.59"));
+        assert!(is_newer_version("0.6.60-beta.20261029.1", "0.6.60-beta.20261028.1"));
+        assert!(is_newer_version("0.6.60", "0.6.60-beta.20261028.1"));
+        assert!(!is_newer_version("0.6.59", "0.6.60-beta.20261028.1"));
     }
 }

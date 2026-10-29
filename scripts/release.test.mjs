@@ -9,6 +9,8 @@ import { isDesktopVersionOnlyCargoLockChange } from "./release-lock.mjs";
 const repoRoot = new URL("..", import.meta.url).pathname;
 const releaseScript = join(repoRoot, "scripts/release.mjs");
 const releaseWorkflow = join(repoRoot, ".github/workflows/release.yml");
+const appPublishWorkflow = join(repoRoot, ".github/workflows/publish-packages.yml");
+const dailyBetaWorkflow = join(repoRoot, ".github/workflows/daily-beta-release.yml");
 const packagesWorkflow = join(repoRoot, ".github/workflows/mcp-release.yml");
 const vsignConfigPath = join(repoRoot, "src-tauri/tauri.vsign.conf.json");
 const appImageBundlerSetup = join(repoRoot, ".github/scripts/prepare-appimage-bundler.sh");
@@ -70,6 +72,30 @@ test("rollback dry-run prints all affected channels without invoking GitHub", ()
   assert.match(result.stdout, /sync-cnb-release-assets\.yml/);
   assert.match(result.stdout, /rollback-docker-latest\.yml/);
   assert.match(result.stdout, /does not downgrade clients/);
+});
+
+test("app release workflows preserve beta tags and stable package URLs", () => {
+  const release = readFileSync(releaseWorkflow, "utf8");
+  const publish = readFileSync(appPublishWorkflow, "utf8");
+  const daily = readFileSync(dailyBetaWorkflow, "utf8");
+
+  assert.ok(release.includes("$version = $tagVersion -replace '-beta\\..*$', ''"));
+  assert.match(release, /--draft=false --prerelease/);
+  assert.match(publish, /__TAG__/);
+  assert.match(publish, /needs: \[publish-stable-alias, validate-candidate\]/);
+  assert.match(publish, /releases\/latest\/download\/\$\{PRODUCT_NAME\}_\\\$version/);
+  assert.match(publish, /Publish stable manifest to GitHub Release/);
+  assert.match(publish, /prepare-channel-manifest\.mjs[\s\S]+stable \"\$TAG\" true/);
+  assert.match(publish, /gh release upload \"\$TAG\" \"\$manifest_dir\/latest\.json\"/);
+  assert.match(daily, /schedule:/);
+  assert.match(daily, /gh release create "\$tag"/);
+  assert.match(daily, /-beta\.\$\{date_suffix\}\.\$\{sequence\}/);
+  assert.match(daily, /gh workflow run release\.yml/);
+  assert.match(daily, /MCP_RELEASE_TOKEN/);
+  assert.match(daily, /matches stable; publishing a daily beta build/);
+  assert.match(release, /workflow_dispatch:/);
+  assert.match(release, /release_tag:/);
+  assert.match(release, /RELEASE_TAG:/);
 });
 
 test("rollback dispatches each distribution workflow after validation", () => {
