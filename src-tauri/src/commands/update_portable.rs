@@ -44,12 +44,12 @@ pub(super) fn ensure_portable_version_is_newer(
 }
 
 fn is_portable_upgrade(requested: &Version, current: &Version) -> bool {
-    requested > current
-        || (requested.major == current.major
-            && requested.minor == current.minor
-            && requested.patch == current.patch
-            && !requested.pre.is_empty()
-            && current.pre.is_empty())
+    let channel = if requested.pre.is_empty() {
+        dbx_core::update::UpdateChannel::Stable
+    } else {
+        dbx_core::update::UpdateChannel::Beta
+    };
+    dbx_core::update::is_channel_update_available(channel, &requested.to_string(), &current.to_string())
 }
 
 fn parse_portable_version(value: &str, label: &str) -> Result<Version, String> {
@@ -452,6 +452,10 @@ mod tests {
     fn accepts_same_base_beta_from_stable_portable_build() {
         assert!(validate_requested_portable_version("0.5.64-beta.20261029.1", "0.5.64").is_ok());
         assert!(validate_requested_portable_version("0.5.64", "0.5.64-beta.20261029.1").is_err());
+        assert!(validate_requested_portable_version("0.5.65", "0.5.64-beta.20261029.1").is_ok());
+        assert!(validate_requested_portable_version("0.5.63", "0.5.64-beta.20261029.1").is_err());
+        assert!(validate_requested_portable_version("0.5.64-beta.20261029.2", "0.5.64-beta.20261029.1").is_ok());
+        assert!(validate_requested_portable_version("0.5.64-beta.20261029.1", "0.5.64-beta.20261029.2").is_err());
     }
 
     #[test]

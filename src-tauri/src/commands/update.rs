@@ -22,6 +22,7 @@ const OFFICIAL_UPDATE_ENDPOINTS: [&str; 2] = [
     "https://github.com/t8y2/dbx/releases/latest/download/latest.json",
 ];
 const BETA_UPDATE_ENDPOINTS: [&str; 1] = ["https://dl.dbxio.com/releases/beta/latest.json"];
+#[cfg(test)]
 const R2_LATEST_RELEASE_DOWNLOAD_PREFIX: &str = "https://dl.dbxio.com/releases/latest/";
 const R2_STABLE_RELEASE_DOWNLOAD_PREFIX: &str = "https://dl.dbxio.com/releases/stable/latest/";
 const R2_BETA_RELEASE_DOWNLOAD_PREFIX: &str = "https://dl.dbxio.com/releases/beta/latest/";
@@ -37,6 +38,12 @@ const IS_WINDOWS_7_TARGET: bool = cfg!(target_vendor = "win7");
 fn dbx_updater_builder(app: &AppHandle) -> UpdaterBuilder {
     let cleanup_app = app.clone();
     app.updater_builder().on_before_exit(move || crate::cleanup_before_updater_forced_exit(&cleanup_app))
+}
+
+fn with_update_channel(builder: UpdaterBuilder, channel: UpdateChannel) -> UpdaterBuilder {
+    builder.version_comparator(move |current, update| {
+        dbx_core::update::is_channel_update_available(channel, &update.version.to_string(), &current.to_string())
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -480,7 +487,7 @@ fn restore_cached(app: &AppHandle) -> Result<Option<CachedUpdate>, String> {
             )?;
             ReadyUpdate::Portable { archive: bytes, version }
         } else {
-            let update = dbx_updater_builder(app)
+            let update = with_update_channel(dbx_updater_builder(app), record.info.channel)
                 .build()
                 .map_err(|e| e.to_string())?
                 .restore_update(record.manifest.clone().ok_or("Missing cached release metadata")?)
@@ -645,13 +652,9 @@ async fn download_update_inner(
     for endpoint_url in endpoint_urls {
         endpoints.push(endpoint_url.parse().map_err(|e| format!("Invalid update endpoint: {e}"))?);
     }
-    let mut builder = dbx_updater_builder(app)
+    let mut builder = with_update_channel(dbx_updater_builder(app), channel)
         .endpoints(endpoints)
         .map_err(|e| format!("Failed to configure updater endpoint: {e}"))?;
-
-    builder = builder.version_comparator(move |current, update| {
-        dbx_core::update::is_channel_update_available(channel, &update.version.to_string(), &current.to_string())
-    });
 
     if let Some(proxy_url) = dbx_core::update::system_proxy_url() {
         let proxy = proxy_url.parse().map_err(|e| format!("Invalid system proxy URL: {e}"))?;
@@ -1072,6 +1075,34 @@ mod tests {
         );
         assert!(super::release_tag_for_version(&version, Some("v0.6.61-beta.20261028.1".into())).is_err());
         assert_eq!(super::release_tag_for_version(&version, None).unwrap(), "v0.6.60");
+    }
+
+    #[test]
+    fn offline_restore_keeps_a_same_base_beta_download_installable() {
+        use tauri_plugin_updater::UpdaterExt;
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().plugins.0.insert("updater".into(), serde_json::json!({ "pubkey": "" }));
+        let app =
+            tauri::test::mock_builder().plugin(tauri_plugin_updater::Builder::new().build()).build(context).unwrap();
+        let current = &app.package_info().version;
+        let manifest = serde_json::json!({
+            "version": format!("{}.{}.{}-beta.20261029.1", current.major, current.minor, current.patch),
+            "platforms": {
+                "test-target": { "url": "https://example.com/dbx.tar.gz", "signature": "test-signature" }
+            }
+        });
+        let restore = |channel| {
+            super::with_update_channel(app.updater_builder(), channel)
+                .target("test-target")
+                .endpoints(vec!["https://example.com/latest.json".parse().unwrap()])
+                .unwrap()
+                .build()
+                .unwrap()
+                .restore_update(manifest.clone())
+                .unwrap()
+        };
+        assert!(restore(UpdateChannel::Beta).is_some());
+        assert!(restore(UpdateChannel::Stable).is_none());
     }
 
     #[test]

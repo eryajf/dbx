@@ -108,10 +108,13 @@ export function isNewerRemoteVersion(latest: string, cached: string): boolean {
  */
 export function isPreparedUpdateObsolete(preparedVersion: string, currentVersion: string, channel: SettingsUpdateChannel = "stable"): boolean {
   if (!preparedVersion || !currentVersion) return false;
-  if (channel === "beta") {
-    const prepared = parseUpdateVersion(preparedVersion);
-    const current = parseUpdateVersion(currentVersion);
-    if (prepared && current && prepared.prerelease.length && !current.prerelease.length && prepared.core.join(".") === current.core.join(".")) return false;
+  const prepared = parseUpdateVersion(preparedVersion);
+  const current = parseUpdateVersion(currentVersion);
+  if (prepared && current && prepared.core.join(".") === current.core.join(".")) {
+    if (channel === "beta" && prepared.prerelease.length && !current.prerelease.length) return false;
+    // Promotion keeps the beta binary, so a stable manifest with the same
+    // base version does not represent a package the running build needs.
+    if (channel === "stable" && !prepared.prerelease.length && current.prerelease.length) return true;
   }
   return !isNewerRemoteVersion(preparedVersion, currentVersion);
 }

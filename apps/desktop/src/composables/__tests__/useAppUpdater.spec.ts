@@ -113,10 +113,26 @@ describe("prepared update reconciliation (#13562)", () => {
     expect(isPreparedUpdateObsolete("0.5.61", "")).toBe(false);
     expect(isPreparedUpdateObsolete("0.6.60-beta.20261029.1", "0.6.60", "beta")).toBe(false);
     expect(isPreparedUpdateObsolete("0.6.60-beta.20261029.1", "0.6.60", "stable")).toBe(true);
+    expect(isPreparedUpdateObsolete("0.6.60", "0.6.60-beta.20261029.1", "stable")).toBe(true);
+    expect(isPreparedUpdateObsolete("0.6.61", "0.6.60-beta.20261029.1", "stable")).toBe(false);
   });
 });
 
 describe("silent update lifecycle", () => {
+  it("discards the promoted stable cache when its beta binary is already running", async () => {
+    mocks.getAppVersion.mockResolvedValue("1.1.0-beta.20261029.1");
+    mocks.getDownloadedUpdate.mockResolvedValue(cache);
+    mocks.checkForUpdates.mockResolvedValue({ ...info, current_version: "1.1.0-beta.20261029.1", channel: "stable", update_available: false });
+    const updater = mount();
+    await updater.initialize();
+    await flush();
+
+    expect(mocks.discardDownloadedUpdate).toHaveBeenCalledWith(cache.cache_id);
+    expect(updater.updateDownloaded.value).toBe(false);
+    expect(updater.hasUpdateAvailable.value).toBe(false);
+    expect(mocks.downloadUpdate).not.toHaveBeenCalled();
+  });
+
   it("does not check or download updates when disabled for an isolated dev client", async () => {
     vi.stubEnv("VITE_DBX_DISABLE_UPDATER", "1");
     const updater = mount();
