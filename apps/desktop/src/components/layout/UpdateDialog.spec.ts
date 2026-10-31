@@ -214,6 +214,30 @@ describe("UpdateDialog update channels", () => {
       vi.fn(async () => {}),
       {
         updateInfo: {
+          current_version: "0.6.60-beta.20261028.1",
+          latest_version: "0.6.60",
+          update_available: false,
+          portable_mode: false,
+          manual_update_only: false,
+          release_name: "DBX v0.6.60",
+          release_url: "https://github.com/t8y2/dbx/releases/tag/v0.6.60",
+          release_notes: "",
+          channel: "stable",
+          release_tag: "v0.6.60",
+          is_promoted: true,
+        },
+      },
+    );
+    expect(document.body.textContent).not.toContain("stable channel is older");
+
+    for (const app of mountedApps.splice(0)) app.unmount();
+    document.body.innerHTML = "";
+    await mountDialog(
+      0,
+      {},
+      vi.fn(async () => {}),
+      {
+        updateInfo: {
           current_version: "0.6.59",
           latest_version: "0.6.60-beta.20261028.1",
           update_available: true,

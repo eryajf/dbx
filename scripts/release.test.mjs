@@ -87,6 +87,11 @@ test("app release workflows preserve beta tags and stable package URLs", () => {
   assert.match(publish, /Publish stable manifest to GitHub Release/);
   assert.match(publish, /prepare-channel-manifest\.mjs[\s\S]+stable \"\$TAG\" true/);
   assert.match(publish, /gh release upload \"\$TAG\" \"\$manifest_dir\/latest\.json\"/);
+  assert.ok(publish.includes('test("^v[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]{8}[.][0-9]+$"'));
+  assert.match(publish, /cleanup_family stable keep_stable_tags/);
+  assert.match(publish, /cleanup_family beta keep_beta_tags/);
+  assert.match(release, /contains\(env\.RELEASE_TAG, '-beta\.'\)/);
+  assert.match(release, /if \(!\$isBeta -and \$msiInstallers\.Count -eq 0\)/);
   assert.match(daily, /schedule:/);
   assert.match(daily, /gh release create "\$tag"/);
   assert.match(daily, /-beta\.\$\{date_suffix\}\.\$\{sequence\}/);

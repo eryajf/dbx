@@ -111,7 +111,10 @@ const changelogLang = computed(() => changelogLangFromLocale(locale.value || cur
 const currentVersion = computed(() => props.updateInfo?.current_version || fallbackVersion.value);
 const stableDowngradeBlocked = computed(() => {
   const current = currentVersion.value.trim().replace(/^v/i, "");
-  return props.updateInfo?.channel === "stable" && current.includes("-") && !props.updateInfo.update_available;
+  const latest = (props.updateInfo?.latest_version ?? "").trim().replace(/^v/i, "");
+  const currentBase = current.split(/[+-]/, 1)[0];
+  const latestBase = latest.split(/[+-]/, 1)[0];
+  return props.updateInfo?.channel === "stable" && current.includes("-") && !props.updateInfo.update_available && Boolean(currentBase && latestBase) && isNewerRemoteVersion(currentBase, latestBase);
 });
 // 只保留低于当前版本的发布记录：新版本走“客户端更新”，这里专用于回退
 const olderReleases = computed(() => {

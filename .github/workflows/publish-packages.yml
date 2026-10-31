@@ -563,12 +563,8 @@ jobs:
           )
           mapfile -t keep_beta_tags < <(
             gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 --json tagName,isDraft,isPrerelease,publishedAt \
-              | jq -r '[.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | test("^v[0-9]+[.][0-9]+[.]-beta[.][0-9]{8}[.][0-9]+$")))] | sort_by(.publishedAt) | reverse | .[:5] | .[].tagName'
+              | jq -r '[.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | test("^v[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]{8}[.][0-9]+$")))] | sort_by(.publishedAt) | reverse | .[:5] | .[].tagName'
           )
-          if [ "${#keep_stable_tags[@]}" -lt 5 ] || [ "${#keep_beta_tags[@]}" -lt 5 ]; then
-            echo "::warning::At least one release family has fewer than five published releases; skipping R2 cleanup."
-            exit 0
-          fi
           is_kept_release() {
             local family="$1" candidate="$2"
             if [[ "$family" == stable ]]; then
@@ -577,12 +573,19 @@ jobs:
               printf '%s\n' "${keep_beta_tags[@]}" | grep -Fxq -- "$candidate"
             fi
           }
-          if ! is_kept_release stable "${CURRENT_TAG}"; then
-            echo "::warning::Current release ${CURRENT_TAG} is not among the latest five stable releases; skipping R2 cleanup."
-            exit 0
-          fi
-          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          for family in stable beta; do
+          cleanup_family() {
+            local family="$1"
+            local -n keep_tags="$2"
+            if [ "${#keep_tags[@]}" -lt 5 ]; then
+              echo "::warning::Fewer than five published ${family} releases; skipping ${family} R2 cleanup."
+              return 0
+            fi
+            if [[ "${CURRENT_TAG}" == *-beta.* && "$family" == beta ]] || [[ "${CURRENT_TAG}" != *-beta.* && "$family" == stable ]]; then
+              if ! is_kept_release "$family" "${CURRENT_TAG}"; then
+                echo "::warning::Current release ${CURRENT_TAG} is not among the latest five ${family} releases; skipping ${family} R2 cleanup."
+                return 0
+              fi
+            fi
             mapfile -t stored_tags < <(
               aws s3api list-objects-v2 --bucket "${R2_BUCKET_NAME}" --prefix "releases/${family}/" --delimiter "/" \
                 --endpoint-url "${endpoint}" --query 'CommonPrefixes[].Prefix' --output text \
@@ -593,7 +596,10 @@ jobs:
               echo "Removing old R2 release: ${family}/${tag}"
               aws s3 rm "s3://${R2_BUCKET_NAME}/releases/${family}/${tag}/" --recursive --endpoint-url "${endpoint}"
             done
-          done
+          }
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          cleanup_family stable keep_stable_tags
+          cleanup_family beta keep_beta_tags
           mapfile -t legacy_tags < <(
             aws s3api list-objects-v2 --bucket "${R2_BUCKET_NAME}" --prefix "releases/" --delimiter "/" \
               --endpoint-url "${endpoint}" --query 'CommonPrefixes[].Prefix' --output text \
