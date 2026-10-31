@@ -7,11 +7,7 @@ pub fn parse_version(version: &str) -> Vec<u64> {
 }
 
 pub fn base_version(version: &str) -> String {
-    normalize_version(version)
-        .split(['-', '+'])
-        .next()
-        .unwrap_or_default()
-        .to_string()
+    normalize_version(version).split(['-', '+']).next().unwrap_or_default().to_string()
 }
 
 pub fn is_version_compatible(min_version: &str, current_version: &str) -> bool {
