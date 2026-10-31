@@ -554,61 +554,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-          CURRENT_TAG: ${{ needs.upload-r2.outputs.tag }}
-        run: |
-          set -euo pipefail
-          mapfile -t keep_stable_tags < <(
-            gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 --json tagName,isDraft,isPrerelease,publishedAt \
-              | jq -r '[.[] | select(.isDraft == false and (.tagName | test("^v[0-9]+[.][0-9]+[.][0-9]+([.-][0-9A-Za-z.-]+)?$")) and (.isPrerelease == false))] | sort_by(.publishedAt) | reverse | .[:5] | .[].tagName'
-          )
-          mapfile -t keep_beta_tags < <(
-            gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 --json tagName,isDraft,isPrerelease,publishedAt \
-              | jq -r '[.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | test("^v[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]{8}[.][0-9]+$")))] | sort_by(.publishedAt) | reverse | .[:5] | .[].tagName'
-          )
-          is_kept_release() {
-            local family="$1" candidate="$2"
-            if [[ "$family" == stable ]]; then
-              printf '%s\n' "${keep_stable_tags[@]}" | grep -Fxq -- "$candidate"
-            else
-              printf '%s\n' "${keep_beta_tags[@]}" | grep -Fxq -- "$candidate"
-            fi
-          }
-          cleanup_family() {
-            local family="$1"
-            local -n keep_tags="$2"
-            if [ "${#keep_tags[@]}" -lt 5 ]; then
-              echo "::warning::Fewer than five published ${family} releases; skipping ${family} R2 cleanup."
-              return 0
-            fi
-            if [[ "${CURRENT_TAG}" == *-beta.* && "$family" == beta ]] || [[ "${CURRENT_TAG}" != *-beta.* && "$family" == stable ]]; then
-              if ! is_kept_release "$family" "${CURRENT_TAG}"; then
-                echo "::warning::Current release ${CURRENT_TAG} is not among the latest five ${family} releases; skipping ${family} R2 cleanup."
-                return 0
-              fi
-            fi
-            mapfile -t stored_tags < <(
-              aws s3api list-objects-v2 --bucket "${R2_BUCKET_NAME}" --prefix "releases/${family}/" --delimiter "/" \
-                --endpoint-url "${endpoint}" --query 'CommonPrefixes[].Prefix' --output text \
-                | tr '\t' '\n' | sed -nE 's#^releases/(stable|beta)/(v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?)/$#\2#p'
-            )
-            for tag in "${stored_tags[@]}"; do
-              if is_kept_release "${family}" "${tag}"; then continue; fi
-              echo "Removing old R2 release: ${family}/${tag}"
-              aws s3 rm "s3://${R2_BUCKET_NAME}/releases/${family}/${tag}/" --recursive --endpoint-url "${endpoint}"
-            done
-          }
-          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          cleanup_family stable keep_stable_tags
-          cleanup_family beta keep_beta_tags
-          mapfile -t legacy_tags < <(
-            aws s3api list-objects-v2 --bucket "${R2_BUCKET_NAME}" --prefix "releases/" --delimiter "/" \
-              --endpoint-url "${endpoint}" --query 'CommonPrefixes[].Prefix' --output text \
-              | tr '\t' '\n' | sed -nE 's#^releases/(v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?)/$#\1#p'
-          )
-          for tag in "${legacy_tags[@]}"; do
-            echo "Removing legacy R2 release directory: ${tag}"
-            aws s3 rm "s3://${R2_BUCKET_NAME}/releases/${tag}/" --recursive --endpoint-url "${endpoint}"
-          done
+        run: bash .github/scripts/prune-r2-releases.sh stable "${{ needs.upload-r2.outputs.tag }}"
 
       - name: Purge Cloudflare cache
         env:

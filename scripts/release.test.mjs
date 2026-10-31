@@ -87,9 +87,8 @@ test("app release workflows preserve beta tags and stable package URLs", () => {
   assert.match(publish, /Publish stable manifest to GitHub Release/);
   assert.match(publish, /prepare-channel-manifest\.mjs[\s\S]+stable \"\$TAG\" true/);
   assert.match(publish, /gh release upload \"\$TAG\" \"\$manifest_dir\/latest\.json\"/);
-  assert.ok(publish.includes('test("^v[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]{8}[.][0-9]+$"'));
-  assert.match(publish, /cleanup_family stable keep_stable_tags/);
-  assert.match(publish, /cleanup_family beta keep_beta_tags/);
+  assert.match(publish, /prune-r2-releases\.sh stable "\$\{\{ needs\.upload-r2\.outputs\.tag \}\}"/);
+  assert.match(release, /prune-r2-releases\.sh beta "\$\{\{ inputs\.release_tag \|\| github\.ref_name \}\}"/);
   assert.match(release, /prepare-msi-config\.mjs "\$\{env:RELEASE_TAG\}" src-tauri\/tauri\.msi-version\.conf\.json/);
   assert.match(release, /--config src-tauri\/tauri\.msi-version\.conf\.json/);
   assert.doesNotMatch(release, /--bundles nsis' \|\| ''/);

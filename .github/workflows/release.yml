@@ -1190,6 +1190,15 @@ jobs:
           aws s3 sync "$RUNNER_TEMP/manifest/" "s3://${R2_BUCKET_NAME}/releases/beta/latest/" --endpoint-url "$endpoint" --cache-control "no-cache" --delete
           aws s3 cp "$RUNNER_TEMP/manifest/latest.json" "s3://${R2_BUCKET_NAME}/releases/beta/latest.json" --endpoint-url "$endpoint" --cache-control "no-cache"
 
+      - name: Keep latest five beta releases in R2
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: bash .github/scripts/prune-r2-releases.sh beta "${{ inputs.release_tag || github.ref_name }}"
 
   sync-release-to-cnb:
     name: Sync release to CNB
