@@ -87,17 +87,24 @@ pub async fn fetch_latest_release_for_channel(
     let resp = fetch_first_available(&client, &candidates).await?;
 
     let mut release = resp.json::<TauriRelease>().await.map_err(|e| format!("Failed to parse update response: {e}"))?;
-    let metadata_version = release.release_tag.as_deref().unwrap_or(&release.version);
-    if let Ok(github) = fetch_github_release_metadata(&client, metadata_version).await {
+    let identity_version = release_identity_version(&release).to_string();
+    if let Ok(github) = fetch_github_release_metadata(&client, &identity_version).await {
         release.github = Some(github);
     }
     // 非中文界面用户额外拉取英文 release notes；失败/版本不匹配则保持 None，上层回退中文。
     if !is_chinese_locale(locale) {
-        if let Ok(notes_en) = fetch_latest_release_notes_en(&client, &release.version).await {
+        if let Ok(notes_en) = fetch_latest_release_notes_en(&client, &identity_version).await {
             release.notes_en = Some(notes_en);
         }
     }
     Ok(release)
+}
+
+/// A promoted beta publishes the stable base version in `version` but keeps its
+/// beta tag in `release_tag`; GitHub metadata and R2 release notes are both keyed
+/// by that tag.
+fn release_identity_version(release: &TauriRelease) -> &str {
+    release.release_tag.as_deref().unwrap_or(&release.version)
 }
 
 async fn fetch_first_available(client: &reqwest::Client, candidates: &[String]) -> Result<reqwest::Response, String> {
@@ -296,7 +303,10 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_update_info, GithubReleaseMetadata, TauriRelease, UpdateChannel};
+    use super::{
+        build_update_info, normalize_version, release_identity_version, GithubReleaseMetadata, TauriRelease,
+        UpdateChannel,
+    };
 
     #[test]
     fn parses_jdbc_plugin_metadata_from_latest_json() {
@@ -404,6 +414,25 @@ mod tests {
         let info = build_update_info(release, "0.6.59");
 
         assert_eq!(info.release_url, "https://github.com/t8y2/dbx/releases/tag/v0.6.60-beta.20261028.1");
+    }
+
+    #[test]
+    fn release_identity_follows_the_tag_of_a_promoted_beta() {
+        let promoted = TauriRelease {
+            version: "0.6.60".to_string(),
+            channel: UpdateChannel::Stable,
+            release_tag: Some("v0.6.60-beta.20261028.1".to_string()),
+            is_promoted: true,
+            notes: None,
+            jdbc_plugin: None,
+            github: None,
+            notes_en: None,
+        };
+        // latest-en.json is keyed by the tag, so a promoted beta must not be matched by its base version.
+        assert_eq!(normalize_version(release_identity_version(&promoted)), "0.6.60-beta.20261028.1");
+
+        let legacy = TauriRelease { release_tag: None, ..promoted };
+        assert_eq!(release_identity_version(&legacy), "0.6.60");
     }
 
     #[test]
