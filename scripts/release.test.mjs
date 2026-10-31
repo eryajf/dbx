@@ -89,6 +89,14 @@ test("app release workflows preserve beta tags and stable package URLs", () => {
   assert.match(publish, /gh release upload \"\$TAG\" \"\$manifest_dir\/latest\.json\"/);
   assert.match(publish, /prune-r2-releases\.sh stable "\$\{\{ needs\.upload-r2\.outputs\.tag \}\}"/);
   assert.match(release, /prune-r2-releases\.sh beta "\$\{\{ inputs\.release_tag \|\| github\.ref_name \}\}"/);
+  assert.match(release, /gh release edit "\$\{RELEASE_TAG\}" --repo "\$\{GITHUB_REPOSITORY\}" --draft=false --prerelease\n/);
+  assert.doesNotMatch(release, /--draft=false --prerelease=false --latest/);
+  assert.match(release, /if: \$\{\{ !contains\(env\.RELEASE_TAG, '-beta\.'\) \}\}\n[\s\S]+gh workflow run publish-packages\.yml[\s\S]+-f tag="\$\{RELEASE_TAG\}"/);
+  assert.match(release, /permissions:\n      contents: write\n      actions: write/);
+  assert.match(publish, /approve-promotion:[\s\S]+if: \$\{\{ contains\(inputs\.tag, '-beta\.'\) \}\}[\s\S]+environment: release-promotion/);
+  assert.match(publish, /needs\.approve-promotion\.result/);
+  assert.doesNotMatch(publish, /Stable publication requires a non-prerelease/);
+  assert.doesNotMatch(publish, /no promotion needed/);
   assert.match(release, /prepare-msi-config\.mjs "\$\{env:RELEASE_TAG\}" src-tauri\/tauri\.msi-version\.conf\.json/);
   assert.match(release, /--config src-tauri\/tauri\.msi-version\.conf\.json/);
   assert.doesNotMatch(release, /--bundles nsis' \|\| ''/);

@@ -1100,17 +1100,31 @@ jobs:
     # upload their release assets independently of publication.
     needs: [cleanup-release-signatures, docker-manifest, fnos-package, jdbc-plugin, static-browser]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
     steps:
       - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ "${RELEASE_TAG}" == *-beta.* ]]; then
-            gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --prerelease
-          else
-            gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --prerelease=false --latest
-          fi
+          # Every release stays a prerelease until publish-packages.yml promotes it,
+          # so GitHub's latest release never runs ahead of R2, Homebrew and Scoop.
+          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --prerelease
+
+      - name: Promote stable release through Publish Packages
+        if: ${{ !contains(env.RELEASE_TAG, '-beta.') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Beta releases wait for an approved promotion; plain version tags are
+          # published automatically, with no manual workflow run.
+          gh workflow run publish-packages.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "${RELEASE_TAG}" \
+            -f tag="${RELEASE_TAG}" \
+            -f notify=true
 
   publish-beta-manifest:
     name: Publish beta update manifest

@@ -23,8 +23,11 @@ env:
 
 jobs:
   validate-candidate:
-    name: Validate beta promotion candidate
+    name: Validate promotion candidate
     needs: approve-promotion
+    # approve-promotion is skipped for plain version tags, which are published
+    # automatically after the Release workflow; rejected approvals still block.
+    if: ${{ !cancelled() && contains(fromJSON('["success", "skipped"]'), needs.approve-promotion.result) }}
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.version.outputs.tag }}
@@ -67,10 +70,6 @@ jobs:
           fi
           if [[ "${{ steps.version.outputs.is_beta }}" == "true" && "$(jq -r '.isPrerelease' <<<"$RELEASE_JSON")" == "false" ]]; then
             echo "::notice::Beta promotion candidate $TAG is already stable; continuing idempotently."
-          fi
-          if [[ "${{ steps.version.outputs.is_beta }}" == "false" && "$(jq -r '.isPrerelease' <<<"$RELEASE_JSON")" == "true" ]]; then
-            echo "::error::Stable publication requires a non-prerelease GitHub Release."
-            exit 1
           fi
 
           PUBLISHED_AT="$(gh release view "$TAG" --repo "${{ github.repository }}" --json publishedAt --jq '.publishedAt // empty')"
@@ -431,15 +430,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ needs.validate-candidate.outputs.tag }}"
-          if [[ "${{ needs.validate-candidate.outputs.is_beta }}" == "true" ]]; then
-            gh release edit "${TAG}" \
-              --repo "${{ github.repository }}" \
-              --prerelease=false \
-              --latest
-            echo "::notice::Release ${TAG} promoted from prerelease to latest release"
-          else
-            echo "Stable release ${TAG} is already published; no promotion needed."
-          fi
+          gh release edit "${TAG}" \
+            --repo "${{ github.repository }}" \
+            --prerelease=false \
+            --latest
+          echo "::notice::Release ${TAG} promoted from prerelease to latest release"
 
       - name: Publish stable manifest to GitHub Release
         if: ${{ needs.validate-candidate.outputs.is_beta == 'true' }}
@@ -573,6 +568,7 @@ jobs:
 
   approve-promotion:
     name: Approve stable promotion
+    if: ${{ contains(inputs.tag, '-beta.') }}
     runs-on: ubuntu-latest
     environment: release-promotion
     steps:
