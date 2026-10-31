@@ -67,15 +67,19 @@ jobs:
 
           # Skip days without new commits: nothing changed since the last
           # published beta (or the stable release) was built from this source.
+          # Automation commits marked [skip ci] (version sync, plugin version
+          # bumps) do not count as changes.
           if [[ "$FORCE_BUILD" != "true" && -z "$REQUESTED_BASE_VERSION" ]]; then
             latest_beta_tag="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft \
               --jq '.[] | select(.isDraft == false) | .tagName' \
               | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]{8}\.[0-9]+$' | sort -V | tail -n 1 || true)"
             for built_tag in "$latest_beta_tag" "$stable_tag"; do
               [[ -n "$built_tag" ]] || continue
-              built_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${built_tag}" --jq '.sha' 2>/dev/null || true)"
-              if [[ "$built_sha" == "$GITHUB_SHA" ]]; then
-                echo "::notice::${built_tag} already contains ${GITHUB_SHA}; skipping the daily beta build."
+              comparison="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${built_tag}...${GITHUB_SHA}" \
+                --jq '[.status, ([.commits[].commit.message | select(contains("[skip ci]") | not)] | length)] | @tsv' 2>/dev/null || true)"
+              read -r compare_status new_commits <<<"$comparison"
+              if [[ "$compare_status" =~ ^(identical|ahead|behind)$ && "${new_commits:-1}" == "0" ]]; then
+                echo "::notice::No new commits since ${built_tag}; skipping the daily beta build."
                 exit 0
               fi
             done

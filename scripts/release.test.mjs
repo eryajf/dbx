@@ -115,7 +115,9 @@ test("app release workflows preserve beta tags and stable package URLs", () => {
   assert.match(daily, /next_patch="\$\{BASH_REMATCH\[1\]\}\.\$\{BASH_REMATCH\[2\]\}\.\$\(\(BASH_REMATCH\[3\] \+ 1\)\)"/);
   assert.match(daily, /sort -V \| tail -n 1/);
   assert.match(daily, /force:[\s\S]+type: boolean/);
-  assert.match(daily, /already contains \$\{GITHUB_SHA\}; skipping the daily beta build/);
+  assert.match(daily, /compare\/\$\{built_tag\}\.\.\.\$\{GITHUB_SHA\}/);
+  assert.match(daily, /contains\("\[skip ci\]"\) \| not/);
+  assert.match(daily, /No new commits since \$\{built_tag\}; skipping the daily beta build/);
   assert.match(release, /workflow_dispatch:/);
   assert.match(release, /release_tag:/);
   assert.match(release, /RELEASE_TAG:/);
