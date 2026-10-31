@@ -483,7 +483,7 @@ jobs:
           base_version="${tag_version%%-beta.*}"
           mkdir -p "$RUNNER_TEMP/stable-package-assets"
           assets_json="$(gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" --json assets)"
-          for suffix in arm64.dmg x64.dmg x64-setup.exe arm64-setup.exe; do
+          for suffix in arm64.dmg x64.dmg x64-setup.exe arm64-setup.exe x64_en-US.msi arm64_en-US.msi; do
             source="DBX_${tag_version}_${suffix}"
             target="DBX_${base_version}_${suffix}"
             if ! jq -e --arg name "$target" '.assets[] | select(.name == $name)' <<<"$assets_json" >/dev/null; then

@@ -90,8 +90,11 @@ test("app release workflows preserve beta tags and stable package URLs", () => {
   assert.ok(publish.includes('test("^v[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]{8}[.][0-9]+$"'));
   assert.match(publish, /cleanup_family stable keep_stable_tags/);
   assert.match(publish, /cleanup_family beta keep_beta_tags/);
-  assert.match(release, /contains\(env\.RELEASE_TAG, '-beta\.'\)/);
-  assert.match(release, /if \(!\$isBeta -and \$msiInstallers\.Count -eq 0\)/);
+  assert.match(release, /prepare-msi-config\.mjs "\$\{env:RELEASE_TAG\}" src-tauri\/tauri\.msi-version\.conf\.json/);
+  assert.match(release, /--config src-tauri\/tauri\.msi-version\.conf\.json/);
+  assert.doesNotMatch(release, /--bundles nsis' \|\| ''/);
+  assert.match(release, /if \(\$msiInstallers\.Count -eq 0\)/);
+  assert.match(publish, /x64-setup\.exe arm64-setup\.exe x64_en-US\.msi arm64_en-US\.msi/);
   assert.match(daily, /schedule:/);
   assert.match(daily, /gh release create "\$tag"/);
   assert.match(daily, /-beta\.\$\{date_suffix\}\.\$\{sequence\}/);

@@ -466,6 +466,10 @@ jobs:
           VSIGN_OPERATOR_PWD: ${{ secrets.VSIGN_OPERATOR_PWD }}
         run: ./.github/scripts/setup-vsign.ps1
 
+      - name: Prepare MSI version
+        shell: pwsh
+        run: node .github/scripts/prepare-msi-config.mjs "${env:RELEASE_TAG}" src-tauri/tauri.msi-version.conf.json
+
       - name: Build and sign Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -475,12 +479,10 @@ jobs:
         with:
           tagName: ${{ inputs.release_tag || github.ref_name }}
           releaseDraft: true
-          # Beta versions contain a timestamp prerelease identifier that exceeds
-          # the MSI bundler's numeric limit. Stable releases keep both bundles.
-          args: >-
-            --target ${{ matrix.target }}
-            --config src-tauri/tauri.vsign.conf.json
-            ${{ contains(env.RELEASE_TAG, '-beta.') && '--bundles nsis' || '' }}
+          # No assetNamePattern: the default Tauri CLI names already produce
+          # DBX_[version]_x64/arm64-setup.exe and keep the _en-US.msi names.
+          # tauri.msi-version.conf.json is generated above and is empty for stable tags.
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.vsign.conf.json --config src-tauri/tauri.msi-version.conf.json
 
       - name: Verify Windows bundles
         shell: pwsh
@@ -495,15 +497,13 @@ jobs:
           if ($nsisInstallers.Count -eq 0) {
             throw "No NSIS installer was produced for ${{ matrix.target }}"
           }
-          $isBeta = $env:RELEASE_TAG -match '-beta\.'
-          if (!$isBeta -and $msiInstallers.Count -eq 0) {
+          if ($msiInstallers.Count -eq 0) {
             throw "No MSI installer was produced for ${{ matrix.target }}"
           }
-          $installers = @($nsisInstallers.FullName)
-          if (!$isBeta) {
-            $installers += $msiInstallers.FullName
-          }
-          ./.github/scripts/assert-authenticode.ps1 -Path $installers
+          ./.github/scripts/assert-authenticode.ps1 -Path @(
+            $nsisInstallers.FullName
+            $msiInstallers.FullName
+          )
 
       - name: Upload Windows WebView2 offline installer
         shell: pwsh
@@ -1189,6 +1189,7 @@ jobs:
           aws s3 sync "$RUNNER_TEMP/manifest/" "$versioned" --endpoint-url "$endpoint" --cache-control "no-cache"
           aws s3 sync "$RUNNER_TEMP/manifest/" "s3://${R2_BUCKET_NAME}/releases/beta/latest/" --endpoint-url "$endpoint" --cache-control "no-cache" --delete
           aws s3 cp "$RUNNER_TEMP/manifest/latest.json" "s3://${R2_BUCKET_NAME}/releases/beta/latest.json" --endpoint-url "$endpoint" --cache-control "no-cache"
+
 
   sync-release-to-cnb:
     name: Sync release to CNB
