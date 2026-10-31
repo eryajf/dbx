@@ -95,6 +95,8 @@ test("app release workflows preserve beta tags and stable package URLs", () => {
   assert.match(release, /permissions:\n      contents: write\n      actions: write/);
   assert.match(publish, /approve-promotion:[\s\S]+if: \$\{\{ contains\(inputs\.tag, '-beta\.'\) \}\}[\s\S]+environment: release-promotion/);
   assert.match(publish, /needs\.approve-promotion\.result/);
+  assert.match(publish, /sync-source-version:[\s\S]+needs: \[validate-candidate, promote-release\][\s\S]+ref: main[\s\S]+MCP_RELEASE_TOKEN/);
+  assert.match(publish, /set-release-version\.mjs "v\$\{VERSION\}"/);
   assert.doesNotMatch(publish, /Stable publication requires a non-prerelease/);
   assert.doesNotMatch(publish, /no promotion needed/);
   assert.match(release, /prepare-msi-config\.mjs "\$\{env:RELEASE_TAG\}" src-tauri\/tauri\.msi-version\.conf\.json/);

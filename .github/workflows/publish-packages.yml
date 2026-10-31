@@ -514,6 +514,50 @@ jobs:
             --assets-dir "$RUNNER_TEMP/release-assets" \
             --make-latest
 
+  sync-source-version:
+    name: Sync source version to main
+    # Release builds rewrite version files only inside their runners, so the
+    # promoted version is committed here. The daily beta job and local builds
+    # read the source version, which would otherwise stay on an old release.
+    needs: [validate-candidate, promote-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          # A push to main needs the release token that can bypass the branch ruleset.
+          token: ${{ secrets.MCP_RELEASE_TOKEN }}
+
+      - name: Commit promoted version
+        env:
+          VERSION: ${{ needs.validate-candidate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(jq -r '.version' package.json)"
+          if [ "$current" = "$VERSION" ] || [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ]; then
+            echo "Source version ${current} is already at or ahead of ${VERSION}; nothing to sync."
+            exit 0
+          fi
+
+          node .github/scripts/set-release-version.mjs "v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml crates/dbx-web/Cargo.toml Cargo.lock
+          git commit -m "chore(release): sync source version to ${VERSION} [skip ci]"
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Unable to push the source version bump after ${attempt} attempts."
+              exit 1
+            fi
+            git fetch origin main --no-tags
+            git rebase origin/main
+          done
+
   publish-stable-alias:
     name: Publish stable update aliases
     needs: [promote-release, upload-r2]
