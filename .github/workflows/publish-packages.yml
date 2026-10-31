@@ -430,10 +430,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ needs.validate-candidate.outputs.tag }}"
-          gh release edit "${TAG}" \
-            --repo "${{ github.repository }}" \
-            --prerelease=false \
-            --latest
+          edit_args=(--repo "${{ github.repository }}" --prerelease=false --latest)
+          if [[ "${{ needs.validate-candidate.outputs.is_beta }}" == "true" ]]; then
+            # A promoted beta keeps its beta tag, but the page is a stable release.
+            edit_args+=(--title "DBX v${{ needs.validate-candidate.outputs.version }}")
+          fi
+          gh release edit "${TAG}" "${edit_args[@]}"
           echo "::notice::Release ${TAG} promoted from prerelease to latest release"
 
       - name: Publish stable manifest to GitHub Release

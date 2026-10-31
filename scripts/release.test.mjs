@@ -95,6 +95,7 @@ test("app release workflows preserve beta tags and stable package URLs", () => {
   assert.match(release, /permissions:\n      contents: write\n      actions: write/);
   assert.match(publish, /approve-promotion:[\s\S]+if: \$\{\{ contains\(inputs\.tag, '-beta\.'\) \}\}[\s\S]+environment: release-promotion/);
   assert.match(publish, /needs\.approve-promotion\.result/);
+  assert.match(publish, /edit_args\+=\(--title "DBX v\$\{\{ needs\.validate-candidate\.outputs\.version \}\}"\)/);
   assert.match(publish, /sync-source-version:[\s\S]+needs: \[validate-candidate, promote-release\][\s\S]+ref: main[\s\S]+MCP_RELEASE_TOKEN/);
   assert.match(publish, /set-release-version\.mjs "v\$\{VERSION\}"/);
   assert.match(publish, /promote-docker:[\s\S]+is_beta == 'true'[\s\S]+needs: \[validate-candidate, promote-release\]/);
