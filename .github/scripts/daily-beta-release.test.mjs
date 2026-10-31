@@ -54,6 +54,7 @@ process.exit(1);
       GITHUB_REPOSITORY: "example/dbx",
       GITHUB_SHA: "a".repeat(40),
       REQUESTED_BASE_VERSION: "0.6.60",
+      FORCE_BUILD: "",
       GH_TOKEN: "test-release-token",
       RELEASE_WORKFLOW_TOKEN: "test-dispatch-token",
       ...options,
