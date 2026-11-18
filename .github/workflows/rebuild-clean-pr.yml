@@ -1,0 +1,41 @@
+name: Rebuild clean PR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: issue_12006-rebuild
+      - name: Merge feature files with current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          base=0c019880f5809c646e3fd11c1b6be8bfcb5dc0e0
+          for file in \
+            apps/desktop/src/components/editor/queryEditorSqlExtensions.ts \
+            package.json \
+            pnpm-lock.yaml
+          do
+            base_file=$(mktemp)
+            main_file=$(mktemp)
+            git show "$base:$file" > "$base_file"
+            git show "origin/main:$file" > "$main_file"
+            git merge-file "$main_file" "$base_file" "$file"
+            cp "$main_file" "$file"
+            rm -f "$base_file" "$main_file"
+          done
+          rm -f .github/workflows/rebuild-clean-pr.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/desktop/src/components/editor/queryEditorSqlExtensions.ts package.json pnpm-lock.yaml .github/workflows/rebuild-clean-pr.yml
+          git commit -m 'chore: refresh clean PR against main'
+          git push origin HEAD:issue_12006-rebuild
