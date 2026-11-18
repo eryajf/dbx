@@ -1,19 +1,22 @@
 name: Rebuild clean PR
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - issue_12006-rebuild2
 
 permissions:
   contents: write
 
 jobs:
   rebuild:
+    if: github.ref == 'refs/heads/issue_12006-rebuild2'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: issue_12006-rebuild
+          ref: issue_12006-rebuild2
       - name: Merge feature files with current main
         shell: bash
         run: |
@@ -38,4 +41,4 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add apps/desktop/src/components/editor/queryEditorSqlExtensions.ts package.json pnpm-lock.yaml .github/workflows/rebuild-clean-pr.yml
           git commit -m 'chore: refresh clean PR against main'
-          git push origin HEAD:issue_12006-rebuild
+          git push origin HEAD:issue_12006-rebuild2
