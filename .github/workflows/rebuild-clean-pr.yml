@@ -1,0 +1,43 @@
+name: Rebuild clean PR branch
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/rebuild-clean-pr.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    if: github.repository == 'eryajf/dbx'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebuild target branch
+        run: |
+          set -euo pipefail
+          git fetch origin issue_12006-clean
+          git fetch https://github.com/t8y2/dbx.git main
+          git fetch https://github.com/t8y2/dbx 0c019880f5809c646e3fd11c1b6be8bfcb5dc0e0
+          git worktree add /tmp/feature origin/issue_12006-clean
+          git worktree add /tmp/upstream FETCH_HEAD
+          mkdir -p /tmp/base/apps/desktop/src/components/editor
+          git show 0c019880f5809c646e3fd11c1b6be8bfcb5dc0e0:apps/desktop/src/components/editor/queryEditorSqlExtensions.ts > /tmp/base/apps/desktop/src/components/editor/queryEditorSqlExtensions.ts
+          git show 0c019880f5809c646e3fd11c1b6be8bfcb5dc0e0:package.json > /tmp/base/package.json
+          git show 0c019880f5809c646e3fd11c1b6be8bfcb5dc0e0:pnpm-lock.yaml > /tmp/base/pnpm-lock.yaml
+          git merge-file /tmp/feature/apps/desktop/src/components/editor/queryEditorSqlExtensions.ts /tmp/base/apps/desktop/src/components/editor/queryEditorSqlExtensions.ts /tmp/upstream/apps/desktop/src/components/editor/queryEditorSqlExtensions.ts
+          git merge-file /tmp/feature/package.json /tmp/base/package.json /tmp/upstream/package.json
+          git merge-file /tmp/feature/pnpm-lock.yaml /tmp/base/pnpm-lock.yaml /tmp/upstream/pnpm-lock.yaml
+          rm -rf /tmp/feature/.github
+          cd /tmp/feature
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actionsbot@users.noreply.github.com
+          git add apps/desktop/src/components/editor/queryEditorSqlExtensions.ts package.json pnjm-lock.yaml
+          git commit -m 'chore: refresh clean PR against main'
+          git push origin HEAD:issue_12006-clean
+          cd /workspace
+          rm -rf /tmp/feature /tmp/upstream /tmp/base
